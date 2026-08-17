@@ -1,0 +1,4 @@
+# clasp push scope — engine sources only.
+**/*
+!appsscript.json
+!Code.gs
