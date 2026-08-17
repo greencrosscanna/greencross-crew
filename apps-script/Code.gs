@@ -58,6 +58,28 @@ function route_(e) {
       // ── Derived, PII-free feed for Leaderboard (deploy-secret gated) ────────
       case 'celebrations': return json_(getCelebrations_(p), p.callback);
 
+      // Read-only seed dry-run, so the Dutchie field mapping can be checked before committing.
+      case 'seed_preview':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(seedIdentityPreview(), p.callback);
+
+      // Commit the seed. Writes the canonical identity registry every other app reads, so it
+      // takes the deploy secret AND an explicit confirm=yes — the secret alone is carried by
+      // routine tooling, and this is not something that should ever fire as a side effect.
+      // seedIdentityCommit() is also runnable straight from the editor.
+      case 'seed_commit':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        if (String(p.confirm || '') !== 'yes') {
+          return json_({ ok: false, error: 'refusing to write identity without confirm=yes — run action=seed_preview first' }, p.callback);
+        }
+        return json_(seedIdentityCommit(), p.callback);
+
+      // Reads BACK from GX Core so a seed can be confirmed independently of the writer's own
+      // return value. Counts and store distribution only — no names, so it stays safe to call.
+      case 'identity_health':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(identityHealth_(), p.callback);
+
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'incentive':    return json_(getIncentiveData_(p), p.callback);   // bonus calc (ported from Leaderboard)
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
@@ -99,10 +121,47 @@ function canEdit_(auth) {
   return role === 'admin' || role === 'director' || role === 'manager';
 }
 
-/** The deploy secret gates the machine-to-machine celebrations feed (no user session involved). */
+/**
+ * The deploy secret gates machine-to-machine calls (celebrations feed, seed preview) where there
+ * is no user session.
+ *
+ * The suite's deploy secret lives in GX Core as the `GC_DEPLOY_SECRET` script property, and Core
+ * only exposes it through a private validator, so a spoke cannot read it via the library. Rather
+ * than copy the secret into every spoke (one more place to leak it, one more place to rotate), we
+ * ASK Core whether a given secret is good, using a cheap already-secret-gated route.
+ *
+ * A local GX_DEPLOY_SECRET script property short-circuits this if anyone sets one later.
+ * Positive results are cached briefly, keyed by digest — never by the secret itself.
+ */
 function deploySecretOk_(p) {
-  var expected = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
-  return !!expected && String(p.secret || '') === expected;
+  var given = String((p && p.secret) || '');
+  if (!given) return false;
+
+  var local = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (local) return given === local;
+
+  var digest = Utilities.base64Encode(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, given)).slice(0, 24);
+  var cache = CacheService.getScriptCache();
+  var ckey  = 'gxsecret:' + digest;
+  var hit   = cache.get(ckey);
+  if (hit) return hit === '1';
+
+  var ok = false;
+  try {
+    var url = GXCORE_URL + '?action=notes&app=crew&status=resolved&secret=' + encodeURIComponent(given);
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    var body = res.getContentText();
+    // Core replies { ok:false, error:'bad deploy secret' } for a wrong one. Anything that isn't
+    // clean JSON (Drive's intermittent HTML page) must NOT be read as a pass.
+    if (body && body.charAt(0) === '{') ok = !!(JSON.parse(body) || {}).ok;
+  } catch (e) {
+    ok = false;
+  }
+  // Only cache a definite yes. Caching a no would make a transient Drive HTML blip lock a valid
+  // caller out for the whole TTL.
+  if (ok) cache.put(ckey, '1', 300);
+  return ok;
 }
 
 // ─── Crew's attribute store ─────────────────────────────────────────────────────
@@ -332,6 +391,274 @@ function saveRosterAttrs_(p) {
   };
   writeAttrs_(rec);
   return { ok: true, employee_id: id, saved: rec };
+}
+
+// ─── Identity seeding (Crew → GX Core) ──────────────────────────────────────────
+/*
+ * Per CLAUDE.md, Crew writes the shared identity slice UP to GX Core. Dutchie is the real
+ * source of truth for who works here, so we seed from it: getStores() → dutchieEmployees(store)
+ * → gxUpsertEmployees(rows).
+ *
+ * These are EDITOR-RUN, deliberately not routed through doGet. Seeding writes to the canonical
+ * registry every other app reads; that is not something the open internet should be able to poke,
+ * even behind a secret.
+ *
+ *   Run `seedIdentityPreview()` first  — reads Dutchie, writes NOTHING, returns what it would do
+ *                                        plus a raw sample record so the field mapping can be checked.
+ *   Then `seedIdentityCommit()`        — same thing, but actually upserts.
+ *
+ * KEY CHOICE — employee_id is the nameKey (`ana_reyes`), not Dutchie's numeric id.
+ * Everything in the suite joins on nameKey today (Leaderboard's roster, incentive inputs, SPIFF
+ * attribution; GX Core's own comment at gx_dutchie.gs notes name is the only reliable join until
+ * this registry exists). Seeding with nameKey makes the registry immediately joinable with all of
+ * it. dutchie_employee_id rides along so we can migrate to a numeric join later without a rename.
+ * The tradeoff is real: nameKey breaks on a legal-name change, which then needs a manual merge.
+ */
+
+/** Pull one field out of a Dutchie record, tolerating the several names it ships under. */
+function pick_(obj, names) {
+  for (var i = 0; i < names.length; i++) {
+    var v = obj[names[i]];
+    if (v != null && String(v).trim() !== '') return String(v).trim();
+  }
+  return '';
+}
+
+/** Non-PII fields whose distinct values we surface to drive the mapping. Allowlist, not a filter. */
+var FACET_FIELDS = ['status', 'groups', 'defaultLocation', 'permissionsLocation'];
+
+/**
+ * Dutchie permission groups → a job title, most senior first. An employee carries several
+ * ("Assistant Store Managers, Bud Tenders"), and the senior one is the real title.
+ * "[Individual Permissions]" is a permissions bucket, not a job — it is ignored.
+ */
+var GROUP_RANK = [
+  ['Admin',                    'Admin'],
+  ['Store Managers',           'Store Manager'],
+  ['Assistant Store Managers', 'Assistant Store Manager'],
+  ['Inventory Coordinators',   'Inventory Coordinator'],
+  ['Accounting',               'Accounting'],
+  ['Inventory',                'Inventory'],
+  ['Bud Tenders',              'Budtender']
+];
+
+/**
+ * Dutchie logins that are not people. These ring transactions and hold permissions like staff,
+ * so nothing in the payload distinguishes them — an explicit, reviewable list is honest, and
+ * anything new shows up in the preview's roster for a human to catch.
+ */
+var NON_PERSON_LOGINS = ['authorize override pin', 'test user', 'training', 'admin'];
+
+/** Normalise a location label for matching. Handles Rd/Road and St/Street drift. */
+function storeToken_(s) {
+  return String(s || '').toLowerCase()
+    .replace(/\broad\b/g, 'rd').replace(/\bstreet\b/g, 'st')
+    .replace(/[^a-z0-9]+/g, ' ').trim()
+    .replace(/\s+(rd|st)$/, '');
+}
+
+/** "TLC Cannabis Emporium - River Rd - Green Cross…" → the GX store_id, or '' if unmatched. */
+function mapPermissionLocation_(label, stores) {
+  var parts = String(label || '').split(' - ');
+  var mid = parts.length >= 2 ? parts[1] : label;
+  var tok = storeToken_(mid);
+  if (!tok) return '';
+  for (var i = 0; i < stores.length; i++) {
+    var s = stores[i];
+    if (storeToken_(s.dutchie_name) === tok || storeToken_(s.store_id) === tok
+        || storeToken_(s.display_name) === tok) {
+      return String(s.store_id || '').trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * Read Dutchie and map to GX Core's employees schema. No writes.
+ *
+ * Dutchie's /employees returns the SAME company-wide list from every store, with one row per
+ * (employee × permission location) — so a naive per-store loop reads the roster 6× over and sees
+ * every person up to 6 times. We fetch once and dedupe on userId (stable), rather than per store
+ * and dedupe on name (which would also merge two real people who share a name).
+ */
+function buildIdentityRows_() {
+  var stores = GXCore.getStores() || [];
+  var errors = [], sample = null, facets = {};
+  FACET_FIELDS.forEach(function (f) { facets[f] = {}; });
+
+  function noteFacet_(r) {
+    FACET_FIELDS.forEach(function (f) {
+      var v = r[f];
+      if (v == null) return;
+      var vals = Object.prototype.toString.call(v) === '[object Array]'
+        ? v.map(function (x) { return typeof x === 'object' && x ? (x.name || x.groupName || JSON.stringify(x)) : String(x); })
+        : [String(v)];
+      vals.forEach(function (s) {
+        s = s.trim(); if (!s) return;
+        facets[f][s] = (facets[f][s] || 0) + 1;
+      });
+    });
+  }
+
+  // One fetch. Try each store only until one answers — they all return the same list, so a
+  // second success would just be the same rows again.
+  var list = null;
+  for (var i = 0; i < stores.length && !list; i++) {
+    var dn = String(stores[i].dutchie_name || '').trim();
+    if (!dn) continue;
+    try { list = GXCore.dutchieEmployees(dn) || []; }
+    catch (e) { errors.push(String(stores[i].store_id) + ': ' + String((e && e.message) || e)); }
+  }
+  if (!list) return { rows: [], errors: errors, sample: null, seen: 0, skipped_inactive: 0,
+                      skipped_non_person: 0, excluded: [], multi_store: [], facets: {} };
+
+  var byUser = {}, seen = 0, skippedNonPerson = 0, excluded = [];
+
+  list.forEach(function (r) {
+    seen++;
+    if (!sample) sample = r;
+    noteFacet_(r);
+
+    var full = pick_(r, ['fullName', 'full_name', 'name', 'displayName']);
+    if (!full) return;
+    full = full.replace(/\s+/g, ' ').trim();   // Dutchie ships some double-spaced names
+
+    if (NON_PERSON_LOGINS.indexOf(full.toLowerCase()) >= 0) {
+      skippedNonPerson++;
+      if (excluded.indexOf(full) < 0) excluded.push(full);
+      return;
+    }
+
+    // userId is Dutchie's stable person id; fall back to the name key only if it is missing.
+    var uid = pick_(r, ['userId', 'globalUserId']) || ('name:' + nameToKey_(full));
+    var rec = byUser[uid];
+    if (!rec) {
+      rec = byUser[uid] = { full_name: full, uid: uid, active: false, groups: {}, locations: {} };
+    }
+
+    // Active at ANY location counts as active — a transfer leaves an In-Active row behind at
+    // the old store, and dropping the person on that basis would delete a current employee.
+    if (storeToken_(pick_(r, ['status'])) === 'active') rec.active = true;
+
+    String(pick_(r, ['groups']) || '').split(',').forEach(function (g) {
+      g = g.trim(); if (g && g !== '[Individual Permissions]') rec.groups[g] = 1;
+    });
+
+    var loc = mapPermissionLocation_(pick_(r, ['permissionsLocation']), stores);
+    if (loc) rec.locations[loc] = 1;
+  });
+
+  var skippedInactive = 0, multiStore = [], rows = [];
+  Object.keys(byUser).forEach(function (uid) {
+    var rec = byUser[uid];
+    if (!rec.active) { skippedInactive++; return; }
+
+    var title = '';
+    for (var i = 0; i < GROUP_RANK.length && !title; i++) {
+      if (rec.groups[GROUP_RANK[i][0]]) title = GROUP_RANK[i][1];
+    }
+
+    // One permission location = that's their store. Several (managers, admins) is genuinely
+    // ambiguous, so leave home_store blank for HR rather than guessing them onto a wrong store.
+    var locs = Object.keys(rec.locations);
+    var home = locs.length === 1 ? locs[0] : '';
+    if (locs.length > 1) multiStore.push(rec.full_name + ' (' + locs.sort().join(', ') + ')');
+
+    rows.push({
+      employee_id:         nameToKey_(rec.full_name),
+      full_name:           rec.full_name,
+      home_store:          home,
+      dutchie_employee_id: rec.uid.indexOf('name:') === 0 ? '' : rec.uid,
+      role_title:          title,
+      status:              'active'
+      // hire_date is deliberately absent: Dutchie's /employees carries no hire or start date, and
+      // writing '' would blank a good value on re-seed. Work anniversaries need another source.
+    });
+  });
+
+  rows.sort(function (a, b) { return a.full_name.localeCompare(b.full_name); });
+
+  var facetOut = {};
+  FACET_FIELDS.forEach(function (f) {
+    facetOut[f] = Object.keys(facets[f])
+      .map(function (k) { return { value: k, n: facets[f][k] }; })
+      .sort(function (a, b) { return b.n - a.n; })
+      .slice(0, 40);
+  });
+
+  return { rows: rows, errors: errors, sample: sample, seen: seen,
+           skipped_inactive: skippedInactive, skipped_non_person: skippedNonPerson,
+           excluded: excluded, multi_store: multiStore.sort(), facets: facetOut };
+}
+
+/** DRY RUN. Reads Dutchie, writes nothing. Check `sample` against `rows[0]` before committing. */
+function seedIdentityPreview() {
+  var b = buildIdentityRows_();
+  var noStore = b.rows.filter(function (r) { return !r.home_store; }).length;
+  var noTitle = b.rows.filter(function (r) { return !r.role_title; }).length;
+  var out = {
+    ok: true, mode: 'preview', would_upsert: b.rows.length,
+    dutchie_rows_seen: b.seen,
+    skipped_inactive: b.skipped_inactive, skipped_non_person: b.skipped_non_person,
+    excluded_logins: b.excluded,
+    without_home_store: noStore, without_role_title: noTitle,
+    multi_store_people: b.multi_store, store_errors: b.errors,
+    first_5: b.rows.slice(0, 5),
+    // FIELD NAMES ONLY. Dutchie's /employees payload carries loginId, stateId (OLCC permit) and
+    // mmjExpiration; the mapped `first_5` above already proves whether the mapping worked, so
+    // there is no reason to ship identifying detail over the wire just to inspect a schema.
+    raw_dutchie_fields: b.sample ? Object.keys(b.sample).sort() : [],
+    // Distinct values for the low-cardinality CLASSIFICATION fields only — these drive the
+    // mapping (which status counts as active, what `groups` looks like, how defaultLocation
+    // spells a store) and none of them identify a person. Explicit allowlist, never a loop
+    // over every key, so a new PII field in Dutchie's payload can't leak in by default.
+    raw_dutchie_facets: b.facets,
+    hire_date_note: 'Dutchie /employees carries no hire date — work anniversaries need another source.'
+  };
+  Logger.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
+/** COMMITS to GX Core's employees registry. Run seedIdentityPreview() first. */
+function seedIdentityCommit() {
+  var b = buildIdentityRows_();
+  if (!b.rows.length) {
+    var empty = { ok: false, error: 'nothing to seed', store_errors: b.errors, dutchie_rows_seen: b.seen };
+    Logger.log(JSON.stringify(empty, null, 2));
+    return empty;
+  }
+  var res = GXCore.gxUpsertEmployees(b.rows);
+  var out = {
+    ok: true, mode: 'commit', upserted: (res && res.upserted) || 0,
+    skipped_inactive: b.skipped_inactive, skipped_non_person: b.skipped_non_person,
+    multi_store_people: b.multi_store, store_errors: b.errors
+  };
+  Logger.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
+/** What GX Core actually holds now — aggregate only, so this never leaks a roster. */
+function identityHealth_() {
+  var rows = [];
+  try { rows = GXCore.getEmployees() || []; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+
+  var byStore = {}, byRole = {}, missingStore = 0, missingDutchieId = 0;
+  rows.forEach(function (r) {
+    var st = String(r.home_store || '').trim() || '(none)';
+    if (st === '(none)') missingStore++;
+    byStore[st] = (byStore[st] || 0) + 1;
+    var ro = String(r.role_title || '').trim() || '(none)';
+    byRole[ro] = (byRole[ro] || 0) + 1;
+    if (!String(r.dutchie_employee_id || '').trim()) missingDutchieId++;
+  });
+
+  return {
+    ok: true, total: rows.length,
+    by_store: byStore, by_role: byRole,
+    missing_home_store: missingStore, missing_dutchie_id: missingDutchieId,
+    with_hire_date: rows.filter(function (r) { return String(r.hire_date || '').trim(); }).length
+  };
 }
 
 // ─── Celebrations (the PII-free feed Leaderboard consumes) ──────────────────────
