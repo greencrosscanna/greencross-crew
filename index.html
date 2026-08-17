@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GX Crew</title>
+  <!-- Shared GX runtime (theme + resilient GX Core client) — same-origin org Pages -->
+  <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-theme.css">
+  <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-client.js"></script>
+  <style>
+    /* Minimal shell fallback so the scaffold looks intentional before app CSS lands. */
+    body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .gx-topbar { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px;
+      border-bottom: 1px solid rgba(0,0,0,.1); }
+    .gx-wordmark { font-weight: 800; letter-spacing: .5px; font-size: 18px; }
+    .gx-wordmark b { font-weight: 800; }
+    .gx-topbar-sub { color: #667; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+    .gx-main { padding: 28px 20px; max-width: 860px; margin: 0 auto; }
+    .gx-card { border: 1px solid rgba(0,0,0,.1); border-radius: 12px; padding: 22px; }
+    .gx-card h1 { margin: 0 0 6px; font-size: 22px; }
+    .gx-muted { color: #667; }
+  </style>
+</head>
+<body>
+  <header class="gx-topbar">
+    <span class="gx-wordmark">GX&nbsp;<b>Crew</b></span>
+    <span class="gx-topbar-sub">HR &amp; People</span>
+  </header>
+  <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
+  <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
+  <script src="crew.js?v=1"></script>
+</body>
+</html>

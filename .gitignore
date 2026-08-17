@@ -1,0 +1,3 @@
+.gx_deploy_secret
+node_modules/
+.DS_Store
