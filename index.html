@@ -8,26 +8,98 @@
   <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-theme.css">
   <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-client.js"></script>
   <style>
-    /* Minimal shell fallback so the scaffold looks intentional before app CSS lands. */
-    body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    .gx-topbar { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px;
-      border-bottom: 1px solid rgba(0,0,0,.1); }
-    .gx-wordmark { font-weight: 800; letter-spacing: .5px; font-size: 18px; }
-    .gx-wordmark b { font-weight: 800; }
-    .gx-topbar-sub { color: #667; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
-    .gx-main { padding: 28px 20px; max-width: 860px; margin: 0 auto; }
-    .gx-card { border: 1px solid rgba(0,0,0,.1); border-radius: 12px; padding: 22px; }
-    .gx-card h1 { margin: 0 0 6px; font-size: 22px; }
-    .gx-muted { color: #667; }
+    /* Shell layout only. Every colour comes from gx-theme.css tokens — never hardcode one here,
+       or the app drifts out of the suite's look the next time the theme moves. */
+    body { margin: 0; min-height: 100vh; font-size: 15px; }
+    .gx-topbar { display: flex; align-items: baseline; gap: var(--gx-gap-lg); padding: 14px 20px;
+      border-bottom: 1px solid var(--gx-border); }
+    .gx-wordmark b { color: var(--gx-green); }
+    .gx-topbar-sub { color: var(--gx-text-mute); font-size: 12px; text-transform: uppercase;
+      letter-spacing: 1.1px; font-weight: 600; }
+    .gx-main { padding: 28px 20px; max-width: 980px; margin: 0 auto; }
+    .gx-card { padding: 22px; }
+    .gx-card h1 { margin: 0 0 6px; font-size: 20px; color: var(--gx-text); }
+    .gx-muted { color: var(--gx-text-dim); }
+    code { background: var(--gx-surface-3); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-sm); padding: 1px 5px; font-size: .9em; }
+
+    /* ── Roster view ─────────────────────────────────────────────────────── */
+    .crew-bar { display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; margin: 4px 0 16px; font-size: 13px; color: var(--gx-text-dim); }
+    .crew-bar b { color: var(--gx-text); }
+    .crew-link { background: none; border: 0; color: var(--gx-green); cursor: pointer;
+      font: inherit; padding: 0; }
+    .crew-link:hover { text-decoration: underline; }
+    .crew-count { font-weight: 400; font-size: 14px; }
+
+    .crew-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .crew-table th, .crew-table td { text-align: left; padding: 9px 10px;
+      border-bottom: 1px solid var(--gx-border); vertical-align: middle; }
+    .crew-table th { font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px;
+      color: var(--gx-text-mute); font-weight: 600; }
+    .crew-table th .gx-muted { text-transform: none; letter-spacing: 0; }
+    .crew-table tr:last-child td { border-bottom: 0; }
+    .crew-table td b { color: var(--gx-text); }
+    .crew-table input, .crew-table select {
+      background: var(--gx-surface-3); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius); color: var(--gx-text);
+      padding: 5px 8px; font-size: 13px; font-family: inherit; outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .crew-table input:focus, .crew-table select:focus {
+      border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
+    .crew-table input:disabled, .crew-table select:disabled { opacity: .5; cursor: default; }
+    /* Dark-scheme form controls: without this the native date picker renders black-on-black. */
+    .crew-table input, .crew-table select, .crew-login input { color-scheme: dark; }
+
+    .crew-save {
+      background: transparent; color: var(--gx-text-dim);
+      border: 1px solid var(--gx-border-strong); border-radius: var(--gx-radius);
+      padding: 5px 12px; font-size: 12px; font-family: inherit; cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .crew-save:hover:not(:disabled) { color: var(--gx-text); border-color: var(--gx-green); }
+    .crew-save:disabled { opacity: .45; cursor: default; }
+    .crew-save-status { margin-left: 8px; font-size: 11px; color: var(--gx-text-mute); }
+    .crew-save-status.ok  { color: var(--gx-green); }
+    .crew-save-status.err { color: var(--gx-red); }
+    .crew-hint { font-size: 11px; color: var(--gx-text-mute); }
+
+    .crew-banner { padding: 10px 12px; border-radius: var(--gx-radius-md);
+      font-size: 12px; margin: 0 0 14px; line-height: 1.5; }
+    .crew-banner-warn  { background: var(--gx-gold-soft); border: 1px solid var(--gx-gold-line);
+      color: var(--gx-gold); }
+    .crew-banner-error { background: var(--gx-red-soft); border: 1px solid var(--gx-red);
+      color: var(--gx-red); }
+
+    .crew-login { display: flex; flex-direction: column; gap: 12px; max-width: 320px; margin-top: 14px; }
+    .crew-login label { display: flex; flex-direction: column; gap: 5px;
+      font-size: 10px; letter-spacing: 1.1px; text-transform: uppercase;
+      color: var(--gx-text-mute); font-weight: 600; }
+    .crew-login input {
+      width: 100%; background: var(--gx-surface-3); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius); color: var(--gx-text); padding: 9px 12px;
+      font-size: 14px; font-family: inherit; letter-spacing: normal; text-transform: none;
+      outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    .crew-login input:focus { border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
+    .crew-login button {
+      background: var(--gx-green); border: 1px solid var(--gx-green); color: var(--gx-green-ink);
+      font-weight: 700; font-family: inherit; font-size: 13px;
+      padding: 9px 14px; border-radius: var(--gx-radius); cursor: pointer; margin-top: 2px;
+    }
+    .crew-login button:hover:not(:disabled) { background: var(--gx-green-bright); border-color: var(--gx-green-bright); }
+    .crew-login button:disabled { opacity: .55; cursor: default; }
+    .crew-error { color: var(--gx-red); font-size: 12px; min-height: 1em; margin: 10px 0 0; }
   </style>
 </head>
-<body>
+<body class="gx-app">
   <header class="gx-topbar">
     <span class="gx-wordmark">GX&nbsp;<b>Crew</b></span>
     <span class="gx-topbar-sub">HR &amp; People</span>
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1"></script>
+  <script src="crew.js?v=2"></script>
 </body>
 </html>
