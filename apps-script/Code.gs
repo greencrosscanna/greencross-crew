@@ -91,6 +91,7 @@ function route_(e) {
       case 'roster_identity': return json_(saveIdentity_(p), p.callback);
       case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
       case 'assign_numbers': return json_(assignNumbers_(p), p.callback);
+      case 'set_number':     return json_(setNumber_(p), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
       case 'review':         return json_(getReview_(p), p.callback);
@@ -266,7 +267,14 @@ function crewSheet_() {
   var missing = ATTR_HEADERS.filter(function (h) { return have.indexOf(h) < 0; });
   if (missing.length) {
     sh.getRange(1, have.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
+    have = have.concat(missing);
   }
+  // Sheets turns "00" into the number 0 unless the column is explicitly plain text. Reserved
+  // numbers like the owner's 00 have to survive the round trip, so pin the format once.
+  ['employee_number', 'birthday', 'permit_number'].forEach(function (h) {
+    var c = have.indexOf(h);
+    if (c >= 0) sh.getRange(2, c + 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
+  });
   return sh;
 }
 
@@ -478,6 +486,58 @@ function assignNumbers_(p) {
   bustRosterCache_();
   out.written = idRows.length;
   return out;
+}
+
+
+/**
+ * Explicit override for a single employee number. Deliberately NOT exposed in the UI — numbers
+ * are issued by assignNumbers_ — but reserved values exist (00 for the owner), and they have to
+ * be settable by someone. Deploy-secret gated, and it refuses a number another person holds:
+ * a collision here would graft one person's history onto another across every app that joins on it.
+ *
+ * A reserved number like 00 sits OUTSIDE the auto sequence on purpose: parseInt gives 0, which
+ * the allocator ignores when computing the next number, so it can never collide with the series.
+ */
+function setNumber_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var id  = String(p.employee_id || '').trim();
+  var num = String(p.number == null ? '' : p.number).trim();
+  if (!id) return { ok: false, error: 'employee_id required' };
+  if (!/^\d{1,5}$/.test(num)) return { ok: false, error: 'number must be 1-5 digits (leading zeros allowed)' };
+
+  var identity = GXCore.getEmployees() || [];
+  var attrs = readAttrs_();
+  var prior = null, clash = null;
+  identity.forEach(function (r) {
+    var rid = String(r.employee_id || '').trim();
+    if (rid === id) prior = r;
+    var held = String((attrs[rid] || {}).employee_number || r.employee_number || '').trim();
+    // Compare NUMERICALLY. Sheets coerces "00" to the number 0 on write, so a string compare
+    // reads the stored "0" as different from the incoming "00" and waves a collision straight
+    // through — which is exactly how a second person was handed 00.
+    if (rid !== id && held !== '' && parseInt(held, 10) === parseInt(num, 10)) clash = r.full_name;
+  });
+  if (!prior) return { ok: false, error: 'unknown employee_id: ' + id };
+  if (clash)  return { ok: false, error: 'number ' + num + ' is already held by ' + clash };
+
+  var was = String((attrs[id] || {}).employee_number || prior.employee_number || '').trim();
+  var merged = {};
+  Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
+  merged.employee_id = id;
+  merged.employee_number = num;
+  GXCore.gxUpsertEmployee(merged);
+
+  var a = attrs[id] || {};
+  var rec = { employee_id: id, name_key: nameToKey_(prior.full_name),
+              full_name: String(prior.full_name || ''), employee_number: num,
+              updated_at: new Date().toISOString(), updated_by: 'tooling (reserved number)' };
+  ['shirt_size', 'birthday', 'work_anniversary', 'wage',
+   'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
+    rec[k] = a[k] || '';
+  });
+  writeAttrs_(rec);
+  bustRosterCache_();
+  return { ok: true, employee_id: id, name: prior.full_name, was: was || '(none)', now: num };
 }
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
