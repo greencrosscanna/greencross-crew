@@ -115,10 +115,21 @@ function requireCrew_(p) {
   return GXCore.requireAuth(p, 'crew');
 }
 
-/** Writes need a manager-grade grant; a plain viewer can read the roster but not edit it. */
+/**
+ * Writes need an edit-grade grant; `viewer` can read the roster but not change it.
+ *
+ * GX Core's actual role vocabulary is viewer / editor / admin / director — `editor` is the
+ * plain "can edit this app" grant and MUST be here, or granting someone crew/editor would hand
+ * them a read-only roster while the role name says otherwise. `manager` is not in Core's
+ * vocabulary today; it is allowed for the HR-manager grants CLAUDE.md anticipates.
+ *
+ * Deliberately an allowlist, not `role !== 'viewer'` — an unrecognised or empty role should fall
+ * through to read-only rather than silently earning write access to staff PII.
+ */
+var EDIT_ROLES = ['admin', 'editor', 'director', 'manager'];
 function canEdit_(auth) {
   var role = String((auth && auth.role) || '').toLowerCase();
-  return role === 'admin' || role === 'director' || role === 'manager';
+  return EDIT_ROLES.indexOf(role) >= 0;
 }
 
 /**
