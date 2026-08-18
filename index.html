@@ -122,6 +122,25 @@
     .permit-warn { color: var(--gx-gold); font-weight: 600; }
     .permit-bad  { color: var(--gx-red); font-weight: 700; }
     .crew-banner b { color: inherit; }
+
+    /* ── v5: sortable headers, flagged cells, merge ──────────────────────── */
+    .crew-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+    .crew-sort:hover { color: var(--gx-text); }
+    .crew-sort.is-sorted { color: var(--gx-green); }
+    .crew-caret { display: inline-block; width: 1em; font-size: 8px; vertical-align: middle; }
+
+    /* Red = missing or malformed, never merely unusual. Applied to the cell for read-only
+       values and to the control itself for editable ones, so the fix is where the eye lands. */
+    td.is-flagged { color: var(--gx-red); }
+    input.is-flagged, select.is-flagged { border-color: var(--gx-red); color: var(--gx-red); }
+    input.is-flagged::placeholder { color: var(--gx-red); opacity: .65; }
+    span.is-flagged { color: var(--gx-red); font-weight: 600; }
+    tr.is-retired td.is-flagged, tr.is-retired input.is-flagged { color: inherit; border-color: var(--gx-border); }
+
+    .crew-merge { margin-left: 10px; font-size: 11px; }
+    tr.is-merge-src { outline: 1px dashed var(--gx-gold); outline-offset: -1px; }
+    tr.is-merge-src td { background: var(--gx-gold-soft); }
+    .crew-table { min-width: 1180px; }
   </style>
 </head>
 <body class="gx-app">
@@ -131,6 +150,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=4"></script>
+  <script src="crew.js?v=5"></script>
 </body>
 </html>

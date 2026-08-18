@@ -27,7 +27,8 @@
   var GXCore = window.GXClient(GXCORE_URL);
   var Engine = null;           // built once we know the engine URL
   var state  = { rows: [], canEdit: false, shirtSizes: [], user: '', role: '', identity: null,
-                 stores: {}, showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '' };
+                 stores: {}, showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
+                 sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false };
 
   // ─── tiny DOM helpers ────────────────────────────────────────────────────────
   function el(tag, cls, html) {
@@ -126,14 +127,66 @@
     mount.appendChild(card('GX&nbsp;Crew', [el('p', 'gx-muted', html)]));
   }
 
-  function permitCell(row) {
-    if (!row.permit_expires) return '<span class="crew-hint">—</span>';
+  /* Flags come from the engine so the roster, the UI and any future export share one
+     definition of "questionable". A cell clears the moment the underlying value is fixed. */
+  function has(row, flag) { return (row.flags || []).indexOf(flag) >= 0; }
+  function flagCls(row, flag, base) {
+    return (base ? base + ' ' : '') + (has(row, flag) ? 'is-flagged' : '');
+  }
+
+  function permitExpiryCell(row) {
+    if (!row.permit_expires) return '<span class="is-flagged">—</span>';
     var d = row.permit_days_left;
     var cls = d == null ? '' : d < 0 ? 'permit-bad' : d <= 90 ? 'permit-warn' : 'permit-ok';
     // Only count down when it actually matters — "(1600d)" on a 2031 permit is noise that
     // makes the genuinely urgent ones harder to spot.
     var tail = d == null ? '' : d < 0 ? ' (expired)' : d <= 90 ? ' (' + d + 'd)' : '';
     return '<span class="' + cls + '">' + esc(row.permit_expires) + tail + '</span>';
+  }
+  function permitActiveCell(row) {
+    if (!row.permit_active) return '<span class="is-flagged">—</span>';
+    var yes = row.permit_active === 'Yes';
+    return '<span class="' + (yes ? 'permit-ok' : 'permit-bad') + '">' + esc(row.permit_active) + '</span>';
+  }
+
+  var COLUMNS = [
+    { key: 'employee_number', label: '#',            num: true },
+    { key: 'name',            label: 'Name' },
+    { key: 'store',           label: 'Store',        val: function (r) { return storeName(r.store); } },
+    { key: 'role',            label: 'Role' },
+    { key: 'hire_date',       label: 'Hired' },
+    { key: 'time_with_company', label: 'Time w Co.', num: true,
+      val: function (r) { var m = /(\d+)yr (\d+)mo/.exec(r.time_with_company || ''); 
+                          return m ? Number(m[1]) * 12 + Number(m[2]) : -1; } },
+    { key: 'wage',            label: 'Wage',         num: true },
+    { key: 'shirt_size',      label: 'Shirt' },
+    { key: 'birthday',        label: 'Birthday' },
+    { key: 'permit_active',   label: 'OLCC active' },
+    { key: 'permit_expires',  label: 'OLCC expires' }
+  ];
+
+  function sortRows(rows) {
+    var col = COLUMNS.filter(function (c) { return c.key === state.sortKey; })[0] || COLUMNS[1];
+    var dir = state.sortDir;
+    return rows.slice().sort(function (a, b) {
+      var av = col.val ? col.val(a) : a[col.key];
+      var bv = col.val ? col.val(b) : b[col.key];
+      // Blanks ALWAYS sink, whichever column and whichever direction — a missing wage is the
+      // absence of a value, not the smallest one, and letting it ride the top of an ascending
+      // sort buries the rows you actually wanted to compare.
+      if (col.num) {
+        var an = parseFloat(av), bn = parseFloat(bv);
+        var ab = isNaN(an), bb = isNaN(bn);
+        if (ab && !bb) return 1;
+        if (!ab && bb) return -1;
+        if (ab && bb)  return a.name.localeCompare(b.name);
+        return (an - bn) * dir || a.name.localeCompare(b.name);
+      }
+      var as = String(av || ''), bs = String(bv || '');
+      if (!as && bs) return 1;
+      if (as && !bs) return -1;
+      return as.localeCompare(bs) * dir || a.name.localeCompare(b.name);
+    });
   }
 
   function renderRoster() {
@@ -182,10 +235,22 @@
       state.showRetired = this.checked; boot(true);
     });
     tools.appendChild(lbl);
+    var flagged = state.rows.filter(function (r) { return (r.flags || []).length; }).length;
+    if (flagged) {
+      var fl = el('label', 'crew-toggle');
+      fl.innerHTML = '<input type="checkbox"' + (state.onlyFlagged ? ' checked' : '') +
+        '> Needs attention (' + flagged + ')';
+      fl.querySelector('input').addEventListener('change', function () {
+        state.onlyFlagged = this.checked; renderRoster();
+      });
+      tools.appendChild(fl);
+    }
     nodes.push(tools);
 
     var q = state.q.trim().toLowerCase();
-    var rows = !q ? state.rows : state.rows.filter(function (r) {
+    var base = state.onlyFlagged
+      ? state.rows.filter(function (r) { return (r.flags || []).length; }) : state.rows;
+    var rows = !q ? base : base.filter(function (r) {
       return (r.name + ' ' + storeName(r.store) + ' ' + r.role + ' ' + r.employee_number).toLowerCase().indexOf(q) >= 0;
     });
 
@@ -196,32 +261,43 @@
     }
 
     var table = el('table', 'crew-table');
-    table.innerHTML =
-      '<thead><tr>' +
-        '<th>#</th><th>Name</th><th>Store</th><th>Role</th>' +
-        '<th>Hired</th><th>Time w Co.</th><th>Wage</th>' +
-        '<th>Shirt</th><th>Birthday</th><th>OLCC permit</th><th></th>' +
-      '</tr></thead>';
+    var thead = el('thead'); var htr = el('tr');
+    COLUMNS.forEach(function (c) {
+      var th = el('th', 'crew-sort' + (state.sortKey === c.key ? ' is-sorted' : ''),
+        esc(c.label) + '<span class="crew-caret">' +
+        (state.sortKey === c.key ? (state.sortDir === 1 ? '▲' : '▼') : '') + '</span>');
+      th.addEventListener('click', function () {
+        if (state.sortKey === c.key) state.sortDir = -state.sortDir;
+        else { state.sortKey = c.key; state.sortDir = 1; }
+        renderRoster();
+      });
+      htr.appendChild(th);
+    });
+    htr.appendChild(el('th', null, ''));
+    thead.appendChild(htr); table.appendChild(thead);
     var tbody = el('tbody');
 
-    rows.forEach(function (row) {
-      var tr = el('tr', row.retired ? 'is-retired' : '');
+    sortRows(rows).forEach(function (row) {
+      var tr = el('tr', (row.retired ? 'is-retired' : '') +
+                        (state.mergeFrom === row.employee_id ? ' is-merge-src' : ''));
 
       var tdNum = el('td'); var inNum = el('input');
       inNum.type='text'; inNum.value=row.employee_number||''; inNum.size=3;
-      inNum.className='crew-num'; inNum.disabled=!state.canEdit; tdNum.appendChild(inNum);
+      inNum.className='crew-num ' + (has(row,'employee_number')?'is-flagged':'');
+      inNum.disabled=!state.canEdit; tdNum.appendChild(inNum);
       tr.appendChild(tdNum);
 
       tr.appendChild(el('td', null, '<b>' + esc(row.name) + '</b>' +
         (row.retired ? ' <span class="crew-tag">retired</span>' : '')));
-      tr.appendChild(el('td', 'gx-muted', esc(storeName(row.store))));
-      tr.appendChild(el('td', 'gx-muted', esc(row.role) +
-        (row.role_is_default ? '<span class="crew-hint" title="No role on file — defaulted"> *</span>' : '')));
-      tr.appendChild(el('td', 'gx-muted', esc(row.hire_date || '—')));
+      tr.appendChild(el('td', flagCls(row,'store','gx-muted'), esc(row.store ? storeName(row.store) : '—')));
+      tr.appendChild(el('td', flagCls(row,'role','gx-muted'), esc(row.role) +
+        (row.role_is_default ? '<span title="No role on file — defaulted"> *</span>' : '')));
+      tr.appendChild(el('td', flagCls(row,'hire_date','gx-muted'), esc(row.hire_date || '—')));
       tr.appendChild(el('td', 'gx-muted', esc(row.time_with_company || '—')));
 
       var tdW = el('td'); var inW = el('input');
       inW.type='text'; inW.value=row.wage||''; inW.size=5; inW.placeholder='0.00';
+      inW.className = has(row,'wage') ? 'is-flagged' : '';
       inW.disabled=!state.canEdit; tdW.appendChild(inW); tr.appendChild(tdW);
 
       var tdShirt = el('td'); var sel = el('select');
@@ -232,9 +308,11 @@
       var tdB = el('td'); var inB = el('input');
       inB.type='text'; inB.placeholder='MM-DD'; inB.value=row.birthday||''; inB.size=6;
       inB.disabled=!state.canEdit; inB.title='Month and day only — GX Crew does not store birth years.';
+      inB.className = has(row,'birthday') ? 'is-flagged' : '';
       tdB.appendChild(inB); tr.appendChild(tdB);
 
-      tr.appendChild(el('td', null, permitCell(row)));
+      tr.appendChild(el('td', null, permitActiveCell(row)));
+      tr.appendChild(el('td', null, permitExpiryCell(row)));
 
       var tdS = el('td', 'crew-actions'); var status = el('span', 'crew-save-status');
       if (state.canEdit) {
@@ -276,6 +354,34 @@
           }
         });
         tdS.appendChild(ret);
+
+        /* Merge is two clicks: mark one row, then pick the row to keep. Duplicates are always
+           two rows in this table, so selecting them here beats typing ids into a form. */
+        var mg = el('button', 'crew-link crew-merge',
+          state.mergeFrom === row.employee_id ? 'Cancel' :
+          state.mergeFrom ? 'Keep this one' : 'Merge…');
+        mg.addEventListener('click', async function () {
+          if (state.mergeFrom === row.employee_id) { state.mergeFrom = null; renderRoster(); return; }
+          if (!state.mergeFrom) { state.mergeFrom = row.employee_id; renderRoster(); return; }
+          var loser = state.rows.filter(function (x) { return x.employee_id === state.mergeFrom; })[0];
+          if (!loser) { state.mergeFrom = null; renderRoster(); return; }
+          if (!confirm('Merge "' + loser.name + '" into "' + row.name + '"?\n\n' +
+                       row.name + ' is kept. Any field they are missing is filled from ' +
+                       loser.name + '. Nothing is deleted, and future imports of "' +
+                       loser.name + '" will resolve to ' + row.name + '.')) return;
+          status.textContent = 'Merging…';
+          try {
+            var r = await Engine.jsonp('roster_merge', { token: token(),
+              keep: row.employee_id, merge: loser.employee_id, confirm: 'yes' },
+              { timeoutMs: 45000, retries: 2 });
+            if (!r || !r.ok) throw new Error((r && r.error) || 'Merge failed');
+            state.mergeFrom = null; boot(true);
+          } catch (e) {
+            status.textContent = (e && e.message) || 'Merge failed';
+            status.className = 'crew-save-status err';
+          }
+        });
+        tdS.appendChild(mg);
       }
       tdS.appendChild(status); tr.appendChild(tdS);
       tbody.appendChild(tr);
@@ -285,8 +391,9 @@
     var wrap = el('div', 'crew-table-wrap'); wrap.appendChild(table);
     nodes.push(wrap);
     nodes.push(el('p', 'crew-hint',
-      'Birthdays are month + day only — no birth year. Permit data is imported from METRC and is ' +
-      'read-only here. Leaderboard receives a derived celebrations flag, never a date.'));
+      'Red marks missing or questionable data — it clears as soon as the value is filled in. ' +
+      'Birthdays are month + day only, no birth year. Permit columns are imported from METRC ' +
+      'and read-only here. Leaderboard receives a derived celebrations flag, never a date.'));
 
     mount.appendChild(card('Roster <span class="gx-muted crew-count">' + rows.length +
       (q ? ' of ' + state.rows.length : '') + '</span>', nodes));

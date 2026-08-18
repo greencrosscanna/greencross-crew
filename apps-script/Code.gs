@@ -36,6 +36,10 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
                           'updated_at', 'updated_by'];
 
+/** Alias tab: names that have been merged away, so an import never re-splits a person. */
+var ALIAS_TAB     = 'crew_aliases';
+var ALIAS_HEADERS = ['alias_key', 'alias_name', 'employee_id', 'merged_at', 'merged_by'];
+
 /** Attributes a manager may edit from the roster UI. Everything else is import-owned. */
 var EDITABLE_ATTRS = ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage'];
 
@@ -71,6 +75,7 @@ function route_(e) {
       case 'roster':       return json_(getRoster_(p), p.callback);
       case 'roster_save':  return json_(saveRosterAttrs_(p), p.callback);
       case 'roster_retire':return json_(setRetired_(p), p.callback);
+      case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
 
       // ── Derived, PII-free feed for Leaderboard (deploy-secret gated) ────────
       case 'celebrations': return json_(getCelebrations_(p), p.callback);
@@ -340,6 +345,135 @@ function pad2_(n) { return (n < 10 ? '0' : '') + n; }
  * blank table, because "no employees" and "identity not seeded yet" are very different bugs.
  */
 
+
+// ─── Merge (TJ Peterson → Thomas Peterson) ──────────────────────────────────────
+/*
+ * Duplicates are structural here, not accidental: three systems (Dutchie, METRC, the HR
+ * workbook) each spell people their own way, and new hires keep arriving. A one-off cleanup
+ * fixes today and gets undone by the next import.
+ *
+ * So a merge does three things, and the third is the one that makes it stick:
+ *   1. moves Crew attributes from the loser onto the winner, FILLING GAPS ONLY — a populated
+ *      value on the winner is never overwritten by the duplicate;
+ *   2. marks the loser 'merged' in Core so it leaves the roster (nothing is deleted — the row
+ *      stays auditable, and un-merging is possible);
+ *   3. records the loser's name as an ALIAS, so the next import resolves "TJ Peterson" onto
+ *      Thomas Peterson's employee_id instead of creating the duplicate all over again.
+ */
+function aliasSheet_() {
+  var ss = crewSheet_().getParent();
+  var sh = ss.getSheetByName(ALIAS_TAB);
+  if (!sh) {
+    sh = ss.insertSheet(ALIAS_TAB);
+    sh.getRange(1, 1, 1, ALIAS_HEADERS.length).setValues([ALIAS_HEADERS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+
+/** { aliasKey → employee_id } for every name that has been merged away. */
+function readAliases_() {
+  var sh = aliasSheet_();
+  var last = sh.getLastRow();
+  if (last < 2) return {};
+  var v = sh.getRange(2, 1, last - 1, ALIAS_HEADERS.length).getValues();
+  var out = {};
+  v.forEach(function (r) {
+    var k = String(r[0] || '').trim();
+    if (k) out[k] = String(r[2] || '').trim();
+  });
+  return out;
+}
+
+function mergeEmployees_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+
+  var winner = String(p.keep || '').trim();
+  var loser  = String(p.merge || '').trim();
+  if (!winner || !loser) return { ok: false, error: 'keep and merge employee_ids are both required' };
+  if (winner === loser)  return { ok: false, error: 'cannot merge someone into themselves' };
+
+  var identity = GXCore.getEmployees() || [];
+  var W = null, L = null;
+  identity.forEach(function (r) {
+    var id = String(r.employee_id || '').trim();
+    if (id === winner) W = r;
+    if (id === loser)  L = r;
+  });
+  if (!W) return { ok: false, error: 'unknown employee_id to keep: ' + winner };
+  if (!L) return { ok: false, error: 'unknown employee_id to merge: ' + loser };
+
+  var attrs = readAttrs_();
+  var wa = attrs[winner] || {}, la = attrs[loser] || {};
+  var merged = { employee_id: winner, name_key: nameToKey_(W.full_name), full_name: String(W.full_name || '') };
+  var filled = [];
+  ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage',
+   'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
+    var mine = String(wa[k] || '').trim(), theirs = String(la[k] || '').trim();
+    merged[k] = mine || theirs;
+    if (!mine && theirs) filled.push(k);
+  });
+  merged.updated_at = new Date().toISOString();
+  merged.updated_by = auth.user + ' (merge)';
+
+  // Identity: take the loser's hire_date / dutchie id only where the winner has none.
+  var wid = {};
+  Object.keys(W).forEach(function (k) { wid[k] = W[k]; });
+  ['hire_date', 'dutchie_employee_id', 'home_store', 'role_title', 'user_id'].forEach(function (k) {
+    if (!String(wid[k] || '').trim() && String(L[k] || '').trim()) wid[k] = L[k];
+  });
+  wid.employee_id = winner;
+
+  if (String(p.confirm || '') !== 'yes') {
+    return { ok: true, mode: 'preview', keep: winner, keep_name: W.full_name,
+             merge: loser, merge_name: L.full_name, would_fill: filled,
+             note: 'DRY RUN — nothing written. Repeat with confirm=yes.' };
+  }
+
+  var lid = {};
+  Object.keys(L).forEach(function (k) { lid[k] = L[k]; });
+  lid.employee_id = loser;
+  lid.status = 'merged';
+
+  GXCore.gxUpsertEmployees([wid, lid]);
+  writeAttrs_(merged);
+
+  var sh = aliasSheet_();
+  sh.appendRow([nameToKey_(L.full_name), String(L.full_name || ''), winner,
+                new Date().toISOString(), auth.user]);
+  bustRosterCache_();
+  return { ok: true, mode: 'merged', keep: winner, keep_name: W.full_name,
+           merged_away: L.full_name, filled: filled };
+}
+
+
+/*
+ * Which cells look wrong or unfinished. Computed server-side so the roster, any future export
+ * and the UI all agree on what "questionable" means — and so fixing a value in the UI clears
+ * the flag on the next read with no second definition to keep in sync.
+ *
+ * Only ever flags MISSING or MALFORMED data. It never flags a value merely because it is
+ * unusual: a genuinely low wage or an odd shirt size is not an error, and crying wolf on those
+ * teaches people to ignore the red.
+ */
+function rowFlags_(r) {
+  var f = [];
+  if (r.retired) return f;                       // retired records are allowed to be incomplete
+  if (!r.employee_number)          f.push('employee_number');
+  if (!r.hire_date)                f.push('hire_date');
+  if (!r.store)                    f.push('store');
+  if (r.role_is_default)           f.push('role');
+  if (!r.wage)                     f.push('wage');
+  if (!r.birthday)                 f.push('birthday');
+  if (!r.permit_number)            f.push('permit');
+  else if (r.permit_days_left != null && r.permit_days_left < 0) f.push('permit_expired');
+  if (r.permit_status && ['active', 'valid'].indexOf(String(r.permit_status).toLowerCase()) < 0)
+    f.push('permit_status');
+  return f;
+}
+
 // ─── Roster cache ───────────────────────────────────────────────────────────────
 /*
  * GXCore.getEmployees() measured ~9.8s on its own, and the roster also reads Crew's attribute
@@ -378,13 +512,14 @@ function rosterJoin_() {
     var a  = attrs[id] || {};
     var st = String(r.status || 'active').toLowerCase();
     var isRetired = st === 'retired' || st === 'inactive' || st === 'terminated' || st === 'false';
+    var isMerged  = st === 'merged';
     var anniv = normDate_(a.work_anniversary) || normDate_(r.hire_date);
     return {
       employee_id: id, name_key: nameToKey_(r.full_name), name: String(r.full_name || ''),
       store: String(r.home_store || ''),
       role: String(r.role_title || '').trim() || 'Budtender',
       role_is_default: !String(r.role_title || '').trim(),
-      retired: isRetired,
+      retired: isRetired, merged: isMerged,
       hire_date: normDate_(r.hire_date),
       time_with_company: timeWithCompany_(normDate_(r.hire_date), today),
       employee_number: a.employee_number || '', wage: a.wage || '',
@@ -394,9 +529,14 @@ function rosterJoin_() {
       permit_status: a.permit_status || '',
       permit_days_left: a.permit_expires && dateFromIso_(a.permit_expires)
         ? daysBetween_(today, dateFromIso_(a.permit_expires)) : null,
+      permit_active: a.permit_status
+        ? (['active', 'valid'].indexOf(String(a.permit_status).toLowerCase()) >= 0 ? 'Yes' : 'No')
+        : '',
       updated_at: a.updated_at || '', updated_by: a.updated_by || ''
     };
-  }).sort(function (x, y) { return x.name.localeCompare(y.name); });
+  }).map(function (r) { r.flags = rowFlags_(r); return r; })
+    .filter(function (r) { return !r.merged; })
+    .sort(function (x, y) { return x.name.localeCompare(y.name); });
 
   var out = { rows: rows, identityCount: identity.length, identityError: identityError, cached: false };
   // Only cache a good read. Caching an empty result behind a transient GX Core error would
@@ -615,7 +755,8 @@ function hrImport_(p, body) {
   catch (e) { return { ok: false, error: 'could not read GX Core identity: ' + String((e && e.message) || e) }; }
 
   var attrs = readAttrs_();
-  var idRows = [], attrRows = [], matchedNew = [], renamed = [], created = [];
+  var aliases = readAliases_();
+  var idRows = [], attrRows = [], renamed = [], created = [], viaAlias = [];
 
   list.forEach(function (r) {
     var full = String(r.full_name || '').trim();
@@ -623,8 +764,19 @@ function hrImport_(p, body) {
     var key = nameToKey_(full);
 
     var prior = null;
-    for (var i = 0; i < existing.length; i++) {
-      if (String(existing[i].employee_id || '').trim() === key) { prior = existing[i]; break; }
+    // A previous merge wins over everything: if this name was merged away, it resolves to the
+    // person it was merged into, and the duplicate is never recreated.
+    var aliasTarget = aliases[key];
+    if (aliasTarget) {
+      for (var z = 0; z < existing.length; z++) {
+        if (String(existing[z].employee_id || '').trim() === aliasTarget) { prior = existing[z]; break; }
+      }
+      if (prior) viaAlias.push(full + '  →  ' + prior.full_name);
+    }
+    if (!prior) {
+      for (var i = 0; i < existing.length; i++) {
+        if (String(existing[i].employee_id || '').trim() === key) { prior = existing[i]; break; }
+      }
     }
     if (!prior) {
       for (var j = 0; j < existing.length; j++) {
@@ -668,7 +820,7 @@ function hrImport_(p, body) {
     incoming: list.length,
     matched_existing: idRows.length - created.length,
     would_create: created.length, created_names: created.slice(0, 40),
-    matched_despite_name_drift: renamed,
+    matched_despite_name_drift: renamed, matched_via_merge_alias: viaAlias,
     active: idRows.filter(function (r) { return String(r.status).toLowerCase() !== 'retired'; }).length,
     retired: idRows.filter(function (r) { return String(r.status).toLowerCase() === 'retired'; }).length,
     with_permit: attrRows.filter(function (r) { return r.permit_number; }).length,
