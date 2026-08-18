@@ -144,6 +144,52 @@
     .permit-active { color: var(--gx-green); font-weight: 700; letter-spacing: .5px; }
     .crew-permit-no { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 12px; color: var(--gx-text-dim); letter-spacing: .5px; }
+
+    /* ── v7: review queue ────────────────────────────────────────────────── */
+    .crew-nav { display: flex; gap: 4px; margin: -4px 0 18px; border-bottom: 1px solid var(--gx-border); }
+    .crew-tab { background: none; border: 0; border-bottom: 2px solid transparent;
+      color: var(--gx-text-mute); font: inherit; font-size: 12px; font-weight: 600;
+      letter-spacing: 1.1px; text-transform: uppercase; padding: 8px 14px; cursor: pointer; }
+    .crew-tab:hover { color: var(--gx-text); }
+    .crew-tab.is-active { color: var(--gx-green); border-bottom-color: var(--gx-green); }
+    .crew-badge { display: inline-block; margin-left: 7px; padding: 1px 7px;
+      border-radius: var(--gx-radius-pill); font-size: 10px; letter-spacing: 0;
+      background: var(--gx-gold-soft); color: var(--gx-gold); border: 1px solid var(--gx-gold-line); }
+    .crew-badge.is-high { background: var(--gx-red-soft); color: var(--gx-red); border-color: var(--gx-red); }
+
+    .crew-review-intro { font-size: 12px; margin: 0 0 16px; }
+    .crew-review-intro b { color: var(--gx-text); }
+    .crew-allclear { color: var(--gx-green); font-size: 14px; padding: 18px 0; }
+
+    .crew-review { border: 1px solid var(--gx-border); border-left-width: 3px;
+      border-radius: var(--gx-radius-md); padding: 13px 15px; margin: 0 0 10px;
+      background: var(--gx-surface-2); transition: opacity .25s; }
+    .crew-review-high { border-left-color: var(--gx-red); }
+    .crew-review-warn { border-left-color: var(--gx-gold); }
+    .crew-review-info { border-left-color: var(--gx-border-strong); }
+    .crew-review.is-done { opacity: .4; }
+
+    .crew-review-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .crew-review-head b { color: var(--gx-text); font-size: 14px; }
+    .crew-review-kind { font-size: 10px; font-weight: 700; letter-spacing: 1.1px;
+      text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-review-src { margin-left: auto; font-size: 10px; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-review-detail { font-size: 12.5px; color: var(--gx-text-dim); margin: 7px 0 0; line-height: 1.5; }
+
+    .crew-review-cmp { display: flex; align-items: stretch; gap: 12px; margin: 11px 0 0; flex-wrap: wrap; }
+    .crew-review-col { display: flex; flex-direction: column; gap: 3px; font-size: 13px;
+      color: var(--gx-text-dim); background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius); padding: 6px 11px; }
+    .crew-review-col em { font-size: 9.5px; font-style: normal; font-weight: 700;
+      letter-spacing: 1px; text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-review-col.is-proposed { color: var(--gx-green); border-color: var(--gx-green-dim); }
+    .crew-review-arrow { align-self: center; color: var(--gx-text-mute); }
+
+    .crew-review-acts { display: flex; align-items: center; gap: 8px; margin: 13px 0 0; flex-wrap: wrap; }
+    .crew-save.is-primary { background: var(--gx-green); border-color: var(--gx-green);
+      color: var(--gx-green-ink); font-weight: 700; }
+    .crew-save.is-primary:hover:not(:disabled) { background: var(--gx-green-bright); }
   </style>
 </head>
 <body class="gx-app">
@@ -153,6 +199,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=6"></script>
+  <script src="crew.js?v=7"></script>
 </body>
 </html>

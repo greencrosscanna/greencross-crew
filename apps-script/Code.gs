@@ -36,6 +36,16 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
                           'updated_at', 'updated_by'];
 
+/* Review queue. Conflicts are DETECTED live, never stored — the roster is the truth and a
+ * stale conflict list would be worse than none. What IS stored is the DECISION, so a resolved
+ * item stops resurfacing while a genuinely changed one comes back. */
+var REVIEW_TAB      = 'crew_reviews';      // items reported by an import (HR/METRC, not engine-reachable)
+var REVIEW_HEADERS  = ['review_id', 'kind', 'employee_id', 'name', 'field',
+                       'current_value', 'proposed_value', 'source', 'detail', 'reported_at'];
+var DECISION_TAB     = 'crew_decisions';   // what a human already ruled on
+var DECISION_HEADERS = ['decision_key', 'kind', 'employee_id', 'field', 'chose',
+                        'value', 'decided_by', 'decided_at', 'note'];
+
 /** Alias tab: names that have been merged away, so an import never re-splits a person. */
 var ALIAS_TAB     = 'crew_aliases';
 var ALIAS_HEADERS = ['alias_key', 'alias_name', 'employee_id', 'merged_at', 'merged_by'];
@@ -79,6 +89,11 @@ function route_(e) {
       case 'roster_save':  return json_(saveRosterAttrs_(p), p.callback);
       case 'roster_retire':return json_(setRetired_(p), p.callback);
       case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
+
+      // ── Review queue: catch cross-source disagreements, ask a human ─────────
+      case 'review':         return json_(getReview_(p), p.callback);
+      case 'review_resolve': return json_(resolveReview_(p), p.callback);
+      case 'review_report':  return json_(reportConflicts_(p, body), p.callback);
 
       // ── Derived, PII-free feed for Leaderboard (deploy-secret gated) ────────
       case 'celebrations': return json_(getCelebrations_(p), p.callback);
@@ -362,6 +377,233 @@ function pad2_(n) { return (n < 10 ? '0' : '') + n; }
  */
 
 
+
+
+// ─── Review queue ───────────────────────────────────────────────────────────────
+/*
+ * The point of holding three sources is catching where they disagree — and then asking a human,
+ * never silently picking. So:
+ *
+ *   • Conflicts are DETECTED on read from live data. Nothing is cached as a "conflict list",
+ *     because one that drifts out of date is worse than not having one.
+ *   • DECISIONS are persisted. Resolving an item records what was chosen, keyed on the item's
+ *     values — so it stays gone, but if the underlying values CHANGE it surfaces again as a new
+ *     question. Silence and "already answered" must not be the same state.
+ *   • Defaults follow Sky's ruling: METRC wins on spelling (OLCC-validated, not hand-typed),
+ *     Leaderboard wins on role. Those set which side is offered as `proposed`; they never apply
+ *     themselves.
+ */
+function sheetOf_(tab, headers) {
+  var ss = crewSheet_().getParent();
+  var sh = ss.getSheetByName(tab);
+  if (!sh) {
+    sh = ss.insertSheet(tab);
+    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh;
+}
+function readTab_(tab, headers) {
+  var sh = sheetOf_(tab, headers);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, headers.length).getValues().map(function (r) {
+    var o = {};
+    headers.forEach(function (h, i) { o[h] = String(r[i] == null ? '' : r[i]).trim(); });
+    return o;
+  });
+}
+
+/** Stable identity for a conflict: same question + same values = same decision. */
+function decisionKey_(kind, employeeId, field, proposed) {
+  return [kind, employeeId, field, String(proposed || '').toLowerCase()].join('|');
+}
+
+function reviewItems_() {
+  var joined = rosterJoin_();
+  var rows = joined.rows;
+  var byId = {};
+  rows.forEach(function (r) { byId[r.employee_id] = r; });
+
+  var decided = {};
+  readTab_(DECISION_TAB, DECISION_HEADERS).forEach(function (d) { decided[d.decision_key] = d; });
+
+  var items = [];
+  function add(kind, row, field, current, proposed, source, detail, severity) {
+    var key = decisionKey_(kind, row.employee_id, field, proposed);
+    if (decided[key]) return;
+    items.push({
+      id: key, kind: kind, employee_id: row.employee_id, name: row.name,
+      field: field, current_value: String(current == null ? '' : current),
+      proposed_value: String(proposed == null ? '' : proposed),
+      source: source, detail: detail || '', severity: severity || 'info'
+    });
+  }
+
+  // ── 1. Duplicates. This is what catches "TJ Peterson" without anyone noticing him first.
+  for (var i = 0; i < rows.length; i++) {
+    for (var j = i + 1; j < rows.length; j++) {
+      var a = rows[i], b = rows[j];
+      if (a.retired && b.retired) continue;
+      if (!samePerson_(a.name, b.name)) continue;
+      // Richer record wins by default — more populated fields means more to lose.
+      var score = function (r) {
+        return (r.employee_number ? 1 : 0) + (r.hire_date ? 1 : 0) + (r.permit_number ? 1 : 0) +
+               (r.wage ? 1 : 0) + (r.birthday ? 1 : 0) + (r.store ? 1 : 0);
+      };
+      var keep = score(a) >= score(b) ? a : b, drop = keep === a ? b : a;
+      add('duplicate', keep, 'identity', drop.name, keep.name, 'GX Core',
+          'Two records look like the same person. Keeping "' + keep.name + '" merges "' +
+          drop.name + '" into it — nothing is deleted.', 'high');
+      items[items.length - 1].merge_from = drop.employee_id;
+      items[items.length - 1].merge_from_name = drop.name;
+    }
+  }
+
+  // ── 2. Permits — the compliance half.
+  rows.forEach(function (r) {
+    if (r.retired) {
+      if (r.permit_number && r.permit_status &&
+          ['active', 'valid'].indexOf(String(r.permit_status).toLowerCase()) >= 0) {
+        add('retired_with_access', r, 'permit_status', 'retired staff, permit still ' + r.permit_status,
+            'revoke', 'METRC', 'Retired on the roster but still holds an active METRC permit/access.', 'high');
+      }
+      return;
+    }
+    if (!r.permit_number) {
+      add('missing_permit', r, 'permit_number', '', 'needs a permit on file', 'METRC',
+          'Active staff with no OLCC worker permit recorded.', 'high');
+    } else if (r.permit_days_left != null && r.permit_days_left < 0) {
+      add('permit_expired', r, 'permit_expires', r.permit_expires, 'renew', 'METRC',
+          'Permit expired ' + (-r.permit_days_left) + ' days ago.', 'high');
+    } else if (r.permit_days_left != null && r.permit_days_left <= 90) {
+      add('permit_expiring', r, 'permit_expires', r.permit_expires, 'renew', 'METRC',
+          'Permit expires in ' + r.permit_days_left + ' days.', 'warn');
+    }
+  });
+
+  // ── 3. Gaps that need a person, not a default.
+  rows.forEach(function (r) {
+    if (r.retired) return;
+    if (!r.employee_number) {
+      add('missing_field', r, 'employee_number', '', 'assign next number', 'HR sheet',
+          'No employee number — the canonical stable key.', 'warn');
+    }
+    if (!r.hire_date) {
+      add('missing_field', r, 'hire_date', '', 'needs a hire date', 'HR sheet',
+          'No hire date, so tenure and work anniversary cannot be derived.', 'warn');
+    }
+  });
+
+  // ── 4. Anything an import reported that the engine cannot see for itself (HR sheet, METRC
+  //       exports — neither is reachable from Apps Script, so imports post their findings here).
+  readTab_(REVIEW_TAB, REVIEW_HEADERS).forEach(function (rep) {
+    var row = byId[rep.employee_id] || { employee_id: rep.employee_id, name: rep.name, retired: false };
+    var key = decisionKey_(rep.kind, rep.employee_id, rep.field, rep.proposed_value);
+    if (decided[key]) return;
+    items.push({
+      id: key, kind: rep.kind, employee_id: rep.employee_id, name: rep.name || row.name,
+      field: rep.field, current_value: rep.current_value, proposed_value: rep.proposed_value,
+      source: rep.source, detail: rep.detail, severity: 'warn', reported: true
+    });
+  });
+
+  var rank = { high: 0, warn: 1, info: 2 };
+  items.sort(function (x, y) {
+    return (rank[x.severity] - rank[y.severity]) || x.name.localeCompare(y.name);
+  });
+  return items;
+}
+
+function getReview_(p) {
+  // Deploy secret is accepted alongside a user session so the queue can be inspected from
+  // tooling, same as seed_preview. Resolving still requires a real signed-in editor.
+  var auth = deploySecretOk_(p) ? { ok: true, user: 'tooling', role: 'admin' } : requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  var items = reviewItems_();
+  var counts = { high: 0, warn: 0, info: 0 };
+  items.forEach(function (i) { counts[i.severity] = (counts[i.severity] || 0) + 1; });
+  return { ok: true, can_edit: canEdit_(auth), total: items.length, counts: counts, items: items };
+}
+
+/**
+ * Resolve one item. `choice` is 'accept' (take the proposed value), 'keep' (the current value is
+ * correct) or 'dismiss' (not a problem). All three record a decision — "I looked and it's fine"
+ * is an answer, and must silence the item just as firmly as a correction does.
+ */
+function resolveReview_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+
+  var id = String(p.id || '').trim();
+  var choice = String(p.choice || '').trim();
+  if (!id) return { ok: false, error: 'id required' };
+  if (['accept', 'keep', 'dismiss'].indexOf(choice) < 0) {
+    return { ok: false, error: 'choice must be accept, keep or dismiss' };
+  }
+  var items = reviewItems_();
+  var item = null;
+  for (var i = 0; i < items.length; i++) if (items[i].id === id) { item = items[i]; break; }
+  if (!item) return { ok: false, error: 'no open review item with that id (already resolved?)' };
+
+  var applied = '';
+  if (choice === 'accept') {
+    if (item.kind === 'duplicate') {
+      var m = mergeEmployees_({ token: p.token, keep: item.employee_id,
+                                merge: item.merge_from, confirm: 'yes' });
+      if (!m.ok) return m;
+      applied = 'merged ' + item.merge_from_name + ' into ' + item.name;
+    } else if (item.kind === 'name_spelling' || item.kind === 'role') {
+      var field = item.kind === 'role' ? 'role_title' : 'full_name';
+      var identity = GXCore.getEmployees() || [];
+      var prior = null;
+      for (var z = 0; z < identity.length; z++) {
+        if (String(identity[z].employee_id || '').trim() === item.employee_id) { prior = identity[z]; break; }
+      }
+      if (!prior) return { ok: false, error: 'unknown employee_id: ' + item.employee_id };
+      var merged = {};
+      Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
+      merged[field] = item.proposed_value;
+      GXCore.gxUpsertEmployee(merged);
+      applied = field + ' → ' + item.proposed_value;
+    } else {
+      // Compliance items (renew a permit, revoke access, fill a gap) are actioned OUTSIDE this
+      // app. Accepting records that it was handled; it does not pretend to have done it.
+      applied = 'acknowledged as handled';
+    }
+  }
+
+  sheetOf_(DECISION_TAB, DECISION_HEADERS).appendRow([
+    id, item.kind, item.employee_id, item.field, choice,
+    choice === 'accept' ? item.proposed_value : item.current_value,
+    auth.user, new Date().toISOString(), applied
+  ]);
+  bustRosterCache_();
+  return { ok: true, id: id, choice: choice, applied: applied };
+}
+
+/** Imports post what the engine cannot see (HR sheet / METRC disagreements) into the queue. */
+function reportConflicts_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var list = (body && body.conflicts) || [];
+  if (!list.length) return { ok: false, error: 'no conflicts in payload' };
+  var sh = sheetOf_(REVIEW_TAB, REVIEW_HEADERS);
+  // Replace wholesale: these are re-derived by whoever runs the reconciliation, and stale rows
+  // would linger forever. Decisions live in the other tab and are unaffected.
+  if (sh.getLastRow() > 1) sh.deleteRows(2, sh.getLastRow() - 1);
+  var now = new Date().toISOString();
+  var rows = list.map(function (c) {
+    return REVIEW_HEADERS.map(function (h) {
+      if (h === 'reported_at') return now;
+      if (h === 'review_id') return decisionKey_(c.kind, c.employee_id, c.field, c.proposed_value);
+      return String(c[h] == null ? '' : c[h]);
+    });
+  });
+  if (rows.length) sh.getRange(2, 1, rows.length, REVIEW_HEADERS.length).setValues(rows);
+  bustRosterCache_();
+  return { ok: true, reported: rows.length };
+}
 
 // ─── Leaderboard hand-off: nicknames + avatars → Core display fields ────────────
 /*

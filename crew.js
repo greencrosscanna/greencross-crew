@@ -28,7 +28,8 @@
   var Engine = null;           // built once we know the engine URL
   var state  = { rows: [], canEdit: false, shirtSizes: [], user: '', role: '', identity: null,
                  stores: {}, showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
-                 sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false };
+                 sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false,
+                 view: 'roster', review: null, reviewCounts: {} };
 
   // ─── tiny DOM helpers ────────────────────────────────────────────────────────
   function el(tag, cls, html) {
@@ -201,9 +202,163 @@
     });
   }
 
-  function renderRoster() {
+
+  /* ── Review queue ──────────────────────────────────────────────────────────
+     Cross-source disagreements, surfaced for a human. Nothing here has been applied;
+     every item is a question with three honest answers — take the proposed value, keep
+     what we have, or it is not a problem. All three are recorded, because "I looked and
+     it is fine" has to silence an item as firmly as a correction does. */
+  var KIND_LABEL = {
+    duplicate:           'Possible duplicate',
+    retired_with_access: 'Retired, still has access',
+    missing_permit:      'No OLCC permit on file',
+    permit_expired:      'Permit expired',
+    permit_expiring:     'Permit expiring',
+    missing_field:       'Missing data',
+    name_spelling:       'Name spelling differs',
+    role:                'Role differs'
+  };
+
+  /* Repaint just the count on the Review tab, leaving resolved items and their ✓ in place. */
+  function refreshBadge() {
+    var n = state.reviewCounts || {};
+    var open = (n.high || 0) + (n.warn || 0);
+    var tab = document.querySelectorAll('.crew-tab')[1];
+    if (!tab) return;
+    var badge = tab.querySelector('.crew-badge');
+    if (!open) { if (badge) badge.remove(); return; }
+    if (!badge) {
+      badge = el('span', 'crew-badge');
+      tab.appendChild(badge);
+    }
+    badge.textContent = open;
+    badge.className = 'crew-badge' + (n.high ? ' is-high' : '');
+  }
+
+  function navBar() {
+    var nav = el('div', 'crew-nav');
+    [['roster', 'Roster'], ['review', 'Review']].forEach(function (v) {
+      var n = state.reviewCounts || {};
+      var badge = '';
+      if (v[0] === 'review' && (n.high || n.warn)) {
+        badge = ' <span class="crew-badge' + (n.high ? ' is-high' : '') + '">' +
+                ((n.high || 0) + (n.warn || 0)) + '</span>';
+      }
+      var b = el('button', 'crew-tab' + (state.view === v[0] ? ' is-active' : ''), v[1] + badge);
+      b.addEventListener('click', function () {
+        state.view = v[0];
+        if (v[0] === 'review' && !state.review) loadReview(); else render();
+      });
+      nav.appendChild(b);
+    });
+    return nav;
+  }
+
+  async function loadReview() {
+    renderStatus('Checking for misalignments…');
+    try {
+      var r = await Engine.jsonp('review', { token: token() }, { timeoutMs: 45000, retries: 2 });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'Review load failed');
+      state.review = r.items || [];
+      state.reviewCounts = r.counts || {};
+      render();
+    } catch (e) {
+      renderStatus('⚠️ Could not load the review queue: ' + esc((e && e.message) || 'unknown error'));
+    }
+  }
+
+  function renderReview() {
     clear();
-    var nodes = [];
+    var nodes = [navBar()];
+    var items = state.review || [];
+
+    if (!items.length) {
+      nodes.push(el('p', 'crew-allclear', '✓ Nothing to review — every source agrees.'));
+      mount.appendChild(card('Review', nodes));
+      return;
+    }
+
+    nodes.push(el('p', 'gx-muted crew-review-intro',
+      'Where the HR sheet, METRC and Leaderboard disagree. <b>Nothing here has been applied.</b> ' +
+      'Each answer is recorded, so a resolved item stays gone — but if the underlying values ' +
+      'change it will come back as a new question.'));
+
+    items.forEach(function (it) {
+      var box = el('div', 'crew-review crew-review-' + it.severity);
+      var head = el('div', 'crew-review-head');
+      head.innerHTML = '<span class="crew-review-kind">' + esc(KIND_LABEL[it.kind] || it.kind) +
+        '</span><b>' + esc(it.name) + '</b>' +
+        '<span class="crew-review-src">' + esc(it.source) + '</span>';
+      box.appendChild(head);
+      if (it.detail) box.appendChild(el('p', 'crew-review-detail', esc(it.detail)));
+
+      if (it.current_value || it.proposed_value) {
+        var cmp = el('div', 'crew-review-cmp');
+        cmp.innerHTML =
+          '<span class="crew-review-col"><em>now</em>' +
+            (it.current_value ? esc(it.current_value) : '<span class="crew-hint">—</span>') + '</span>' +
+          '<span class="crew-review-arrow">→</span>' +
+          '<span class="crew-review-col is-proposed"><em>' +
+            (it.kind === 'duplicate' ? 'keep' : 'proposed') + '</em>' +
+            (it.proposed_value ? esc(it.proposed_value) : '<span class="crew-hint">—</span>') + '</span>';
+        box.appendChild(cmp);
+      }
+
+      if (state.canEdit) {
+        var acts = el('div', 'crew-review-acts');
+        var status = el('span', 'crew-save-status');
+        var actionable = ['duplicate', 'name_spelling', 'role'].indexOf(it.kind) >= 0;
+        [[ 'accept', actionable ? (it.kind === 'duplicate' ? 'Merge them' : 'Apply') : 'Mark handled', 'primary'],
+         [ 'keep',    'Current is correct', ''],
+         [ 'dismiss', 'Not a problem', '']].forEach(function (a) {
+          var b = el('button', 'crew-save' + (a[2] === 'primary' ? ' is-primary' : ''), a[1]);
+          b.addEventListener('click', async function () {
+            if (it.kind === 'duplicate' && a[0] === 'accept' &&
+                !confirm('Merge "' + it.merge_from_name + '" into "' + it.name + '"?\n\n' +
+                         'Nothing is deleted, and future imports of "' + it.merge_from_name +
+                         '" will resolve to ' + it.name + '.')) return;
+            acts.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
+            status.textContent = 'Saving…'; status.className = 'crew-save-status';
+            try {
+              var r = await Engine.jsonp('review_resolve',
+                { token: token(), id: it.id, choice: a[0] }, { timeoutMs: 45000, retries: 2 });
+              if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
+              box.classList.add('is-done');
+              status.textContent = '✓ ' + (r.applied || a[1]);
+              status.className = 'crew-save-status ok';
+              state.review = state.review.filter(function (x) { return x.id !== it.id; });
+              state.reviewCounts[it.severity] = Math.max(0, (state.reviewCounts[it.severity] || 1) - 1);
+              state.rows = [];   // roster is stale after any of these
+              // Update the badge in place. Re-rendering would be simpler but would wipe the ✓
+              // confirmations off every item resolved so far, which is the feedback that tells
+              // you the queue is actually going down.
+              refreshBadge();
+            } catch (e) {
+              status.textContent = (e && e.message) || 'Failed';
+              status.className = 'crew-save-status err';
+              acts.querySelectorAll('button').forEach(function (x) { x.disabled = false; });
+            }
+          });
+          acts.appendChild(b);
+        });
+        acts.appendChild(status);
+        box.appendChild(acts);
+      }
+      nodes.push(box);
+    });
+
+    mount.appendChild(card('Review <span class="gx-muted crew-count">' + items.length + '</span>', nodes));
+  }
+
+  function render() {
+    if (state.view === 'review') renderReview();
+    else renderRoster();
+  }
+
+  function renderRoster() {
+    if (!state.rows.length && state.view === 'roster' && state.review) { boot(true); return; }
+    clear();
+    var nodes = [navBar()];
 
     var bar = el('div', 'crew-bar');
     bar.innerHTML = '<span>Signed in as <b>' + esc(state.user) + '</b> · ' + esc(state.role) +
@@ -452,6 +607,17 @@
       state.retiredTotal = r.retired_total || 0;
       state.hrSheetUrl = r.hr_sheet_url || '';
       renderRoster();
+      // Pull the review count in the background so the tab badge is right without making the
+      // roster wait on a second slow read.
+      if (!state.review) {
+        Engine.jsonp('review', { token: token() }, { timeoutMs: 45000, retries: 1 })
+          .then(function (rv) {
+            if (rv && rv.ok) {
+              state.review = rv.items || []; state.reviewCounts = rv.counts || {};
+              if (state.view === 'roster') renderRoster();
+            }
+          }).catch(function () { /* badge is a nicety */ });
+      }
     } catch (e) {
       renderStatus('⚠️ Could not load the roster: ' + esc((e && e.message) || 'unknown error'));
     }
