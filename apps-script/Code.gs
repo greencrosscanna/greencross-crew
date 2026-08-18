@@ -32,7 +32,15 @@ var STORE_TZ   = 'America/Los_Angeles';
 var CREW_SHEET_ID_PROP = 'CREW_SHEET_ID';
 var ATTR_TAB           = 'crew_attributes';
 var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
-                          'birthday', 'work_anniversary', 'updated_at', 'updated_by'];
+                          'birthday', 'work_anniversary', 'employee_number', 'wage',
+                          'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
+                          'updated_at', 'updated_by'];
+
+/** Attributes a manager may edit from the roster UI. Everything else is import-owned. */
+var EDITABLE_ATTRS = ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage'];
+
+/** The HR workbook these numbers come from — surfaced in the UI so the source is one click away. */
+var HR_SHEET_URL = 'https://docs.google.com/spreadsheets/d/19AU1uywwizpb_x3NWqYwfgPOK94pbNBv/edit';
 
 /** Allowed shirt sizes. Kept server-side so the UI can't write junk into payroll-adjacent data. */
 var SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
@@ -46,14 +54,23 @@ function doPost(e) { return route_(e); }
 function route_(e) {
   var p = (e && e.parameter) || {};
   var action = p.action || 'health';
+  var body = null;
+  if (e && e.postData && e.postData.contents) {
+    try { body = JSON.parse(e.postData.contents); } catch (err) { body = null; }
+  }
   try {
     switch (action) {
+      // Bulk HR import. POST only — the payload is the whole roster and cannot fit in a query
+      // string, and this writes both the shared registry and Crew's attributes.
+      case 'hr_import': return json_(hrImport_(p, body), p.callback);
+
       case 'health':
         return json_({ ok: true, app: 'crew', ts: new Date().toISOString() }, p.callback);
 
       // ── Roster (auth-gated — holds PII) ─────────────────────────────────────
       case 'roster':       return json_(getRoster_(p), p.callback);
       case 'roster_save':  return json_(saveRosterAttrs_(p), p.callback);
+      case 'roster_retire':return json_(setRetired_(p), p.callback);
 
       // ── Derived, PII-free feed for Leaderboard (deploy-secret gated) ────────
       case 'celebrations': return json_(getCelebrations_(p), p.callback);
@@ -202,20 +219,35 @@ function crewSheet_() {
     sh = ss.insertSheet(ATTR_TAB);
     sh.getRange(1, 1, 1, ATTR_HEADERS.length).setValues([ATTR_HEADERS]).setFontWeight('bold');
     sh.setFrozenRows(1);
+    return sh;
+  }
+  // Migrate in place when ATTR_HEADERS grows. Appending only — existing columns keep their
+  // position so no stored value shifts under a different header.
+  var width = Math.max(sh.getLastColumn(), 1);
+  var have  = sh.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h || '').trim(); });
+  var missing = ATTR_HEADERS.filter(function (h) { return have.indexOf(h) < 0; });
+  if (missing.length) {
+    sh.getRange(1, have.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
   }
   return sh;
 }
 
 /** All stored attributes, as { employee_id → row object }. */
+function attrHeaders_(sh) {
+  return sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), 1)).getValues()[0]
+           .map(function (h) { return String(h || '').trim(); });
+}
+
 function readAttrs_() {
   var sh = crewSheet_();
   var last = sh.getLastRow();
   if (last < 2) return {};
-  var values = sh.getRange(2, 1, last - 1, ATTR_HEADERS.length).getValues();
+  var hdr = attrHeaders_(sh);
+  var values = sh.getRange(2, 1, last - 1, hdr.length).getValues();
   var out = {};
   for (var i = 0; i < values.length; i++) {
     var row = {};
-    for (var c = 0; c < ATTR_HEADERS.length; c++) row[ATTR_HEADERS[c]] = String(values[i][c] == null ? '' : values[i][c]).trim();
+    for (var c = 0; c < hdr.length; c++) row[hdr[c]] = String(values[i][c] == null ? '' : values[i][c]).trim();
     if (row.employee_id) out[row.employee_id] = row;
   }
   return out;
@@ -238,8 +270,9 @@ function writeAttrs_(rec) {
         if (String(ids[i][0]).trim() === rec.employee_id) { targetRow = i + 2; break; }
       }
     }
-    var row = ATTR_HEADERS.map(function (h) { return rec[h] == null ? '' : rec[h]; });
-    if (targetRow) sh.getRange(targetRow, 1, 1, ATTR_HEADERS.length).setValues([row]);
+    var hdr = attrHeaders_(sh);
+    var row = hdr.map(function (h) { return rec[h] == null ? '' : rec[h]; });
+    if (targetRow) sh.getRange(targetRow, 1, 1, hdr.length).setValues([row]);
     else           sh.appendRow(row);
   } finally {
     lock.releaseLock();
@@ -310,57 +343,112 @@ function getRoster_(p) {
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
 
-  var identity = [];
-  var identityError = '';
-  try {
-    identity = GXCore.getEmployees() || [];
-  } catch (e) {
-    identityError = String((e && e.message) || e);
-  }
+  var identity = [], identityError = '';
+  try { identity = GXCore.getEmployees() || []; }
+  catch (e) { identityError = String((e && e.message) || e); }
 
-  var active = identity.filter(function (r) {
-    var st = String(r.status || 'active').toLowerCase();
-    return st !== 'inactive' && st !== 'terminated' && st !== 'false';
-  });
-
+  var includeRetired = String(p.include_retired || '') === '1';
   var attrs = readAttrs_();
-  var rows = active.map(function (r) {
+  var today = todayInStoreTz_();
+  var retiredCount = 0;
+
+  var rows = identity.map(function (r) {
     var id = String(r.employee_id || '').trim();
     var a  = attrs[id] || {};
-    // Work anniversary falls back to Core's hire_date — that IS the anniversary unless HR
-    // has recorded an override (rehire, corrected start date).
+    var st = String(r.status || 'active').toLowerCase();
+    var isRetired = st === 'retired' || st === 'inactive' || st === 'terminated' || st === 'false';
+    if (isRetired) retiredCount++;
     var anniv = normDate_(a.work_anniversary) || normDate_(r.hire_date);
     return {
-      employee_id:      id,
-      name_key:         nameToKey_(r.full_name),
-      name:             String(r.full_name || ''),
-      store:            String(r.home_store || ''),
-      role:             String(r.role_title || ''),
-      shirt_size:       normShirt_(a.shirt_size),
-      birthday:         normBirthday_(a.birthday),
+      employee_id: id,
+      name_key: nameToKey_(r.full_name),
+      name: String(r.full_name || ''),
+      store: String(r.home_store || ''),
+      // Default role is Budtender — the overwhelmingly common case, and a blank role reads as
+      // missing data rather than as the thing it almost always is.
+      role: String(r.role_title || '').trim() || 'Budtender',
+      role_is_default: !String(r.role_title || '').trim(),
+      retired: isRetired,
+      hire_date: normDate_(r.hire_date),
+      time_with_company: timeWithCompany_(normDate_(r.hire_date), today),
+      employee_number: a.employee_number || '',
+      wage: a.wage || '',
+      shirt_size: normShirt_(a.shirt_size),
+      birthday: normBirthday_(a.birthday),
       work_anniversary: anniv,
       anniversary_is_override: !!normDate_(a.work_anniversary),
-      updated_at:       a.updated_at || '',
-      updated_by:       a.updated_by || ''
+      permit_number: a.permit_number || '',
+      permit_expires: a.permit_expires || '',
+      permit_status: a.permit_status || '',
+      permit_days_left: a.permit_expires ? daysBetween_(today, dateFromIso_(a.permit_expires)) : null,
+      updated_at: a.updated_at || '',
+      updated_by: a.updated_by || ''
     };
-  }).sort(function (x, y) { return x.name.localeCompare(y.name); });
+  }).filter(function (r) { return includeRetired || !r.retired; })
+    .sort(function (x, y) { return x.name.localeCompare(y.name); });
 
   return {
-    ok: true,
-    user: auth.user,
-    role: auth.role,
-    can_edit: canEdit_(auth),
-    shirt_sizes: SHIRT_SIZES,
+    ok: true, user: auth.user, role: auth.role, can_edit: canEdit_(auth),
+    shirt_sizes: SHIRT_SIZES, hr_sheet_url: HR_SHEET_URL,
+    include_retired: includeRetired, retired_total: retiredCount,
     rows: rows,
     identity_source: {
-      count: identity.length,
-      active: active.length,
-      error: identityError,
+      count: identity.length, error: identityError,
       note: identity.length ? '' :
         'GX Core `employees` is empty — identity has no writer yet (needs core-admin: gxUpsertEmployee + seed). ' +
         'Crew attributes are stored and will join automatically once identity lands.'
     }
   };
+}
+
+function dateFromIso_(iso) {
+  var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+}
+
+/**
+ * "10yr 7mo", matching how the HR sheet already phrases it — managers read this column next to
+ * a printout, so the format should not need translating.
+ */
+function timeWithCompany_(hireIso, today) {
+  var d = dateFromIso_(hireIso);
+  if (!d) return '';
+  var months = (today.getFullYear() - d.getFullYear()) * 12 + (today.getMonth() - d.getMonth());
+  if (today.getDate() < d.getDate()) months--;
+  if (months < 0) return '';
+  return Math.floor(months / 12) + 'yr ' + (months % 12) + 'mo';
+}
+
+/**
+ * Retire (or un-retire) someone. Status is GX Core identity, not a Crew attribute, so this
+ * writes UP to Core — and read-merge-writes for the same reason hrImport_ does: gxWrite_
+ * replaces the whole row, and a partial write would blank dutchie_employee_id.
+ *
+ * Nothing is deleted. Retired staff keep their attributes, their permit history and their
+ * employee number; they simply drop out of the default roster view.
+ */
+function setRetired_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+
+  var id = String(p.employee_id || '').trim();
+  if (!id) return { ok: false, error: 'employee_id required' };
+  var retire = String(p.retired || '') !== '0';
+
+  var identity = GXCore.getEmployees() || [];
+  var prior = null;
+  for (var i = 0; i < identity.length; i++) {
+    if (String(identity[i].employee_id || '').trim() === id) { prior = identity[i]; break; }
+  }
+  if (!prior) return { ok: false, error: 'unknown employee_id: ' + id };
+
+  var merged = {};
+  Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
+  merged.employee_id = id;
+  merged.status = retire ? 'retired' : 'active';
+  GXCore.gxUpsertEmployee(merged);
+  return { ok: true, employee_id: id, status: merged.status, by: auth.user };
 }
 
 /**
@@ -386,6 +474,14 @@ function saveRosterAttrs_(p) {
 
   // Reject bad input loudly rather than storing '' — a silently-dropped birthday looks like a
   // save that worked, and nobody notices until the celebration never fires.
+  var wage = String(p.wage == null ? '' : p.wage).trim();
+  if (wage && !/^\$?\s*\d{1,3}(\.\d{1,2})?$/.test(wage)) {
+    return { ok: false, error: 'invalid wage: ' + wage + ' (expected an hourly rate like 17.50)' };
+  }
+  var empno = String(p.employee_number == null ? '' : p.employee_number).trim();
+  if (empno && !/^\d{1,5}$/.test(empno)) {
+    return { ok: false, error: 'invalid employee_number: ' + empno + ' (digits only)' };
+  }
   var shirt = String(p.shirt_size == null ? '' : p.shirt_size).trim();
   if (shirt && !normShirt_(shirt)) return { ok: false, error: 'invalid shirt_size: ' + shirt + ' (expected one of ' + SHIRT_SIZES.join(', ') + ')' };
   var bday = String(p.birthday == null ? '' : p.birthday).trim();
@@ -402,11 +498,159 @@ function saveRosterAttrs_(p) {
     shirt_size:       p.shirt_size       == null ? (existing.shirt_size       || '') : normShirt_(shirt),
     birthday:         p.birthday         == null ? (existing.birthday         || '') : normBirthday_(bday),
     work_anniversary: p.work_anniversary == null ? (existing.work_anniversary || '') : normDate_(anniv),
+    employee_number:  p.employee_number  == null ? (existing.employee_number  || '') : empno,
+    wage:             p.wage             == null ? (existing.wage             || '') : wage.replace(/^\$\s*/, ''),
+    // Permit fields are import-owned (METRC is the source of truth) — carry them through
+    // untouched so a roster edit can never quietly rewrite compliance data.
+    permit_number:    existing.permit_number  || '',
+    permit_granted:   existing.permit_granted || '',
+    permit_expires:   existing.permit_expires || '',
+    permit_status:    existing.permit_status  || '',
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };
   writeAttrs_(rec);
   return { ok: true, employee_id: id, saved: rec };
+}
+
+
+// ─── HR import (staff sheet + METRC permits → Core identity + Crew attributes) ───
+/*
+ * One reconciled payload in, two destinations out:
+ *   • GX Core identity — full_name, home_store, role_title, status, hire_date
+ *   • Crew attributes  — employee_number, wage, shirt_size, birthday, permit_*
+ *
+ * Two things this must get right, both learned the hard way:
+ *
+ * 1. gxWrite_ REPLACES the whole row. It rebuilds every column from the record, so any field
+ *    absent from the payload is written as ''. A naive partial upsert silently wipes
+ *    dutchie_employee_id and user_id — the very columns that let SPIFF and Leaderboard join.
+ *    So we read the existing row and merge onto it, and never overwrite a populated value
+ *    with an empty one.
+ *
+ * 2. Names drift between sources. The registry was seeded from Dutchie ("Skyler Poteet"); the
+ *    HR sheet says "Poteet, Skylar". Keying purely on nameKey would append a SECOND row for the
+ *    same person. So we match against the existing registry first — exact key, then fuzzy — and
+ *    reuse whatever employee_id is already there.
+ */
+
+/** Nicknames seen across Dutchie / METRC / the HR sheet. Explicit and reviewable, not guessed. */
+var NICKNAMES = { mike: 'michael', zach: 'zachary', chris: 'christopher', sam: 'samuel',
+                  jon: 'jonathan', nick: 'nicholas', dan: 'daniel', matt: 'matthew',
+                  jen: 'jennifer', tanner: 'taner', sky: 'skyler', skylar: 'skyler',
+                  bob: 'robert', rob: 'robert', tom: 'thomas' };
+
+function canonFirst_(f) {
+  var x = String(f || '').toLowerCase().replace(/[^a-z]/g, '');
+  return NICKNAMES[x] || x;
+}
+function ratio_(a, b) {
+  if (a === b) return 1;
+  if (!a || !b) return 0;
+  var m = 0, used = {};
+  for (var i = 0; i < a.length; i++) {
+    for (var j = 0; j < b.length; j++) {
+      if (!used[j] && a[i] === b[j]) { used[j] = 1; m++; break; }
+    }
+  }
+  return (2 * m) / (a.length + b.length);
+}
+function nameParts_(full) {
+  var t = String(full || '').trim().split(/\s+/);
+  return { first: t[0] || '', last: t.length > 1 ? t[t.length - 1] : '' };
+}
+
+/** Same human seen from two systems that disagree on spelling or nickname? */
+function samePerson_(fullA, fullB) {
+  var a = nameParts_(fullA), b = nameParts_(fullB);
+  var af = canonFirst_(a.first), bf = canonFirst_(b.first);
+  var al = String(a.last).toLowerCase().replace(/[^a-z]/g, '');
+  var bl = String(b.last).toLowerCase().replace(/[^a-z]/g, '');
+  if (!al || !bl) return false;
+  var firstOk = af === bf || af.indexOf(bf.slice(0, 3)) === 0 || bf.indexOf(af.slice(0, 3)) === 0
+                || ratio_(af, bf) >= 0.8;
+  if (!firstOk) return false;
+  return al === bl || al.indexOf(bl) >= 0 || bl.indexOf(al) >= 0 || ratio_(al, bl) >= 0.85;
+}
+
+function hrImport_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var list = (body && body.employees) || [];
+  if (!list.length) return { ok: false, error: 'no employees in payload' };
+  var dry = String(p.confirm || '') !== 'yes';
+
+  var existing = [];
+  try { existing = GXCore.getEmployees() || []; }
+  catch (e) { return { ok: false, error: 'could not read GX Core identity: ' + String((e && e.message) || e) }; }
+
+  var attrs = readAttrs_();
+  var idRows = [], attrRows = [], matchedNew = [], renamed = [], created = [];
+
+  list.forEach(function (r) {
+    var full = String(r.full_name || '').trim();
+    if (!full) return;
+    var key = nameToKey_(full);
+
+    var prior = null;
+    for (var i = 0; i < existing.length; i++) {
+      if (String(existing[i].employee_id || '').trim() === key) { prior = existing[i]; break; }
+    }
+    if (!prior) {
+      for (var j = 0; j < existing.length; j++) {
+        if (samePerson_(full, existing[j].full_name)) { prior = existing[j]; break; }
+      }
+      if (prior) renamed.push(prior.full_name + '  →  ' + full + '  (kept id ' + prior.employee_id + ')');
+    }
+    if (!prior) created.push(full);
+
+    var id = prior ? String(prior.employee_id).trim() : key;
+
+    // Merge onto the existing row: never blank a populated Core field with an empty payload value.
+    var merged = {};
+    if (prior) Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
+    merged.employee_id = id;
+    ['full_name', 'home_store', 'role_title', 'status', 'hire_date'].forEach(function (k) {
+      var v = String(r[k] == null ? '' : r[k]).trim();
+      if (v !== '') merged[k] = v;
+    });
+    // status is the one field an empty value must still be able to change — a retire is
+    // expressed by sending 'retired', never by omitting the field.
+    if (String(r.status || '').trim()) merged.status = String(r.status).trim();
+    idRows.push(merged);
+
+    var was = attrs[id] || {};
+    var a = { employee_id: id, name_key: key, full_name: full };
+    ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage',
+     'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
+      var v = String(r[k] == null ? '' : r[k]).trim();
+      if (k === 'birthday') v = normBirthday_(v);
+      if (k === 'shirt_size') v = normShirt_(v) || (was[k] || '');
+      a[k] = v !== '' ? v : (was[k] || '');
+    });
+    a.updated_at = new Date().toISOString();
+    a.updated_by = 'hr-import';
+    attrRows.push(a);
+  });
+
+  var summary = {
+    ok: true, mode: dry ? 'preview' : 'commit',
+    incoming: list.length,
+    matched_existing: idRows.length - created.length,
+    would_create: created.length, created_names: created.slice(0, 40),
+    matched_despite_name_drift: renamed,
+    active: idRows.filter(function (r) { return String(r.status).toLowerCase() !== 'retired'; }).length,
+    retired: idRows.filter(function (r) { return String(r.status).toLowerCase() === 'retired'; }).length,
+    with_permit: attrRows.filter(function (r) { return r.permit_number; }).length,
+    with_wage: attrRows.filter(function (r) { return r.wage; }).length,
+    with_employee_number: attrRows.filter(function (r) { return r.employee_number; }).length
+  };
+  if (dry) { summary.note = 'DRY RUN — nothing written. Repeat with confirm=yes.'; return summary; }
+
+  GXCore.gxUpsertEmployees(idRows);
+  attrRows.forEach(writeAttrs_);
+  summary.identity_written = idRows.length;
+  summary.attributes_written = attrRows.length;
+  return summary;
 }
 
 // ─── Identity seeding (Crew → GX Core) ──────────────────────────────────────────
