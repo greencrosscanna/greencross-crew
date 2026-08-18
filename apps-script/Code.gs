@@ -68,6 +68,9 @@ function route_(e) {
       // string, and this writes both the shared registry and Crew's attributes.
       case 'hr_import': return json_(hrImport_(p, body), p.callback);
 
+      // One-time-ish migration of Leaderboard's nickname + avatar maps into Core display fields.
+      case 'migrate_leaderboard': return json_(migrateLeaderboard_(p, body), p.callback);
+
       case 'health':
         return json_({ ok: true, app: 'crew', ts: new Date().toISOString() }, p.callback);
 
@@ -163,6 +166,12 @@ function requireCrew_(p) {
 var EDIT_ROLES = ['admin', 'editor', 'director', 'manager'];
 function canEdit_(auth) {
   var role = String((auth && auth.role) || '').toLowerCase();
+  // Prefer GX Core's canonical helper (v126+) so every spoke agrees on what "can edit" means —
+  // Crew's own list was missing `editor` until it was caught here. Falls back to the local
+  // allowlist if the library predates it, so a version skew can never fail OPEN.
+  try {
+    if (typeof GXCore.roleCanEdit === 'function') return !!GXCore.roleCanEdit(role);
+  } catch (e) { /* fall through */ }
   return EDIT_ROLES.indexOf(role) >= 0;
 }
 
@@ -352,6 +361,94 @@ function pad2_(n) { return (n < 10 ? '0' : '') + n; }
  * blank table, because "no employees" and "identity not seeded yet" are very different bugs.
  */
 
+
+
+// ─── Leaderboard hand-off: nicknames + avatars → Core display fields ────────────
+/*
+ * Per core-admin (v127) nickname and avatar are CORE display fields, not Crew attributes:
+ * Leaderboard reads them from the registry, Crew is the sole writer. This migrates the two
+ * ScriptProperty blobs Leaderboard has carried since before the split.
+ *
+ * THE SEED. A DiceBear avatar is generated from a seed. Leaderboard seeded from the nameKey,
+ * which is derived from the person's NAME — so a legal-name change, a nickname change or one of
+ * our merges silently regenerates a different face. We therefore stamp `seed` INTO avatar_config,
+ * pinned to employee_number (the stable key), so the face survives every rename from here on.
+ *
+ * Leaderboard's own keying is already inconsistent — it carries avatars under both `zach_r`
+ * (a nickname) and `zachary_rodriguez` for the same person. Fuzzy matching resolves those, and
+ * anything it cannot resolve is REPORTED rather than guessed.
+ */
+function migrateLeaderboard_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var nicknames = (body && body.nicknames) || {};
+  var avatars   = (body && body.avatarConfigs) || {};
+  if (!Object.keys(nicknames).length && !Object.keys(avatars).length) {
+    return { ok: false, error: 'payload carried neither nicknames nor avatarConfigs' };
+  }
+  var dry = String(p.confirm || '') !== 'yes';
+
+  var existing = GXCore.getEmployees() || [];
+  var attrs = readAttrs_();
+  var byId = {};
+  existing.forEach(function (r) { byId[String(r.employee_id || '').trim()] = r; });
+
+  function resolve(k) {
+    if (byId[k]) return byId[k];
+    // exact nameKey miss — try the same person-matcher the importer uses
+    var want = String(k).replace(/_/g, ' ');
+    for (var i = 0; i < existing.length; i++) {
+      if (samePerson_(want, existing[i].full_name)) return existing[i];
+    }
+    return null;
+  }
+
+  var writes = {}, resolved = [], unmatched = [], collisions = [];
+
+  Object.keys(nicknames).forEach(function (k) {
+    var e = resolve(k);
+    if (!e) { unmatched.push('nickname ' + k + ' → ' + nicknames[k]); return; }
+    var id = String(e.employee_id).trim();
+    writes[id] = writes[id] || { employee_id: id };
+    writes[id].preferred_name = String(nicknames[k]).trim();
+    if (k !== id) resolved.push('nickname ' + k + ' → ' + e.full_name);
+  });
+
+  Object.keys(avatars).forEach(function (k) {
+    var e = resolve(k);
+    if (!e) { unmatched.push('avatar ' + k); return; }
+    var id = String(e.employee_id).trim();
+    var cfg = avatars[k] || {};
+    writes[id] = writes[id] || { employee_id: id };
+    if (writes[id].avatar_config) { collisions.push(e.full_name + ' (keys ' + k + ' and another)'); }
+    // Pin the seed to employee_number so no future rename can scramble the face. Fall back to
+    // employee_id only when a number is genuinely absent.
+    var num = String((attrs[id] || {}).employee_number || e.employee_number || '').trim();
+    cfg.seed = num || id;
+    writes[id].avatar_config = JSON.stringify(cfg);
+    if (k !== id) resolved.push('avatar ' + k + ' → ' + e.full_name);
+  });
+
+  // Merge onto the live row — gxWrite_ replaces whole rows, so a partial write would blank
+  // everything else we have spent this whole session populating.
+  var rows = Object.keys(writes).map(function (id) {
+    var merged = {};
+    Object.keys(byId[id] || {}).forEach(function (kk) { merged[kk] = byId[id][kk]; });
+    merged.employee_id = id;
+    if (writes[id].preferred_name) merged.preferred_name = writes[id].preferred_name;
+    if (writes[id].avatar_config)  merged.avatar_config  = writes[id].avatar_config;
+    return merged;
+  });
+
+  var out = { ok: true, mode: dry ? 'preview' : 'commit',
+              nicknames_in: Object.keys(nicknames).length, avatars_in: Object.keys(avatars).length,
+              people_to_write: rows.length, matched_by_fuzzy: resolved,
+              unmatched: unmatched, avatar_key_collisions: collisions };
+  if (dry) { out.note = 'DRY RUN — nothing written. Repeat with confirm=yes.'; return out; }
+  GXCore.gxUpsertEmployees(rows);
+  bustRosterCache_();
+  out.written = rows.length;
+  return out;
+}
 
 // ─── Merge (TJ Peterson → Thomas Peterson) ──────────────────────────────────────
 /*
@@ -799,7 +896,7 @@ function hrImport_(p, body) {
     var merged = {};
     if (prior) Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
     merged.employee_id = id;
-    ['full_name', 'home_store', 'role_title', 'status', 'hire_date'].forEach(function (k) {
+    ['full_name', 'home_store', 'role_title', 'status', 'hire_date', 'employee_number'].forEach(function (k) {
       var v = String(r[k] == null ? '' : r[k]).trim();
       if (v !== '') merged[k] = v;
     });
@@ -1182,8 +1279,19 @@ function identityHealth_() {
     if (!String(r.dutchie_employee_id || '').trim()) missingDutchieId++;
   });
 
+  var probe = rows[0] || {};
+  var lib = {
+    roleCanEdit:          typeof GXCore.roleCanEdit === 'function',
+    getEmployeeByNumber:  typeof GXCore.getEmployeeByNumber === 'function',
+    getEmployeeByDutchieId: typeof GXCore.getEmployeeByDutchieId === 'function',
+    getEmployeeByName:    typeof GXCore.getEmployeeByName === 'function',
+    columns: Object.keys(probe).sort()
+  };
   return {
-    ok: true, total: rows.length,
+    ok: true, total: rows.length, library: lib,
+    with_employee_number: rows.filter(function (r) { return String(r.employee_number || '').trim(); }).length,
+    with_preferred_name:  rows.filter(function (r) { return String(r.preferred_name || '').trim(); }).length,
+    with_avatar:          rows.filter(function (r) { return String(r.avatar_config || '').trim(); }).length,
     by_store: byStore, by_role: byRole,
     missing_home_store: missingStore, missing_dutchie_id: missingDutchieId,
     with_hire_date: rows.filter(function (r) { return String(r.hire_date || '').trim(); }).length
