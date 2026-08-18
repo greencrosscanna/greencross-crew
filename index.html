@@ -140,7 +140,10 @@
     .crew-merge { margin-left: 10px; font-size: 11px; }
     tr.is-merge-src { outline: 1px dashed var(--gx-gold); outline-offset: -1px; }
     tr.is-merge-src td { background: var(--gx-gold-soft); }
-    .crew-table { min-width: 1180px; }
+    .crew-table { min-width: 1320px; }
+    .permit-active { color: var(--gx-green); font-weight: 700; letter-spacing: .5px; }
+    .crew-permit-no { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px; color: var(--gx-text-dim); letter-spacing: .5px; }
   </style>
 </head>
 <body class="gx-app">
@@ -150,6 +153,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=5"></script>
+  <script src="crew.js?v=6"></script>
 </body>
 </html>

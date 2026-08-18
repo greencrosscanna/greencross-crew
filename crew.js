@@ -87,7 +87,12 @@
       (r && r.stores || []).forEach(function (s) { state.stores[s.store_id] = s.display_name || s.store_id; });
     } catch (e) { /* fall back to the raw slug */ }
   }
-  function storeName(id) { return id ? (state.stores[id] || id) : '—'; }
+  /* `corporate` is not a shop and so is deliberately absent from GX Core's store registry —
+     it is where the admin team sits. Label it here rather than showing the raw slug. */
+  var PSEUDO_STORES = { corporate: 'Corporate' };
+  function storeName(id) {
+    return id ? (state.stores[id] || PSEUDO_STORES[id] || id) : '—';
+  }
 
   // ─── views ───────────────────────────────────────────────────────────────────
   function renderLogin(errMsg) {
@@ -134,19 +139,25 @@
     return (base ? base + ' ' : '') + (has(row, flag) ? 'is-flagged' : '');
   }
 
+  /* Bare YYYY-MM-DD, matching the Hired column so the two read against each other. Urgency is
+     carried by colour and by the banner above the table, not by a "(5d)" tail in the cell. */
   function permitExpiryCell(row) {
     if (!row.permit_expires) return '<span class="is-flagged">—</span>';
     var d = row.permit_days_left;
     var cls = d == null ? '' : d < 0 ? 'permit-bad' : d <= 90 ? 'permit-warn' : 'permit-ok';
-    // Only count down when it actually matters — "(1600d)" on a 2031 permit is noise that
-    // makes the genuinely urgent ones harder to spot.
-    var tail = d == null ? '' : d < 0 ? ' (expired)' : d <= 90 ? ' (' + d + 'd)' : '';
-    return '<span class="' + cls + '">' + esc(row.permit_expires) + tail + '</span>';
+    return '<span class="' + cls + '">' + esc(row.permit_expires) + '</span>';
   }
-  function permitActiveCell(row) {
-    if (!row.permit_active) return '<span class="is-flagged">—</span>';
-    var yes = row.permit_active === 'Yes';
-    return '<span class="' + (yes ? 'permit-ok' : 'permit-bad') + '">' + esc(row.permit_active) + '</span>';
+  /* The OLCC column states the permit's standing in METRC's own words — ACTIVE / VALID —
+     rather than answering a yes/no question the header no longer asks. */
+  function permitStatusCell(row) {
+    if (!row.permit_status) return '<span class="is-flagged">—</span>';
+    var good = ['active', 'valid'].indexOf(String(row.permit_status).toLowerCase()) >= 0;
+    return '<span class="' + (good ? 'permit-active' : 'permit-bad') + '">' +
+           esc(String(row.permit_status).toUpperCase()) + '</span>';
+  }
+  function permitNumberCell(row) {
+    if (!row.permit_number) return '<span class="is-flagged">—</span>';
+    return '<span class="crew-permit-no">' + esc(row.permit_number) + '</span>';
   }
 
   var COLUMNS = [
@@ -161,7 +172,8 @@
     { key: 'wage',            label: 'Wage',         num: true },
     { key: 'shirt_size',      label: 'Shirt' },
     { key: 'birthday',        label: 'Birthday' },
-    { key: 'permit_active',   label: 'OLCC active' },
+    { key: 'permit_number',   label: 'OLCC permit #' },
+    { key: 'permit_status',   label: 'OLCC' },
     { key: 'permit_expires',  label: 'OLCC expires' }
   ];
 
@@ -311,7 +323,8 @@
       inB.className = has(row,'birthday') ? 'is-flagged' : '';
       tdB.appendChild(inB); tr.appendChild(tdB);
 
-      tr.appendChild(el('td', null, permitActiveCell(row)));
+      tr.appendChild(el('td', null, permitNumberCell(row)));
+      tr.appendChild(el('td', null, permitStatusCell(row)));
       tr.appendChild(el('td', null, permitExpiryCell(row)));
 
       var tdS = el('td', 'crew-actions'); var status = el('span', 'crew-save-status');

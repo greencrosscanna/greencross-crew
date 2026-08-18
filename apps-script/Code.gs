@@ -102,6 +102,13 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(identityHealth_(), p.callback);
 
+      // Script-property KEYS only (never values) — the Apps Script UI caps its property list at
+      // 50, so a big Leaderboard hand-off like GC_NICKNAMES_JSON becomes invisible there. This
+      // says what actually landed. Values stay hidden: some properties are secrets.
+      case 'props':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(propsInspect_(), p.callback);
+
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
@@ -1136,6 +1143,27 @@ function permitCoverage_() {
     note: 'stateId/mmjExpiration are Dutchie-entered fields, NOT synced from Metrc. Treat coverage ' +
           'as a measure of how well staff keep Dutchie current, not as authoritative OLCC data.'
   };
+}
+
+/** Which script properties exist, how big they are, and (for JSON blobs) how many entries. */
+function propsInspect_() {
+  var props = PropertiesService.getScriptProperties().getProperties();
+  var out = Object.keys(props).sort().map(function (k) {
+    var v = String(props[k] == null ? '' : props[k]);
+    var row = { key: k, length: v.length };
+    // Report SHAPE, never content — several of these are secrets.
+    if (v.charAt(0) === '{' || v.charAt(0) === '[') {
+      try {
+        var parsed = JSON.parse(v);
+        row.json = true;
+        row.entries = Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length;
+        var keys = Array.isArray(parsed) ? [] : Object.keys(parsed).slice(0, 3);
+        if (keys.length) row.sample_keys = keys;
+      } catch (e) { row.json = false; }
+    }
+    return row;
+  });
+  return { ok: true, count: out.length, properties: out };
 }
 
 /** What GX Core actually holds now — aggregate only, so this never leaks a roster. */
