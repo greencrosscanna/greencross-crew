@@ -80,6 +80,11 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(identityHealth_(), p.callback);
 
+      // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
+      case 'permit_coverage':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(permitCoverage_(), p.callback);
+
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'incentive':    return json_(getIncentiveData_(p), p.callback);   // bonus calc (ported from Leaderboard)
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
@@ -511,15 +516,7 @@ function buildIdentityRows_() {
     });
   }
 
-  // One fetch. Try each store only until one answers — they all return the same list, so a
-  // second success would just be the same rows again.
-  var list = null;
-  for (var i = 0; i < stores.length && !list; i++) {
-    var dn = String(stores[i].dutchie_name || '').trim();
-    if (!dn) continue;
-    try { list = GXCore.dutchieEmployees(dn) || []; }
-    catch (e) { errors.push(String(stores[i].store_id) + ': ' + String((e && e.message) || e)); }
-  }
+  var list = dutchieEmployeeList_(stores, errors);
   if (!list) return { rows: [], errors: errors, sample: null, seen: 0, skipped_inactive: 0,
                       skipped_non_person: 0, excluded: [], multi_store: [], facets: {} };
 
@@ -646,6 +643,71 @@ function seedIdentityCommit() {
   };
   Logger.log(JSON.stringify(out, null, 2));
   return out;
+}
+
+/**
+ * Dutchie's employee list, fetched ONCE. The endpoint returns the same company-wide list from
+ * every store, so we try each store only until one answers — a second success would just be the
+ * same rows again.
+ */
+function dutchieEmployeeList_(stores, errors) {
+  var list = null;
+  for (var i = 0; i < stores.length && !list; i++) {
+    var dn = String(stores[i].dutchie_name || '').trim();
+    if (!dn) continue;
+    try { list = GXCore.dutchieEmployees(dn) || []; }
+    catch (e) { if (errors) errors.push(String(stores[i].store_id) + ': ' + String((e && e.message) || e)); }
+  }
+  return list;
+}
+
+/**
+ * Does Dutchie already carry usable OLCC permit data? Its employee payload has `stateId` and
+ * `mmjExpiration`, which LOOK like permit number + expiry. Before pursuing Metrc API access
+ * (which needs an integrator key Metrc only issues after an application), it is worth measuring
+ * whether the data we already have is populated and current enough to do the job.
+ *
+ * COVERAGE ONLY — counts and expiry buckets. A worker permit number is a government ID; this
+ * never returns one, and never returns a name alongside a date.
+ */
+function permitCoverage_() {
+  var errors = [];
+  var stores = GXCore.getStores() || [];
+  var list = dutchieEmployeeList_(stores, errors);
+  if (!list) return { ok: false, error: 'could not read Dutchie employees', store_errors: errors };
+
+  var today = todayInStoreTz_();
+  var seen = 0, active = 0, withId = 0, withExp = 0, unparseableExp = 0;
+  var buckets = { expired: 0, within_30d: 0, within_90d: 0, beyond_90d: 0 };
+
+  list.forEach(function (r) {
+    seen++;
+    if (storeToken_(pick_(r, ['status'])) !== 'active') return;
+    active++;
+
+    if (pick_(r, ['stateId'])) withId++;
+
+    var raw = pick_(r, ['mmjExpiration']);
+    if (!raw) return;
+    withExp++;
+    var d = new Date(raw);
+    if (isNaN(d.getTime())) { unparseableExp++; return; }
+    var days = daysBetween_(today, new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+    if (days < 0)        buckets.expired++;
+    else if (days <= 30) buckets.within_30d++;
+    else if (days <= 90) buckets.within_90d++;
+    else                 buckets.beyond_90d++;
+  });
+
+  return {
+    ok: true, rows_seen: seen, active_people: active,
+    with_state_id: withId, with_expiration: withExp,
+    unparseable_expiration: unparseableExp,
+    expiry_buckets: buckets,
+    coverage_pct: active ? Math.round(withId / active * 100) : 0,
+    note: 'stateId/mmjExpiration are Dutchie-entered fields, NOT synced from Metrc. Treat coverage ' +
+          'as a measure of how well staff keep Dutchie current, not as authoritative OLCC data.'
+  };
 }
 
 /** What GX Core actually holds now — aggregate only, so this never leaks a roster. */
