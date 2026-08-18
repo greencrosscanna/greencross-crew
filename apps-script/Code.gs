@@ -339,62 +339,91 @@ function pad2_(n) { return (n < 10 ? '0' : '') + n; }
  * seed. We surface that as an explicit `identity_source` diagnostic instead of rendering a
  * blank table, because "no employees" and "identity not seeded yet" are very different bugs.
  */
-function getRoster_(p) {
-  var auth = requireCrew_(p);
-  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+// ─── Roster cache ───────────────────────────────────────────────────────────────
+/*
+ * GXCore.getEmployees() measured ~9.8s on its own, and the roster also reads Crew's attribute
+ * sheet — together comfortably past the 8s JSONP budget in gx-client, so every attempt timed
+ * out and the roster never loaded at all. Most of that is fixed overhead (library load +
+ * SpreadsheetApp open), not row count, so it does not shrink as we optimise the join.
+ *
+ * We cache the expensive part — the identity x attributes join — and keep the per-user bits
+ * (role, can_edit) outside it, so the cache can never hand one user another user's permissions.
+ * Short TTL, and every writer busts it, so an edit is visible immediately rather than up to a
+ * minute later.
+ */
+var ROSTER_CACHE_KEY = 'crew:roster:v1';
+var ROSTER_CACHE_TTL = 120;   // seconds
+
+function bustRosterCache_() {
+  try { CacheService.getScriptCache().remove(ROSTER_CACHE_KEY); } catch (e) {}
+}
+
+function rosterJoin_() {
+  var cache = CacheService.getScriptCache();
+  try {
+    var hit = cache.get(ROSTER_CACHE_KEY);
+    if (hit) { var o = JSON.parse(hit); o.cached = true; return o; }
+  } catch (e) { /* fall through and rebuild */ }
 
   var identity = [], identityError = '';
   try { identity = GXCore.getEmployees() || []; }
   catch (e) { identityError = String((e && e.message) || e); }
 
-  var includeRetired = String(p.include_retired || '') === '1';
   var attrs = readAttrs_();
   var today = todayInStoreTz_();
-  var retiredCount = 0;
 
   var rows = identity.map(function (r) {
     var id = String(r.employee_id || '').trim();
     var a  = attrs[id] || {};
     var st = String(r.status || 'active').toLowerCase();
     var isRetired = st === 'retired' || st === 'inactive' || st === 'terminated' || st === 'false';
-    if (isRetired) retiredCount++;
     var anniv = normDate_(a.work_anniversary) || normDate_(r.hire_date);
     return {
-      employee_id: id,
-      name_key: nameToKey_(r.full_name),
-      name: String(r.full_name || ''),
+      employee_id: id, name_key: nameToKey_(r.full_name), name: String(r.full_name || ''),
       store: String(r.home_store || ''),
-      // Default role is Budtender — the overwhelmingly common case, and a blank role reads as
-      // missing data rather than as the thing it almost always is.
       role: String(r.role_title || '').trim() || 'Budtender',
       role_is_default: !String(r.role_title || '').trim(),
       retired: isRetired,
       hire_date: normDate_(r.hire_date),
       time_with_company: timeWithCompany_(normDate_(r.hire_date), today),
-      employee_number: a.employee_number || '',
-      wage: a.wage || '',
-      shirt_size: normShirt_(a.shirt_size),
-      birthday: normBirthday_(a.birthday),
-      work_anniversary: anniv,
-      anniversary_is_override: !!normDate_(a.work_anniversary),
-      permit_number: a.permit_number || '',
-      permit_expires: a.permit_expires || '',
+      employee_number: a.employee_number || '', wage: a.wage || '',
+      shirt_size: normShirt_(a.shirt_size), birthday: normBirthday_(a.birthday),
+      work_anniversary: anniv, anniversary_is_override: !!normDate_(a.work_anniversary),
+      permit_number: a.permit_number || '', permit_expires: a.permit_expires || '',
       permit_status: a.permit_status || '',
-      permit_days_left: a.permit_expires ? daysBetween_(today, dateFromIso_(a.permit_expires)) : null,
-      updated_at: a.updated_at || '',
-      updated_by: a.updated_by || ''
+      permit_days_left: a.permit_expires && dateFromIso_(a.permit_expires)
+        ? daysBetween_(today, dateFromIso_(a.permit_expires)) : null,
+      updated_at: a.updated_at || '', updated_by: a.updated_by || ''
     };
-  }).filter(function (r) { return includeRetired || !r.retired; })
-    .sort(function (x, y) { return x.name.localeCompare(y.name); });
+  }).sort(function (x, y) { return x.name.localeCompare(y.name); });
+
+  var out = { rows: rows, identityCount: identity.length, identityError: identityError, cached: false };
+  // Only cache a good read. Caching an empty result behind a transient GX Core error would
+  // serve "you have no staff" for the whole TTL.
+  if (!identityError && rows.length) {
+    try { cache.put(ROSTER_CACHE_KEY, JSON.stringify(out), ROSTER_CACHE_TTL); } catch (e) {}
+  }
+  return out;
+}
+
+function getRoster_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  var joined = rosterJoin_();
+  var includeRetired = String(p.include_retired || '') === '1';
+  var retiredCount = 0;
+  joined.rows.forEach(function (r) { if (r.retired) retiredCount++; });
 
   return {
     ok: true, user: auth.user, role: auth.role, can_edit: canEdit_(auth),
     shirt_sizes: SHIRT_SIZES, hr_sheet_url: HR_SHEET_URL,
-    include_retired: includeRetired, retired_total: retiredCount,
-    rows: rows,
+    include_retired: includeRetired, retired_total: retiredCount, cached: joined.cached,
+    rows: joined.rows.filter(function (r) { return includeRetired || !r.retired; }),
     identity_source: {
-      count: identity.length, error: identityError,
-      note: identity.length ? '' :
+      count: joined.identityCount, error: joined.identityError,
+      note: joined.identityCount ? '' :
         'GX Core `employees` is empty — identity has no writer yet (needs core-admin: gxUpsertEmployee + seed). ' +
         'Crew attributes are stored and will join automatically once identity lands.'
     }
@@ -448,6 +477,7 @@ function setRetired_(p) {
   merged.employee_id = id;
   merged.status = retire ? 'retired' : 'active';
   GXCore.gxUpsertEmployee(merged);
+  bustRosterCache_();
   return { ok: true, employee_id: id, status: merged.status, by: auth.user };
 }
 
@@ -510,6 +540,7 @@ function saveRosterAttrs_(p) {
     updated_by:       String(auth.user || '')
   };
   writeAttrs_(rec);
+  bustRosterCache_();
   return { ok: true, employee_id: id, saved: rec };
 }
 
@@ -648,6 +679,7 @@ function hrImport_(p, body) {
 
   GXCore.gxUpsertEmployees(idRows);
   attrRows.forEach(writeAttrs_);
+  bustRosterCache_();
   summary.identity_written = idRows.length;
   summary.attributes_written = attrRows.length;
   return summary;

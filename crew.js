@@ -246,7 +246,8 @@
           try {
             var r = await Engine.jsonp('roster_save', { token: token(), employee_id: row.employee_id,
               shirt_size: sel.value, birthday: inB.value.trim(),
-              wage: inW.value.trim(), employee_number: inNum.value.trim() });
+              wage: inW.value.trim(), employee_number: inNum.value.trim() },
+              { timeoutMs: 45000, retries: 2 });
             if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
             row.shirt_size = r.saved.shirt_size; row.birthday = r.saved.birthday;
             row.wage = r.saved.wage; row.employee_number = r.saved.employee_number;
@@ -265,7 +266,8 @@
           ret.disabled = true; status.textContent = '…';
           try {
             var r = await Engine.jsonp('roster_retire', { token: token(),
-              employee_id: row.employee_id, retired: row.retired ? '0' : '1' });
+              employee_id: row.employee_id, retired: row.retired ? '0' : '1' },
+              { timeoutMs: 45000, retries: 2 });
             if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
             boot(true);
           } catch (e) {
@@ -295,7 +297,7 @@
     if (!window.GXClient) { renderStatus('⚠️ gx-client failed to load — cannot reach GX Core.'); return; }
     if (!token()) { renderLogin(''); return; }
 
-    if (!quiet) renderStatus('Loading roster…');
+    if (!quiet) renderStatus('Loading roster… <span class="crew-hint">(first load reads GX Core, ~10s)</span>');
     if (!Object.keys(state.stores).length) await loadStores();
 
     if (!Engine) {
@@ -309,8 +311,13 @@
     }
 
     try {
-      var r = await Engine.jsonp('roster', { token: token(),
-        include_retired: state.showRetired ? '1' : '' });
+      /* The roster reads two Google Sheets through the GXCore library; a cold call measured
+         ~12s, well past gx-client's 8s default, so every attempt timed out and the view never
+         loaded. The engine caches the join for 2 minutes, but the FIRST call still has to pay
+         full price — so give it a real budget instead of retrying into the same wall. */
+      var r = await Engine.jsonp('roster',
+        { token: token(), include_retired: state.showRetired ? '1' : '' },
+        { timeoutMs: 45000, retries: 2 });
       if (!r || !r.ok) {
         // An expired/revoked session should drop to the login form, not a dead-end error.
         if (r && /auth|session|access/i.test(String(r.error || ''))) { setSession('', ''); renderLogin(r.error); return; }
