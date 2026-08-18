@@ -91,6 +91,37 @@
     .crew-login button:hover:not(:disabled) { background: var(--gx-green-bright); border-color: var(--gx-green-bright); }
     .crew-login button:disabled { opacity: .55; cursor: default; }
     .crew-error { color: var(--gx-red); font-size: 12px; min-height: 1em; margin: 10px 0 0; }
+
+    /* ── Roster v3: tools, permits, retire ───────────────────────────────── */
+    .gx-main { max-width: 1240px; }
+    .crew-bar-right { display: inline-flex; align-items: center; gap: 16px; }
+    .crew-tools { display: flex; align-items: center; gap: 16px; margin: 0 0 14px; flex-wrap: wrap; }
+    .crew-search {
+      flex: 1 1 260px; min-width: 200px; background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius);
+      color: var(--gx-text); padding: 7px 11px; font: inherit; font-size: 13px; outline: none;
+    }
+    .crew-search:focus { border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
+    .crew-toggle { display: inline-flex; align-items: center; gap: 7px;
+      font-size: 12px; color: var(--gx-text-dim); cursor: pointer; white-space: nowrap; }
+    .crew-toggle input { accent-color: var(--gx-green); }
+
+    /* Wide table scrolls inside its own box — the page itself must never scroll sideways. */
+    .crew-table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
+    .crew-table { min-width: 1080px; }
+    .crew-num { width: 3.2em; text-align: center; }
+    .crew-actions { white-space: nowrap; }
+    .crew-retire { margin-left: 10px; font-size: 11px; }
+    .crew-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
+      color: var(--gx-text-mute); border: 1px solid var(--gx-border-strong);
+      border-radius: var(--gx-radius-sm); padding: 1px 5px; margin-left: 6px; }
+    tr.is-retired td { opacity: .55; }
+    tr.is-retired td b { font-weight: 400; }
+
+    .permit-ok   { color: var(--gx-text-dim); }
+    .permit-warn { color: var(--gx-gold); font-weight: 600; }
+    .permit-bad  { color: var(--gx-red); font-weight: 700; }
+    .crew-banner b { color: inherit; }
   </style>
 </head>
 <body class="gx-app">
@@ -100,6 +131,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=2"></script>
+  <script src="crew.js?v=3"></script>
 </body>
 </html>
