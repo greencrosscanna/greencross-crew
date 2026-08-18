@@ -737,7 +737,9 @@ function readAliases_() {
 }
 
 function mergeEmployees_(p) {
-  var auth = requireCrew_(p);
+  // Deploy secret is accepted alongside a user session, so a coordinated cross-app merge can be
+  // run from tooling. It still needs confirm=yes — merging identity rows moves payout math.
+  var auth = deploySecretOk_(p) ? { ok: true, user: 'tooling', role: 'admin' } : requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
 
@@ -772,14 +774,24 @@ function mergeEmployees_(p) {
   // Identity: take the loser's hire_date / dutchie id only where the winner has none.
   var wid = {};
   Object.keys(W).forEach(function (k) { wid[k] = W[k]; });
-  ['hire_date', 'dutchie_employee_id', 'home_store', 'role_title', 'user_id'].forEach(function (k) {
-    if (!String(wid[k] || '').trim() && String(L[k] || '').trim()) wid[k] = L[k];
+  var idFilled = [];
+  ['hire_date', 'dutchie_employee_id', 'home_store', 'role_title', 'user_id',
+   'employee_number', 'preferred_name', 'avatar_config'].forEach(function (k) {
+    if (!String(wid[k] || '').trim() && String(L[k] || '').trim()) {
+      wid[k] = L[k];
+      idFilled.push(k + '=' + L[k]);
+    }
   });
   wid.employee_id = winner;
 
   if (String(p.confirm || '') !== 'yes') {
     return { ok: true, mode: 'preview', keep: winner, keep_name: W.full_name,
-             merge: loser, merge_name: L.full_name, would_fill: filled,
+             merge: loser, merge_name: L.full_name,
+             // Both halves matter: attribute gaps AND the identity columns folded across.
+             // Reporting only the first made a merge that DOES move data look like a no-op.
+             would_fill_attributes: filled, would_fill_identity: idFilled,
+             keeps_dutchie_id: String(wid.dutchie_employee_id || '') || '(none)',
+             keeps_user_id: String(wid.user_id || '') || '(none)',
              note: 'DRY RUN — nothing written. Repeat with confirm=yes.' };
   }
 
@@ -796,7 +808,9 @@ function mergeEmployees_(p) {
                 new Date().toISOString(), auth.user]);
   bustRosterCache_();
   return { ok: true, mode: 'merged', keep: winner, keep_name: W.full_name,
-           merged_away: L.full_name, filled: filled };
+           merged_away: L.full_name, filled_attributes: filled, filled_identity: idFilled,
+           kept_dutchie_id: String(wid.dutchie_employee_id || '') || '(none)',
+           kept_user_id: String(wid.user_id || '') || '(none)' };
 }
 
 
@@ -1600,8 +1614,13 @@ function identityHealth_() {
   try { rows = GXCore.getEmployees() || []; }
   catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 
-  var byStore = {}, byRole = {}, missingStore = 0, missingDutchieId = 0;
+  var byStore = {}, byRole = {}, missingStore = 0, missingDutchieId = 0, merged = 0, retired = 0;
   rows.forEach(function (r) {
+    // Merged and retired rows stay in the sheet for audit, but counting them in the live role
+    // spread reads as "7 store managers for 6 stores" and sends you looking for a bug.
+    var st = String(r.status || '').toLowerCase();
+    if (st === 'merged')  { merged++;  return; }
+    if (st === 'retired') { retired++; return; }
     var st = String(r.home_store || '').trim() || '(none)';
     if (st === '(none)') missingStore++;
     byStore[st] = (byStore[st] || 0) + 1;
@@ -1619,7 +1638,8 @@ function identityHealth_() {
     columns: Object.keys(probe).sort()
   };
   return {
-    ok: true, total: rows.length, library: lib,
+    ok: true, total: rows.length, merged: merged, retired: retired,
+    active: rows.length - merged - retired, library: lib,
     with_employee_number: rows.filter(function (r) { return String(r.employee_number || '').trim(); }).length,
     with_preferred_name:  rows.filter(function (r) { return String(r.preferred_name || '').trim(); }).length,
     with_avatar:          rows.filter(function (r) { return String(r.avatar_config || '').trim(); }).length,
