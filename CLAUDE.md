@@ -51,6 +51,15 @@ the current Leaderboard incentive output for a full pay period.
   `gx-sync.sh`, filled from `.gx_app` (= `crew`). Re-run `./gx-sync.sh` to refresh them. This CLAUDE.md is
   intentionally **not** synced — keep it app-specific.
 
+## Shipping — direct to `main` until launch (decided 2026-08-18)
+GX Crew is **pre-launch**: nobody outside Sky has access yet, so there are no staff to watch a feature
+bake. The shared `/gxbrain` ship policy's *feature → branch + PR + merge-when-done* rule exists to protect
+daily users, and it doesn't apply here yet. **Until Crew launches, commit and push straight to `main`**,
+run `./deploy.sh`, then `dev_ship` the job. Don't open PRs for routine work.
+
+**Revert to branch + PR the moment Crew goes live to anyone but Sky** — from then on staff are looking at
+it, and the ordinary policy applies.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
