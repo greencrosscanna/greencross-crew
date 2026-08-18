@@ -29,7 +29,18 @@
   var state  = { rows: [], canEdit: false, shirtSizes: [], user: '', role: '', identity: null,
                  stores: {}, showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
                  sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false,
-                 view: 'roster', review: null, reviewCounts: {} };
+                 view: 'roster', review: null, reviewCounts: {},
+                 /* The roster is READ-ONLY until you ask for edit mode. Most visits are to look
+                    something up, and a table of live inputs invites a stray keystroke into wage
+                    or permit data. Edit mode opens exactly five operational fields; anything
+                    structural (name, nickname, store, role, hire date, employee #) stays behind
+                    the identity panel, which is a deliberate act rather than a click-through. */
+                 editMode: false };
+
+  /* The only fields edit mode opens. Employee number is deliberately NOT here — it is the
+     canonical stable key the whole suite joins on, so it belongs with identity, not with
+     day-to-day corrections. */
+  var EDITABLE_INLINE = ['wage', 'shirt_size', 'birthday', 'permit_number', 'permit_expires'];
 
   // ─── tiny DOM helpers ────────────────────────────────────────────────────────
   function el(tag, cls, html) {
@@ -171,7 +182,7 @@
       val: function (r) { var m = /(\d+)yr (\d+)mo/.exec(r.time_with_company || ''); 
                           return m ? Number(m[1]) * 12 + Number(m[2]) : -1; } },
     { key: 'wage',            label: 'Wage',         num: true },
-    { key: 'shirt_size',      label: 'Shirt' },
+    { key: 'shirt_size',      label: 'Tee' },
     { key: 'birthday',        label: 'Birthday' },
     { key: 'permit_number',   label: 'OLCC permit #' },
     { key: 'permit_status',   label: 'OLCC' },
@@ -395,6 +406,14 @@
     search.addEventListener('input', function () { state.q = search.value; renderRoster();
       var s2 = document.querySelector('.crew-search'); if (s2) { s2.focus(); s2.setSelectionRange(s2.value.length, s2.value.length); } });
     tools.appendChild(search);
+    if (state.canEdit) {
+      var em = el('label', 'crew-toggle crew-editmode' + (state.editMode ? ' is-on' : ''));
+      em.innerHTML = '<input type="checkbox"' + (state.editMode ? ' checked' : '') + '> Edit mode';
+      em.querySelector('input').addEventListener('change', function () {
+        state.editMode = this.checked; renderRoster();
+      });
+      tools.appendChild(em);
+    }
     var lbl = el('label', 'crew-toggle');
     lbl.innerHTML = '<input type="checkbox"' + (state.showRetired ? ' checked' : '') + '> Show retired' +
       (state.retiredTotal ? ' (' + state.retiredTotal + ')' : '');
@@ -445,14 +464,14 @@
     var tbody = el('tbody');
 
     sortRows(rows).forEach(function (row) {
+      var editing = state.canEdit && state.editMode;
       var tr = el('tr', (row.retired ? 'is-retired' : '') +
                         (state.mergeFrom === row.employee_id ? ' is-merge-src' : ''));
 
-      var tdNum = el('td'); var inNum = el('input');
-      inNum.type='text'; inNum.value=row.employee_number||''; inNum.size=3;
-      inNum.className='crew-num ' + (has(row,'employee_number')?'is-flagged':'');
-      inNum.disabled=!state.canEdit; tdNum.appendChild(inNum);
-      tr.appendChild(tdNum);
+      // Read-only here on purpose: employee_number is the canonical key every app joins on.
+      // Changing it is an identity decision, so it lives in the panel.
+      tr.appendChild(el('td', flagCls(row, 'employee_number', 'crew-numcell'),
+        esc(row.employee_number || '—')));
 
       tr.appendChild(el('td', null, '<b>' + esc(row.name) + '</b>' +
         (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '') +
@@ -466,49 +485,49 @@
       var tdW = el('td'); var inW = el('input');
       inW.type='text'; inW.value=row.wage||''; inW.size=5; inW.placeholder='0.00';
       inW.className = has(row,'wage') ? 'is-flagged' : '';
-      inW.disabled=!state.canEdit; tdW.appendChild(inW); tr.appendChild(tdW);
+      inW.disabled=!editing; tdW.appendChild(inW); tr.appendChild(tdW);
 
       var tdShirt = el('td'); var sel = el('select');
       sel.innerHTML = '<option value="">—</option>' + state.shirtSizes.map(function (x) {
         return '<option value="'+esc(x)+'"'+(row.shirt_size===x?' selected':'')+'>'+esc(x)+'</option>'; }).join('');
-      sel.disabled = !state.canEdit; tdShirt.appendChild(sel); tr.appendChild(tdShirt);
+      sel.disabled = !editing; tdShirt.appendChild(sel); tr.appendChild(tdShirt);
 
       var tdB = el('td'); var inB = el('input');
       inB.type='text'; inB.placeholder='MM-DD'; inB.value=row.birthday||''; inB.size=6;
-      inB.disabled=!state.canEdit; inB.title='Month and day only — GX Crew does not store birth years.';
+      inB.disabled=!editing; inB.title='Month and day only — GX Crew does not store birth years.';
       inB.className = has(row,'birthday') ? 'is-flagged' : '';
       tdB.appendChild(inB); tr.appendChild(tdB);
 
       var tdPn = el('td'); var inPn = el('input');
       inPn.type='text'; inPn.value=row.permit_number||''; inPn.size=8; inPn.placeholder='permit #';
       inPn.className='crew-permit-no' + (has(row,'permit') ? ' is-flagged' : '');
-      inPn.disabled=!state.canEdit; tdPn.appendChild(inPn); tr.appendChild(tdPn);
+      inPn.disabled=!editing; tdPn.appendChild(inPn); tr.appendChild(tdPn);
 
       tr.appendChild(el('td', null, permitStatusCell(row)));
 
       var tdPe = el('td'); var inPe = el('input');
       inPe.type='date'; inPe.value=row.permit_expires||'';
       inPe.className = (row.permit_days_left != null && row.permit_days_left < 0) ? 'is-flagged' : '';
-      inPe.disabled=!state.canEdit; tdPe.appendChild(inPe); tr.appendChild(tdPe);
+      inPe.disabled=!editing; tdPe.appendChild(inPe); tr.appendChild(tdPe);
 
       var tdS = el('td', 'crew-actions'); var status = el('span', 'crew-save-status');
-      if (state.canEdit) {
+      if (editing) {
         var save = el('button', 'crew-save', 'Save'); save.disabled = true;
         var dirty = function () { save.disabled = false; status.textContent = ''; };
-        [sel, inB, inW, inNum, inPn, inPe].forEach(function (f) { f.addEventListener('input', dirty); f.addEventListener('change', dirty); });
+        [sel, inB, inW, inPn, inPe].forEach(function (f) { f.addEventListener('input', dirty); f.addEventListener('change', dirty); });
         save.addEventListener('click', async function () {
           save.disabled = true; status.textContent = 'Saving…'; status.className = 'crew-save-status';
           try {
             var r = await Engine.jsonp('roster_save', { token: token(), employee_id: row.employee_id,
               shirt_size: sel.value, birthday: inB.value.trim(),
-              wage: inW.value.trim(), employee_number: inNum.value.trim(),
+              wage: inW.value.trim(),
               permit_number: inPn.value.trim(), permit_expires: inPe.value },
               { timeoutMs: 45000, retries: 2 });
             if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
             row.shirt_size = r.saved.shirt_size; row.birthday = r.saved.birthday;
-            row.wage = r.saved.wage; row.employee_number = r.saved.employee_number;
+            row.wage = r.saved.wage;
             row.permit_number = r.saved.permit_number; row.permit_expires = r.saved.permit_expires;
-            inB.value = row.birthday; inW.value = row.wage; inNum.value = row.employee_number;
+            inB.value = row.birthday; inW.value = row.wage;
             inPn.value = row.permit_number; inPe.value = row.permit_expires;
             status.textContent = 'Saved'; status.className = 'crew-save-status ok';
           } catch (e) {
@@ -588,7 +607,11 @@
             '<label>Store<select name="home_store">' + storeOpts + '</select></label>' +
             '<label>Role<input name="role_title" value="' + esc(row.role_is_default ? '' : row.role) +
               '" placeholder="Budtender"></label>' +
-            '<label>Hire date<input name="hire_date" type="date" value="' + esc(row.hire_date || '') + '"></label>';
+            '<label>Hire date<input name="hire_date" type="date" value="' + esc(row.hire_date || '') + '"></label>' +
+            /* Shown, never editable. The number is issued by the system and never reused —
+               typing one risks handing a new person a retired employee's history. */
+            '<label>Employee #<input value="' + esc(row.employee_number || 'auto') +
+              '" size="4" disabled title="Assigned automatically — never reused"></label>';
           var linked = [];
           if (row.dutchie_employee_id) linked.push('Dutchie ' + row.dutchie_employee_id);
           if (row.user_id) linked.push('account ' + row.user_id);
@@ -608,6 +631,7 @@
               });
               var r = await Engine.jsonp('roster_identity', q, { timeoutMs: 45000, retries: 2 });
               if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
+
               st2.textContent = '✓ ' + (r.changed.length ? 'updated ' + r.changed.join(', ') : 'no change');
               st2.className = 'crew-save-status ok';
               state.rows = []; state.review = null;
@@ -632,6 +656,9 @@
     var wrap = el('div', 'crew-table-wrap'); wrap.appendChild(table);
     nodes.push(wrap);
     nodes.push(el('p', 'crew-hint',
+      (state.canEdit && !state.editMode
+        ? 'Read-only. Turn on <b>Edit mode</b> to change wage, tee, birthday or OLCC details. ' : '') +
+      'Employee numbers are assigned automatically and never reused. ' +
       'Red marks missing or questionable data — it clears as soon as the value is filled in. ' +
       'Birthdays are month + day only, no birth year. Permit columns are imported from METRC ' +
       'and read-only here. Leaderboard receives a derived celebrations flag, never a date.'));

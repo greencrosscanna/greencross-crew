@@ -208,6 +208,22 @@
       border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
     .crew-editnote { font-size: 11px; color: var(--gx-text-mute); margin: 12px 0 0; }
     .crew-editacts { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; }
+
+    /* ── v9: edit mode ───────────────────────────────────────────────────── */
+    .crew-editmode { padding: 4px 10px; border: 1px solid var(--gx-border-strong);
+      border-radius: var(--gx-radius-pill); }
+    .crew-editmode.is-on { border-color: var(--gx-green); color: var(--gx-green); }
+    .crew-numcell { text-align: center; font-variant-numeric: tabular-nums;
+      color: var(--gx-text-dim); }
+    /* Read-only rows should look settled, not like disabled inputs waiting to be fixed. */
+    .crew-table input:disabled, .crew-table select:disabled {
+      opacity: 1; background: transparent; border-color: transparent;
+      color: var(--gx-text-dim); padding-left: 0;
+      /* Drop the native control chrome too — a chevron on a disabled select still reads as
+         "you can change this", which is the opposite of what read-only should say. */
+      appearance: none; -webkit-appearance: none; }
+    .crew-table input:disabled.is-flagged, .crew-table select:disabled.is-flagged {
+      color: var(--gx-red); border-color: transparent; }
   </style>
 </head>
 <body class="gx-app">
@@ -217,6 +233,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=8"></script>
+  <script src="crew.js?v=9"></script>
 </body>
 </html>

@@ -90,6 +90,7 @@ function route_(e) {
       case 'roster_retire':return json_(setRetired_(p), p.callback);
       case 'roster_identity': return json_(saveIdentity_(p), p.callback);
       case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
+      case 'assign_numbers': return json_(assignNumbers_(p), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
       case 'review':         return json_(getReview_(p), p.callback);
@@ -379,6 +380,105 @@ function pad2_(n) { return (n < 10 ? '0' : '') + n; }
 
 
 
+
+
+// ─── Employee numbers: system-assigned, never typed ─────────────────────────────
+/*
+ * employee_number is the canonical stable key the whole suite joins on, so it is issued by the
+ * system rather than typed. Two properties matter more than convenience:
+ *
+ *   • NEVER REUSE. The next number is max(every number ever seen) + 1, counting retired and
+ *     merged rows. Reissuing a retired person's number would silently attach their history to
+ *     somebody new — 93 and 94 belong to Hinkle and Urenda, which is exactly why the first
+ *     backfill had to start at 95 rather than the 93 that looked free.
+ *   • DETERMINISTIC ORDER. Hire date first, so the sequence reflects who arrived when. People
+ *     with no hire date on file cannot be placed in that order, so they sort last by name and
+ *     are REPORTED as such — the number is still correct, but its position carries no meaning
+ *     and nobody should read tenure into it.
+ */
+function assignNumbers_(p) {
+  var auth = deploySecretOk_(p) ? { ok: true, user: 'tooling', role: 'admin' } : requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+
+  var identity = GXCore.getEmployees() || [];
+  var attrs = readAttrs_();
+
+  // Every number ever issued, from BOTH stores and regardless of status.
+  var used = {}, maxN = 0;
+  function note(v) {
+    var n = parseInt(String(v || '').trim(), 10);
+    if (!isNaN(n) && n > 0) { used[n] = true; if (n > maxN) maxN = n; }
+  }
+  identity.forEach(function (r) { note(r.employee_number); });
+  Object.keys(attrs).forEach(function (k) { note(attrs[k].employee_number); });
+
+  var need = identity.filter(function (r) {
+    var st = String(r.status || 'active').toLowerCase();
+    if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return false;
+    var id = String(r.employee_id || '').trim();
+    return !String((attrs[id] || {}).employee_number || r.employee_number || '').trim();
+  });
+
+  need.sort(function (a, b) {
+    var ah = normDate_(a.hire_date), bh = normDate_(b.hire_date);
+    if (ah && !bh) return -1;
+    if (!ah && bh) return 1;
+    if (ah && bh && ah !== bh) return ah < bh ? -1 : 1;
+    return String(a.full_name).localeCompare(String(b.full_name));
+  });
+
+  var next = maxN + 1, plan = [];
+  need.forEach(function (r) {
+    while (used[next]) next++;            // belt and braces against a gap-filling mistake
+    plan.push({ employee_id: String(r.employee_id).trim(), name: String(r.full_name || ''),
+                hire_date: normDate_(r.hire_date) || '', number: next,
+                ordered_by_hire_date: !!normDate_(r.hire_date) });
+    used[next] = true; next++;
+  });
+
+  var noDate = plan.filter(function (x) { return !x.ordered_by_hire_date; })
+                   .map(function (x) { return x.name; });
+  var out = { ok: true, mode: String(p.confirm || '') === 'yes' ? 'assigned' : 'preview',
+              highest_in_use: maxN, starting_at: maxN + 1, count: plan.length, plan: plan,
+              no_hire_date: noDate };
+  if (noDate.length) {
+    out.warning = noDate.length + ' of these have no hire date, so their position in the sequence ' +
+                  'is alphabetical, not chronological: ' + noDate.join(', ');
+  }
+  if (String(p.confirm || '') !== 'yes') {
+    out.note = 'DRY RUN — nothing written. Repeat with confirm=yes.';
+    return out;
+  }
+
+  var idRows = [];
+  plan.forEach(function (a) {
+    var prior = null;
+    for (var i = 0; i < identity.length; i++) {
+      if (String(identity[i].employee_id || '').trim() === a.employee_id) { prior = identity[i]; break; }
+    }
+    if (!prior) return;
+    var merged = {};
+    Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });   // read-merge-write
+    merged.employee_id = a.employee_id;
+    merged.employee_number = String(a.number);
+    idRows.push(merged);
+
+    var was = attrs[a.employee_id] || {};
+    var rec = { employee_id: a.employee_id, name_key: nameToKey_(prior.full_name),
+                full_name: String(prior.full_name || ''), employee_number: String(a.number),
+                updated_at: new Date().toISOString(), updated_by: auth.user + ' (auto-number)' };
+    ['shirt_size', 'birthday', 'work_anniversary', 'wage',
+     'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
+      rec[k] = was[k] || '';
+    });
+    writeAttrs_(rec);
+  });
+  if (idRows.length) GXCore.gxUpsertEmployees(idRows);
+  bustRosterCache_();
+  out.written = idRows.length;
+  return out;
+}
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
 /*
@@ -1093,9 +1193,10 @@ function saveRosterAttrs_(p) {
   if (wage && !/^\$?\s*\d{1,3}(\.\d{1,2})?$/.test(wage)) {
     return { ok: false, error: 'invalid wage: ' + wage + ' (expected an hourly rate like 17.50)' };
   }
-  var empno = String(p.employee_number == null ? '' : p.employee_number).trim();
-  if (empno && !/^\d{1,5}$/.test(empno)) {
-    return { ok: false, error: 'invalid employee_number: ' + empno + ' (digits only)' };
+  // employee_number is issued by assignNumbers_, never typed: it is the key the whole suite
+  // joins on, and a hand-entered collision would attach one person's history to another.
+  if (p.employee_number != null) {
+    return { ok: false, error: 'employee_number is assigned automatically and cannot be edited' };
   }
   var shirt = String(p.shirt_size == null ? '' : p.shirt_size).trim();
   if (shirt && !normShirt_(shirt)) return { ok: false, error: 'invalid shirt_size: ' + shirt + ' (expected one of ' + SHIRT_SIZES.join(', ') + ')' };
@@ -1115,7 +1216,7 @@ function saveRosterAttrs_(p) {
     shirt_size:       p.shirt_size       == null ? (existing.shirt_size       || '') : normShirt_(shirt),
     birthday:         p.birthday         == null ? (existing.birthday         || '') : normBirthday_(bday),
     work_anniversary: p.work_anniversary == null ? (existing.work_anniversary || '') : normDate_(anniv),
-    employee_number:  p.employee_number  == null ? (existing.employee_number  || '') : empno,
+    employee_number:  existing.employee_number || '',
     wage:             p.wage             == null ? (existing.wage             || '') : wage.replace(/^\$\s*/, ''),
     // METRC stays the source of truth — an import overwrites these whenever it carries a value.
     // But 7 active staff have no permit on file at all, and a human who can read the permit
