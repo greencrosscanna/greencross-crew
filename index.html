@@ -190,6 +190,24 @@
     .crew-save.is-primary { background: var(--gx-green); border-color: var(--gx-green);
       color: var(--gx-green-ink); font-weight: 700; }
     .crew-save.is-primary:hover:not(:disabled) { background: var(--gx-green-bright); }
+
+    /* ── v8: identity edit panel ─────────────────────────────────────────── */
+    .crew-nick { color: var(--gx-green); font-size: 12px; }
+    .crew-edit { margin-left: 10px; font-size: 11px; }
+    .crew-editrow td { background: var(--gx-surface-2); padding: 16px 14px !important; }
+    .crew-editform { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+    .crew-editform label { display: flex; flex-direction: column; gap: 4px;
+      font-size: 9.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+      color: var(--gx-text-mute); }
+    .crew-editform input, .crew-editform select {
+      background: var(--gx-surface-3); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius); color: var(--gx-text); padding: 7px 10px;
+      font-size: 13px; font-family: inherit; letter-spacing: normal; text-transform: none;
+      outline: none; color-scheme: dark; min-width: 150px; }
+    .crew-editform input:focus, .crew-editform select:focus {
+      border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
+    .crew-editnote { font-size: 11px; color: var(--gx-text-mute); margin: 12px 0 0; }
+    .crew-editacts { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; }
   </style>
 </head>
 <body class="gx-app">
@@ -199,6 +217,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=7"></script>
+  <script src="crew.js?v=8"></script>
 </body>
 </html>

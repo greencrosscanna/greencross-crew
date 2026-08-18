@@ -88,6 +88,7 @@ function route_(e) {
       case 'roster':       return json_(getRoster_(p), p.callback);
       case 'roster_save':  return json_(saveRosterAttrs_(p), p.callback);
       case 'roster_retire':return json_(setRetired_(p), p.callback);
+      case 'roster_identity': return json_(saveIdentity_(p), p.callback);
       case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
@@ -447,8 +448,12 @@ function reviewItems_() {
       if (a.retired && b.retired) continue;
       if (!samePerson_(a.name, b.name)) continue;
       // Richer record wins by default — more populated fields means more to lose.
+      // A dutchie_employee_id outweighs everything else: SPIFF and Leaderboard attribution
+      // resolve through it, so keeping the other row would move payout math. Same for user_id,
+      // which links to the account that owns email. Field count only breaks the tie.
       var score = function (r) {
-        return (r.employee_number ? 1 : 0) + (r.hire_date ? 1 : 0) + (r.permit_number ? 1 : 0) +
+        return (r.dutchie_employee_id ? 100 : 0) + (r.user_id ? 50 : 0) +
+               (r.employee_number ? 1 : 0) + (r.hire_date ? 1 : 0) + (r.permit_number ? 1 : 0) +
                (r.wage ? 1 : 0) + (r.birthday ? 1 : 0) + (r.store ? 1 : 0);
       };
       var keep = score(a) >= score(b) ? a : b, drop = keep === a ? b : a;
@@ -863,6 +868,9 @@ function rosterJoin_() {
     return {
       employee_id: id, name_key: nameToKey_(r.full_name), name: String(r.full_name || ''),
       store: String(r.home_store || ''),
+      preferred_name: String(r.preferred_name || ''),
+      dutchie_employee_id: String(r.dutchie_employee_id || ''),
+      user_id: String(r.user_id || ''),
       role: String(r.role_title || '').trim() || 'Budtender',
       role_is_default: !String(r.role_title || '').trim(),
       retired: isRetired, merged: isMerged,
@@ -932,6 +940,83 @@ function timeWithCompany_(hireIso, today) {
   if (today.getDate() < d.getDate()) months--;
   if (months < 0) return '';
   return Math.floor(months / 12) + 'yr ' + (months % 12) + 'mo';
+}
+
+
+/**
+ * Edit the GX Core identity slice from the roster. Crew is the sole writer up to Core, so this
+ * is the only path Mike has for fixing a name, nickname, store, role or hire date.
+ *
+ * READ-MERGE-WRITE, non-negotiable. gxWrite_ rebuilds the entire row from the record and writes
+ * '' for anything absent, so a partial update silently destroys columns this app never shows —
+ * dutchie_employee_id (SPIFF and Leaderboard attribution resolve through it) and user_id (the
+ * link to the users tab that owns email). core-admin lost these once already and caught it only
+ * by diffing all 75 rows. We read the live row, lay changes on top, and write the whole thing back.
+ */
+var IDENTITY_FIELDS = ['full_name', 'preferred_name', 'home_store', 'role_title', 'hire_date'];
+
+function saveIdentity_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+
+  var id = String(p.employee_id || '').trim();
+  if (!id) return { ok: false, error: 'employee_id required' };
+
+  var identity = GXCore.getEmployees() || [];
+  var prior = null;
+  for (var i = 0; i < identity.length; i++) {
+    if (String(identity[i].employee_id || '').trim() === id) { prior = identity[i]; break; }
+  }
+  if (!prior) return { ok: false, error: 'unknown employee_id: ' + id };
+
+  // Validate before touching anything — a half-applied identity edit is worse than a refusal.
+  var changes = {}, touched = [];
+  if (p.full_name != null) {
+    var nm = String(p.full_name).replace(/\s+/g, ' ').trim();
+    if (!nm) return { ok: false, error: 'name cannot be empty' };
+    if (nm.indexOf(' ') < 0) return { ok: false, error: 'name should be first and last: "' + nm + '"' };
+    changes.full_name = nm;
+  }
+  if (p.preferred_name != null) changes.preferred_name = String(p.preferred_name).trim();
+  if (p.home_store != null) {
+    var st = String(p.home_store).trim();
+    if (st) {
+      var known = (GXCore.getStores() || []).some(function (x) { return String(x.store_id).trim() === st; });
+      if (!known && st !== 'corporate') return { ok: false, error: 'unknown store: ' + st };
+    }
+    changes.home_store = st;
+  }
+  if (p.role_title != null) changes.role_title = String(p.role_title).trim();
+  if (p.hire_date != null) {
+    var hd = String(p.hire_date).trim();
+    if (hd && !normDate_(hd)) return { ok: false, error: 'invalid hire date: ' + hd + ' (expected YYYY-MM-DD)' };
+    changes.hire_date = hd ? normDate_(hd) : '';
+  }
+  if (!Object.keys(changes).length) return { ok: false, error: 'nothing to change' };
+
+  var merged = {};
+  Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });   // <- every column survives
+  Object.keys(changes).forEach(function (k) {
+    if (String(prior[k] || '') !== String(changes[k])) touched.push(k);
+    merged[k] = changes[k];
+  });
+  merged.employee_id = id;
+  GXCore.gxUpsertEmployee(merged);
+
+  // employee_id is derived from the name, so a rename leaves the old key stranded in every
+  // other app. Record an alias so imports and lookups keep resolving to this row.
+  if (changes.full_name && nameToKey_(prior.full_name) !== nameToKey_(changes.full_name)) {
+    sheetOf_(ALIAS_TAB, ALIAS_HEADERS).appendRow([
+      nameToKey_(prior.full_name), String(prior.full_name || ''), id,
+      new Date().toISOString(), auth.user + ' (rename)'
+    ]);
+  }
+
+  bustRosterCache_();
+  return { ok: true, employee_id: id, changed: touched,
+           preserved: ['dutchie_employee_id', 'user_id', 'employee_number', 'avatar_config']
+             .filter(function (k) { return String(prior[k] || '').trim(); }) };
 }
 
 /**
@@ -1004,6 +1089,8 @@ function saveRosterAttrs_(p) {
   if (bday && !normBirthday_(bday)) return { ok: false, error: 'invalid birthday: ' + bday + ' (expected MM-DD)' };
   var anniv = String(p.work_anniversary == null ? '' : p.work_anniversary).trim();
   if (anniv && !normDate_(anniv)) return { ok: false, error: 'invalid work_anniversary: ' + anniv + ' (expected YYYY-MM-DD)' };
+  var pexp = String(p.permit_expires == null ? '' : p.permit_expires).trim();
+  if (pexp && !normDate_(pexp)) return { ok: false, error: 'invalid permit expiry: ' + pexp + ' (expected YYYY-MM-DD)' };
 
   var existing = readAttrs_()[id] || {};
   var rec = {
@@ -1016,12 +1103,14 @@ function saveRosterAttrs_(p) {
     work_anniversary: p.work_anniversary == null ? (existing.work_anniversary || '') : normDate_(anniv),
     employee_number:  p.employee_number  == null ? (existing.employee_number  || '') : empno,
     wage:             p.wage             == null ? (existing.wage             || '') : wage.replace(/^\$\s*/, ''),
-    // Permit fields are import-owned (METRC is the source of truth) — carry them through
-    // untouched so a roster edit can never quietly rewrite compliance data.
-    permit_number:    existing.permit_number  || '',
+    // METRC stays the source of truth — an import overwrites these whenever it carries a value.
+    // But 7 active staff have no permit on file at all, and a human who can read the permit
+    // should be able to type it in rather than wait for the next export.
+    permit_number:    p.permit_number  == null ? (existing.permit_number  || '') : String(p.permit_number).trim(),
     permit_granted:   existing.permit_granted || '',
-    permit_expires:   existing.permit_expires || '',
-    permit_status:    existing.permit_status  || '',
+    permit_expires:   p.permit_expires == null ? (existing.permit_expires || '') : (normDate_(String(p.permit_expires).trim()) || ''),
+    permit_status:    p.permit_expires != null && String(p.permit_expires).trim() && !existing.permit_status
+                        ? 'Active' : (existing.permit_status || ''),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };

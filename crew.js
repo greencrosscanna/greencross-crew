@@ -455,6 +455,7 @@
       tr.appendChild(tdNum);
 
       tr.appendChild(el('td', null, '<b>' + esc(row.name) + '</b>' +
+        (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '') +
         (row.retired ? ' <span class="crew-tag">retired</span>' : '')));
       tr.appendChild(el('td', flagCls(row,'store','gx-muted'), esc(row.store ? storeName(row.store) : '—')));
       tr.appendChild(el('td', flagCls(row,'role','gx-muted'), esc(row.role) +
@@ -478,26 +479,37 @@
       inB.className = has(row,'birthday') ? 'is-flagged' : '';
       tdB.appendChild(inB); tr.appendChild(tdB);
 
-      tr.appendChild(el('td', null, permitNumberCell(row)));
+      var tdPn = el('td'); var inPn = el('input');
+      inPn.type='text'; inPn.value=row.permit_number||''; inPn.size=8; inPn.placeholder='permit #';
+      inPn.className='crew-permit-no' + (has(row,'permit') ? ' is-flagged' : '');
+      inPn.disabled=!state.canEdit; tdPn.appendChild(inPn); tr.appendChild(tdPn);
+
       tr.appendChild(el('td', null, permitStatusCell(row)));
-      tr.appendChild(el('td', null, permitExpiryCell(row)));
+
+      var tdPe = el('td'); var inPe = el('input');
+      inPe.type='date'; inPe.value=row.permit_expires||'';
+      inPe.className = (row.permit_days_left != null && row.permit_days_left < 0) ? 'is-flagged' : '';
+      inPe.disabled=!state.canEdit; tdPe.appendChild(inPe); tr.appendChild(tdPe);
 
       var tdS = el('td', 'crew-actions'); var status = el('span', 'crew-save-status');
       if (state.canEdit) {
         var save = el('button', 'crew-save', 'Save'); save.disabled = true;
         var dirty = function () { save.disabled = false; status.textContent = ''; };
-        [sel, inB, inW, inNum].forEach(function (f) { f.addEventListener('input', dirty); f.addEventListener('change', dirty); });
+        [sel, inB, inW, inNum, inPn, inPe].forEach(function (f) { f.addEventListener('input', dirty); f.addEventListener('change', dirty); });
         save.addEventListener('click', async function () {
           save.disabled = true; status.textContent = 'Saving…'; status.className = 'crew-save-status';
           try {
             var r = await Engine.jsonp('roster_save', { token: token(), employee_id: row.employee_id,
               shirt_size: sel.value, birthday: inB.value.trim(),
-              wage: inW.value.trim(), employee_number: inNum.value.trim() },
+              wage: inW.value.trim(), employee_number: inNum.value.trim(),
+              permit_number: inPn.value.trim(), permit_expires: inPe.value },
               { timeoutMs: 45000, retries: 2 });
             if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
             row.shirt_size = r.saved.shirt_size; row.birthday = r.saved.birthday;
             row.wage = r.saved.wage; row.employee_number = r.saved.employee_number;
+            row.permit_number = r.saved.permit_number; row.permit_expires = r.saved.permit_expires;
             inB.value = row.birthday; inW.value = row.wage; inNum.value = row.employee_number;
+            inPn.value = row.permit_number; inPe.value = row.permit_expires;
             status.textContent = 'Saved'; status.className = 'crew-save-status ok';
           } catch (e) {
             status.textContent = (e && e.message) || 'Save failed';
@@ -550,6 +562,67 @@
           }
         });
         tdS.appendChild(mg);
+
+        /* Identity lives in GX Core, not Crew, so it gets a deliberate panel rather than another
+           six inline inputs — and the panel says plainly which linking columns are being
+           preserved, because those are the ones a careless write destroys. */
+        var ed = el('button', 'crew-link crew-edit', 'Edit');
+        ed.addEventListener('click', function () {
+          var open = tr.nextSibling && tr.nextSibling.classList &&
+                     tr.nextSibling.classList.contains('crew-editrow');
+          if (open) { tr.nextSibling.remove(); ed.textContent = 'Edit'; return; }
+          ed.textContent = 'Close';
+          var erow = el('tr', 'crew-editrow');
+          var cell = el('td'); cell.colSpan = COLUMNS.length + 1;
+          var form = el('div', 'crew-editform');
+          var storeOpts = ['<option value="">— none —</option>']
+            .concat(Object.keys(state.stores).map(function (sid) {
+              return '<option value="' + esc(sid) + '"' + (row.store === sid ? ' selected' : '') + '>' +
+                     esc(state.stores[sid]) + '</option>'; }))
+            .concat(['<option value="corporate"' + (row.store === 'corporate' ? ' selected' : '') +
+                     '>Corporate</option>']).join('');
+          form.innerHTML =
+            '<label>Full name<input name="full_name" value="' + esc(row.name) + '"></label>' +
+            '<label>Nickname<input name="preferred_name" value="' + esc(row.preferred_name || '') +
+              '" placeholder="shown on the board"></label>' +
+            '<label>Store<select name="home_store">' + storeOpts + '</select></label>' +
+            '<label>Role<input name="role_title" value="' + esc(row.role_is_default ? '' : row.role) +
+              '" placeholder="Budtender"></label>' +
+            '<label>Hire date<input name="hire_date" type="date" value="' + esc(row.hire_date || '') + '"></label>';
+          var linked = [];
+          if (row.dutchie_employee_id) linked.push('Dutchie ' + row.dutchie_employee_id);
+          if (row.user_id) linked.push('account ' + row.user_id);
+          if (row.employee_number) linked.push('employee #' + row.employee_number);
+          var note = el('p', 'crew-editnote', linked.length
+            ? 'Linked and preserved on save: ' + esc(linked.join(' · '))
+            : 'No Dutchie id or account linked to this record.');
+          var acts = el('div', 'crew-editacts');
+          var st2 = el('span', 'crew-save-status');
+          var go = el('button', 'crew-save is-primary', 'Save identity');
+          go.addEventListener('click', async function () {
+            go.disabled = true; st2.textContent = 'Saving…'; st2.className = 'crew-save-status';
+            try {
+              var q = { token: token(), employee_id: row.employee_id };
+              ['full_name','preferred_name','home_store','role_title','hire_date'].forEach(function (f) {
+                q[f] = form.querySelector('[name=' + f + ']').value;
+              });
+              var r = await Engine.jsonp('roster_identity', q, { timeoutMs: 45000, retries: 2 });
+              if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
+              st2.textContent = '✓ ' + (r.changed.length ? 'updated ' + r.changed.join(', ') : 'no change');
+              st2.className = 'crew-save-status ok';
+              state.rows = []; state.review = null;
+              setTimeout(function () { boot(true); }, 700);
+            } catch (e) {
+              st2.textContent = (e && e.message) || 'Save failed';
+              st2.className = 'crew-save-status err'; go.disabled = false;
+            }
+          });
+          acts.appendChild(go); acts.appendChild(st2);
+          cell.appendChild(form); cell.appendChild(note); cell.appendChild(acts);
+          erow.appendChild(cell);
+          tr.parentNode.insertBefore(erow, tr.nextSibling);
+        });
+        tdS.appendChild(ed);
       }
       tdS.appendChild(status); tr.appendChild(tdS);
       tbody.appendChild(tr);
