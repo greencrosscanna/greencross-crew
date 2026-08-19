@@ -862,11 +862,20 @@ function avatarSave_(p, body) {
  * still hold live access, and the honest answer needed a human to open Metrc. With this, Crew
  * can check it directly — which is the difference between a flag someone must chase and a fact.
  */
-var METRC_BASE = 'https://api-or.metrc.com';
+/*
+ * Base URL is a PROPERTY, not a constant, because sandbox and production are different hosts
+ * holding different data:
+ *   production  https://api-or.metrc.com          — real Green Cross staff and permits
+ *   sandbox     https://sandbox-api-or.metrc.com  — Metrc's generic test data, periodically reset
+ * Sandbox is for passing Metrc's evaluation. It cannot answer a question about OUR staff, so any
+ * audit run against it must be labelled as such rather than mistaken for the real thing.
+ */
+var METRC_BASE_DEFAULT = 'https://api-or.metrc.com';
 
 function metrcCreds_() {
   var props = PropertiesService.getScriptProperties();
   return {
+    base: String(props.getProperty('METRC_BASE') || METRC_BASE_DEFAULT).replace(/\/+$/, ''),
     vendor: String(props.getProperty('METRC_VENDOR_KEY') || '').trim(),
     user:   String(props.getProperty('METRC_USER_KEY') || '').trim(),
     licenses: String(props.getProperty('METRC_LICENSES') || '').split(',')
@@ -884,7 +893,7 @@ function metrcGet_(path, params) {
   var qs = Object.keys(params || {}).map(function (k) {
     return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
   }).join('&');
-  var url = METRC_BASE + path + (qs ? '?' + qs : '');
+  var url = c.base + path + (qs ? '?' + qs : '');
   var res = UrlFetchApp.fetch(url, {
     method: 'get', muteHttpExceptions: true,
     headers: { Authorization: 'Basic ' + Utilities.base64Encode(c.vendor + ':' + c.user) }
@@ -904,8 +913,13 @@ function metrcGet_(path, params) {
 function metrcHealth_(p) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var c = metrcCreds_();
-  var out = { ok: true, base: METRC_BASE,
+  var isSandbox = /sandbox/i.test(c.base);
+  var out = { ok: true, base: c.base, environment: isSandbox ? 'SANDBOX (generic test data)' : 'production',
               has_vendor_key: !!c.vendor, has_user_key: !!c.user, licenses: c.licenses.length };
+  if (isSandbox) {
+    out.warning = 'Sandbox holds Metrc test data, NOT Green Cross staff. Nothing read here can ' +
+                  'answer whether our own retired employees are deactivated.';
+  }
   if (!c.vendor || !c.user) {
     out.ok = false;
     out.error = 'Missing keys. Set METRC_VENDOR_KEY and METRC_USER_KEY in this script\'s properties.';
@@ -969,6 +983,12 @@ function metrcAccessAudit_(p) {
   if (!deploySecretOk_(p)) {
     var auth = requireCrew_(p);
     if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  }
+  var creds = metrcCreds_();
+  if (/sandbox/i.test(creds.base)) {
+    return { ok: false, error: 'Refusing to audit against SANDBOX. It holds Metrc test data, not ' +
+             'Green Cross staff, so a clean result here would be meaningless and a dirty one ' +
+             'alarming. Point METRC_BASE at production once credentials are issued.' };
   }
   var m = metrcAllEmployees_();
   var metrcPeople = Object.keys(m.people).map(function (k) { return m.people[k]; });
