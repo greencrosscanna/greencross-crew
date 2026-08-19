@@ -22,6 +22,7 @@
 
   var TOKEN_KEY = 'gx_crew_token';
   var USER_KEY  = 'gx_crew_user';
+  var AVATAR_KEY = 'gx_crew_avatar';
   // Single-sourced from the ?v=N cache-buster on this script tag -- the same value deploy.sh records,
   // so the version in the user menu can never drift from the version that shipped.
   var APP_VERSION = (function () {
@@ -76,11 +77,22 @@
 
   // ─── session ─────────────────────────────────────────────────────────────────
   function token()      { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
-  function setSession(t, u) {
+  function setSession(t, u, avatarCfg) {
     try {
-      if (t) { sessionStorage.setItem(TOKEN_KEY, t); sessionStorage.setItem(USER_KEY, u || ''); }
-      else   { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(USER_KEY); }
+      if (t) {
+        sessionStorage.setItem(TOKEN_KEY, t);
+        sessionStorage.setItem(USER_KEY, u || '');
+        sessionStorage.setItem(AVATAR_KEY, avatarCfg ? JSON.stringify(avatarCfg) : '');
+      } else {
+        sessionStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(USER_KEY);
+        sessionStorage.removeItem(AVATAR_KEY);
+      }
     } catch (e) {}
+  }
+  function currentAvatar() {
+    try { var raw = sessionStorage.getItem(AVATAR_KEY); return raw ? JSON.parse(raw) : null; }
+    catch (e) { return null; }
   }
 
   // ─── engine resolution ───────────────────────────────────────────────────────
@@ -235,7 +247,9 @@
           user: form.user.value.trim(), pass: form.pass.value, app: APP
         });
         if (!r || !r.ok) throw new Error((r && r.error) || 'Sign-in failed');
-        setSession(r.token, r.user);
+        // r.user is the SLUG ('sky'); r.displayName is the person's name. The chip showed the slug
+        // because only r.user was ever stored.
+        setSession(r.token, r.displayName || r.user, r.avatarConfig);
         boot();
       } catch (e) {
         msg.textContent = (e && e.message) || 'Sign-in failed';
@@ -397,21 +411,23 @@
     if (!slot) return;
     var name = currentUser();
     if (!token() || !name) { slot.innerHTML = ''; return; }
-    var initials = String(name).trim().split(/[\s._-]+/).map(function (w) { return w.charAt(0); })
-                     .join('').slice(0, 2).toUpperCase() || 'GX';
-    slot.innerHTML =
-      '<div class="gx-user">' +
-        '<button class="gx-user-btn" aria-haspopup="menu" aria-expanded="false">' +
-          '<span class="gx-user-ava">' + initials + '</span>' +
-          '<span class="gx-user-name">' + name + '</span>' +
-        '</button>' +
-        '<div class="gx-user-menu" role="menu" hidden>' +
-          '<div class="gx-user-head">' + name + '<span>Crew</span></div>' +
-          '<button class="gx-user-item" data-gx-action="version">Version <span class="gx-user-ver">' + APP_VERSION + '</span></button>' +
-          '<button class="gx-user-item is-danger" data-gx-action="logout">Sign out</button>' +
-        '</div>' +
-      '</div>';
-    if (window.GXTopNav) GXTopNav.init(slot);
+    // Real avatar when the roster has one; GXAvatar owns the DiceBear rules.
+    var ava = window.GXAvatar ? GXAvatar.chip(currentAvatar(), name) : null;
+    // Menu built from CONFIG by the shared component, so it matches every other app and gaining an
+    // item later is one entry here rather than new markup.
+    // Guarded: the shared scripts come from Pages with a 10-minute cache, so there is always a
+    // window where this app has shipped and the shared layer it calls has not arrived yet. An
+    // unguarded call throws inside boot() and takes the WHOLE app down over a header detail.
+    if (!window.GXTopNav || !GXTopNav.renderUser) { slot.innerHTML = ''; return; }
+    GXTopNav.renderUser(slot, {
+      name: name,
+      role: 'Crew',
+      avatar: ava,
+      items: [
+        { action: 'version', label: 'Version', value: APP_VERSION },
+        { action: 'logout',  label: 'Sign out', danger: true }
+      ]
+    });
   }
 
   async function loadReview() {
