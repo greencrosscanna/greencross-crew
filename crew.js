@@ -22,6 +22,12 @@
 
   var TOKEN_KEY = 'gx_crew_token';
   var USER_KEY  = 'gx_crew_user';
+  // Single-sourced from the ?v=N cache-buster on this script tag -- the same value deploy.sh records,
+  // so the version in the user menu can never drift from the version that shipped.
+  var APP_VERSION = (function () {
+    var m = /[?&]v=(\d+)/.exec((document.currentScript && document.currentScript.src) || '');
+    return m ? 'v' + m[1] : 'dev';
+  })();
 
   var mount = document.getElementById('app');
   var GXCore = window.GXClient(GXCORE_URL);
@@ -209,13 +215,14 @@
   // ─── views ───────────────────────────────────────────────────────────────────
   function renderLogin(errMsg) {
     clear();
-    var form = el('form', 'crew-login');
+    var form = el('form', 'gx-login-form');
     form.innerHTML =
-      '<p class="gx-muted">GX Crew holds compensation and staff PII. Sign in with your GX account.</p>' +
-      '<label>Username<input name="user" autocomplete="username" required></label>' +
-      '<label>Password<input name="pass" type="password" autocomplete="current-password" required></label>' +
-      '<button type="submit">Sign in</button>';
-    var msg = el('p', 'crew-error');
+      '<label class="gx-login-field"><span>Username</span>' +
+        '<input class="gx-input" name="user" autocomplete="username" required></label>' +
+      '<label class="gx-login-field"><span>Password</span>' +
+        '<input class="gx-input" name="pass" type="password" autocomplete="current-password" required></label>' +
+      '<button type="submit" class="gx-btn gx-btn-green gx-login-submit">Sign in</button>';
+    var msg = el('p', 'gx-login-err');
     if (errMsg) msg.textContent = errMsg;
 
     form.addEventListener('submit', async function (ev) {
@@ -236,7 +243,19 @@
       }
     });
 
-    mount.appendChild(card('GX&nbsp;Crew', [form, msg]));
+    var tabs = document.getElementById('navTabs');  if (tabs) tabs.innerHTML = '';
+    var slot = document.getElementById('userSlot'); if (slot) slot.innerHTML = '';
+    var wrap = el('div', 'gx-login');
+    var cardEl = el('div', 'gx-login-card');
+    cardEl.innerHTML =
+      '<div class="gx-login-head">' +
+        '<img class="gx-login-mark" src="https://greencrosscanna.github.io/greencross-gx-theme/gx-logo.png" alt="Green Cross">' +
+        '<div class="gx-login-sub">Crew &middot; HR &amp; People</div>' +
+      '</div>';
+    cardEl.appendChild(form);
+    cardEl.appendChild(msg);
+    wrap.appendChild(cardEl);
+    mount.appendChild(wrap);
   }
 
   function renderStatus(html) {
@@ -346,8 +365,12 @@
     badge.className = 'crew-badge' + (n.high ? ' is-high' : '');
   }
 
+  /* Tabs live in the shared header (#navTabs), not in the page body, so Crew matches every other app.
+     Returns null: callers no longer insert a nav node into the main column. */
   function navBar() {
-    var nav = el('div', 'crew-nav');
+    var nav = document.getElementById('navTabs');
+    if (!nav) return null;
+    nav.innerHTML = '';
     [['roster', 'Roster'], ['review', 'Review']].forEach(function (v) {
       var n = state.reviewCounts || {};
       var badge = '';
@@ -355,14 +378,40 @@
         badge = ' <span class="crew-badge' + (n.high ? ' is-high' : '') + '">' +
                 ((n.high || 0) + (n.warn || 0)) + '</span>';
       }
-      var b = el('button', 'crew-tab' + (state.view === v[0] ? ' is-active' : ''), v[1] + badge);
+      var b = el('button', 'gx-topnav-tab' + (state.view === v[0] ? ' is-active' : ''), v[1] + badge);
       b.addEventListener('click', function () {
         state.view = v[0];
         if (v[0] === 'review' && !state.review) loadReview(); else render();
       });
       nav.appendChild(b);
     });
-    return nav;
+    return null;
+  }
+
+  /* User chip: avatar + name, matching Leaderboard. Settings / version / sign-out live in its menu
+     rather than as separate header buttons. gx-topnav.js owns the open/close behaviour. */
+  function currentUser() { try { return sessionStorage.getItem(USER_KEY) || ''; } catch (e) { return ''; } }
+
+  function renderUserChip() {
+    var slot = document.getElementById('userSlot');
+    if (!slot) return;
+    var name = currentUser();
+    if (!token() || !name) { slot.innerHTML = ''; return; }
+    var initials = String(name).trim().split(/[\s._-]+/).map(function (w) { return w.charAt(0); })
+                     .join('').slice(0, 2).toUpperCase() || 'GX';
+    slot.innerHTML =
+      '<div class="gx-user">' +
+        '<button class="gx-user-btn" aria-haspopup="menu" aria-expanded="false">' +
+          '<span class="gx-user-ava">' + initials + '</span>' +
+          '<span class="gx-user-name">' + name + '</span>' +
+        '</button>' +
+        '<div class="gx-user-menu" role="menu" hidden>' +
+          '<div class="gx-user-head">' + name + '<span>Crew</span></div>' +
+          '<button class="gx-user-item" data-gx-action="version">Version <span class="gx-user-ver">' + APP_VERSION + '</span></button>' +
+          '<button class="gx-user-item is-danger" data-gx-action="logout">Sign out</button>' +
+        '</div>' +
+      '</div>';
+    if (window.GXTopNav) GXTopNav.init(slot);
   }
 
   async function loadReview() {
@@ -380,7 +429,9 @@
 
   function renderReview() {
     clear();
-    var nodes = [navBar()];
+    navBar();                 // paints the shared header's tab row
+    renderUserChip();
+    var nodes = [];
     var items = state.review || [];
 
     if (!items.length) {
@@ -466,10 +517,27 @@
     else renderRoster();
   }
 
+  /* One listener for the shared header's menu. gx-topnav.js emits the event; what each action MEANS
+     is the app's business, which is why the component does not hardcode any of it. */
+  document.addEventListener('gx-topnav:action', function (e) {
+    var a = e.detail && e.detail.action;
+    if (a === 'logout') {
+      setSession('', '');
+      state.rows = []; state.review = null; state.view = 'roster';
+      var slot = document.getElementById('userSlot'); if (slot) slot.innerHTML = '';
+      var tabs = document.getElementById('navTabs');  if (tabs) tabs.innerHTML = '';
+      renderLogin();
+    } else if (a === 'version') {
+      renderStatus('GX Crew ' + APP_VERSION);
+    }
+  });
+
   function renderRoster() {
     if (!state.rows.length && state.view === 'roster' && state.review) { boot(true); return; }
     clear();
-    var nodes = [navBar()];
+    navBar();                 // paints the shared header's tab row
+    renderUserChip();
+    var nodes = [];
 
     var bar = el('div', 'crew-bar');
     bar.innerHTML = '<span>Signed in as <b>' + esc(state.user) + '</b> · ' + esc(state.role) +
@@ -898,6 +966,15 @@
     }
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
-  else boot();
+  /* The clock is chrome, not session state -- start it once at boot so it is never showing placeholder
+     dashes on the login screen. Store colours load here too, so --store-<id> is painted before any view
+     that uses them renders. */
+  function startChrome() {
+    if (window.GXTopNav) GXTopNav.startClock();
+    if (window.GXStores) GXStores.load(GXCORE_URL).catch(function () { /* colours are a nicety */ });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { startChrome(); boot(); });
+  } else { startChrome(); boot(); }
 })();
