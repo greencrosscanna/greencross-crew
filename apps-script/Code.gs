@@ -105,6 +105,9 @@ function route_(e) {
 
       // Leaderboard's avatar service — its backend calls these so staff keep self-service
       // without a Crew login. See avatarSave_ for why it is not a public write.
+      case 'metrc_health': return json_(metrcHealth_(p), p.callback);
+      case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
+
       case 'avatars':      return json_(avatarsForKiosk_(p), p.callback);
       case 'avatar_save':  return json_(avatarSave_(p, body), p.callback);
       case 'create_accounts': return json_(createAccounts_(p, body), p.callback);
@@ -840,6 +843,160 @@ function avatarSave_(p, body) {
   bustRosterCache_();
   return { ok: true, employee_id: id, name: emp.full_name, seed: num || id,
            cleared: !cfg, resolved_from: ref };
+}
+
+
+// ─── METRC connector (Oregon) ───────────────────────────────────────────────────
+/*
+ * Worker-permit truth, straight from the state system, replacing the per-store spreadsheet
+ * exports we had been importing by hand.
+ *
+ * CREDENTIALS LIVE IN SCRIPT PROPERTIES, never in this file and never in the frontend:
+ *   METRC_VENDOR_KEY   the integrator/software key Metrc issues
+ *   METRC_USER_KEY     the user key generated inside Metrc by the licence owner
+ *   METRC_LICENSES     comma-separated licence numbers (e.g. 050-12997,050-13000,…)
+ * Metrc authenticates as Basic base64(vendorKey:userKey) — BOTH halves are required; the
+ * vendor key is the username. A user key alone cannot authenticate at all.
+ *
+ * WHY THIS MATTERS BEYOND CONVENIENCE: the review queue currently asks whether retired staff
+ * still hold live access, and the honest answer needed a human to open Metrc. With this, Crew
+ * can check it directly — which is the difference between a flag someone must chase and a fact.
+ */
+var METRC_BASE = 'https://api-or.metrc.com';
+
+function metrcCreds_() {
+  var props = PropertiesService.getScriptProperties();
+  return {
+    vendor: String(props.getProperty('METRC_VENDOR_KEY') || '').trim(),
+    user:   String(props.getProperty('METRC_USER_KEY') || '').trim(),
+    licenses: String(props.getProperty('METRC_LICENSES') || '').split(',')
+                .map(function (x) { return x.trim(); }).filter(Boolean)
+  };
+}
+
+function metrcGet_(path, params) {
+  var c = metrcCreds_();
+  if (!c.vendor || !c.user) {
+    throw new Error('METRC keys are not set. Add METRC_VENDOR_KEY and METRC_USER_KEY to this ' +
+                    'script\'s properties. Both are required — Metrc authenticates as ' +
+                    'Basic base64(vendorKey:userKey), so a user key alone cannot connect.');
+  }
+  var qs = Object.keys(params || {}).map(function (k) {
+    return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+  }).join('&');
+  var url = METRC_BASE + path + (qs ? '?' + qs : '');
+  var res = UrlFetchApp.fetch(url, {
+    method: 'get', muteHttpExceptions: true,
+    headers: { Authorization: 'Basic ' + Utilities.base64Encode(c.vendor + ':' + c.user) }
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code === 401) throw new Error('METRC rejected the credentials (401). Check both keys, and ' +
+                                    'that the user key belongs to an account with API access.');
+  if (code === 403) throw new Error('METRC returned 403 — the keys are valid but not authorised ' +
+                                    'for this licence or endpoint.');
+  if (code >= 300) throw new Error('METRC HTTP ' + code + ': ' + body.slice(0, 300));
+  try { return JSON.parse(body); }
+  catch (e) { throw new Error('METRC returned non-JSON: ' + body.slice(0, 200)); }
+}
+
+/** Connectivity + shape probe. Reports FIELD NAMES only — permit numbers are government IDs. */
+function metrcHealth_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var c = metrcCreds_();
+  var out = { ok: true, base: METRC_BASE,
+              has_vendor_key: !!c.vendor, has_user_key: !!c.user, licenses: c.licenses.length };
+  if (!c.vendor || !c.user) {
+    out.ok = false;
+    out.error = 'Missing keys. Set METRC_VENDOR_KEY and METRC_USER_KEY in this script\'s properties.';
+    return out;
+  }
+  if (!c.licenses.length) {
+    out.ok = false;
+    out.error = 'Set METRC_LICENSES to a comma-separated list of licence numbers.';
+    return out;
+  }
+  try {
+    var rows = metrcGet_('/employees/v1/', { licenseNumber: c.licenses[0] }) || [];
+    out.probe_license = c.licenses[0];
+    out.records = rows.length;
+    // Shape, not content — the API's field names differ from the UI export's headers.
+    out.fields = rows.length ? Object.keys(rows[0]).sort() : [];
+    if (rows.length && rows[0].License && typeof rows[0].License === 'object') {
+      out.license_fields = Object.keys(rows[0].License).sort();
+    }
+  } catch (e) {
+    out.ok = false;
+    out.error = String((e && e.message) || e);
+  }
+  return out;
+}
+
+/** Everyone METRC currently knows about, deduped across licences, keyed by permit number. */
+function metrcAllEmployees_() {
+  var c = metrcCreds_();
+  var byPermit = {}, errors = [], seen = 0;
+  c.licenses.forEach(function (lic) {
+    var rows;
+    try { rows = metrcGet_('/employees/v1/', { licenseNumber: lic }) || []; }
+    catch (e) { errors.push(lic + ': ' + String((e && e.message) || e)); return; }
+    rows.forEach(function (r) {
+      seen++;
+      var L = r.License || {};
+      var permit = String(L.Number || r.LicenseNumber || '').trim();
+      var name = String(r.FullName || r.Name || '').trim();
+      if (!name) return;
+      var key = permit || ('name:' + nameToKey_(name));
+      var rec = byPermit[key] || (byPermit[key] = {
+        permit: permit, name: name, licenses: [], start: String(L.StartDate || ''),
+        end: String(L.EndDate || ''), active: false
+      });
+      if (rec.licenses.indexOf(lic) < 0) rec.licenses.push(lic);
+      // Metrc marks the person per facility; active anywhere means they still hold access.
+      var isActive = r.IsActive !== false && String(r.Status || 'Active').toLowerCase() !== 'inactive';
+      if (isActive) rec.active = true;
+      if (L.EndDate && (!rec.end || String(L.EndDate) > rec.end)) rec.end = String(L.EndDate);
+    });
+  });
+  return { people: byPermit, errors: errors, rows_seen: seen };
+}
+
+/**
+ * The question the review queue could not answer without a human: are the people we have marked
+ * retired actually deactivated in METRC? Names only — no permit numbers leave this.
+ */
+function metrcAccessAudit_(p) {
+  if (!deploySecretOk_(p)) {
+    var auth = requireCrew_(p);
+    if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  }
+  var m = metrcAllEmployees_();
+  var metrcPeople = Object.keys(m.people).map(function (k) { return m.people[k]; });
+  var joined = rosterJoin_();
+
+  var stillActive = [], properlyRemoved = [], notInMetrc = [];
+  joined.rows.forEach(function (r) {
+    if (!r.retired) return;
+    var hit = null;
+    for (var i = 0; i < metrcPeople.length; i++) {
+      if (samePerson_(r.name, metrcPeople[i].name)) { hit = metrcPeople[i]; break; }
+    }
+    if (!hit) { notInMetrc.push(r.name); return; }
+    if (hit.active) stillActive.push({ name: r.name, licenses: hit.licenses.length });
+    else properlyRemoved.push(r.name);
+  });
+
+  return {
+    ok: true, metrc_rows_seen: m.rows_seen, metrc_people: metrcPeople.length,
+    retired_in_crew: joined.rows.filter(function (r) { return r.retired; }).length,
+    still_active_in_metrc: stillActive,
+    properly_deactivated: properlyRemoved.length,
+    retired_and_absent_from_metrc: notInMetrc.length,
+    errors: m.errors,
+    note: stillActive.length
+      ? stillActive.length + ' retired staff still hold METRC access — revoke in METRC, this only reports.'
+      : 'No retired staff hold active METRC access.'
+  };
 }
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
