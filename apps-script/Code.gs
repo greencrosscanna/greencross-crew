@@ -101,6 +101,7 @@ function route_(e) {
       case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
       case 'assign_numbers': return json_(assignNumbers_(p), p.callback);
       case 'set_number':     return json_(setNumber_(p), p.callback);
+      case 'email_proposals': return json_(emailProposals_(p), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
       case 'review':         return json_(getReview_(p), p.callback);
@@ -547,6 +548,91 @@ function setNumber_(p) {
   writeAttrs_(rec);
   bustRosterCache_();
   return { ok: true, employee_id: id, name: prior.full_name, was: was || '(none)', now: num };
+}
+
+
+// ─── Email proposals (firstname@greencrosscanna.com) ────────────────────────────
+/*
+ * The house convention is firstname@greencrosscanna.com, and gxSeedTeamEmails() already
+ * establishes it as GX Core policy. That makes the convention a fine PROPOSAL GENERATOR — but
+ * core-admin is right that deriving is not the same as knowing, and this roster proves why:
+ *
+ *   • First names collide. Two active Zacharys is why Leaderboard carries the nicknames
+ *     "Zach B" and "Zach R" at all — the convention cannot name them both.
+ *   • People go by something other than their legal first name. Andrew Phillips is "Drew";
+ *     Robert Wydick goes by Nathan. Whether the mailbox is andrew@ or drew@ is a fact about
+ *     Workspace, not something a rule can derive.
+ *   • A derived address is not a mailbox. Deriving it does not create it, and a wrong address
+ *     for a SPIFF payout fails silently.
+ *
+ * So this PROPOSES and reports every reason to doubt each one. Nothing is written; confirmed
+ * addresses go in through the normal review/confirm path once a human has checked Workspace.
+ */
+function emailProposals_(p) {
+  if (!deploySecretOk_(p)) {
+    var auth = requireCrew_(p);
+    if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  }
+  var roleFilter = String(p.role || '').trim().toLowerCase();
+  var rows = GXCore.getEmployees() || [];
+
+  var firstOf = function (r) {
+    return String(r.full_name || '').trim().split(/\s+/)[0] || '';
+  };
+  var slug = function (n) { return String(n || '').toLowerCase().replace(/[^a-z]/g, ''); };
+
+  // Count first-name usage across EVERY active person, not just the filtered set — a collision
+  // with someone outside the filter is still a collision.
+  var firstCount = {};
+  rows.forEach(function (r) {
+    var st = String(r.status || 'active').toLowerCase();
+    if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return;
+    var f = slug(firstOf(r));
+    if (f) firstCount[f] = (firstCount[f] || 0) + 1;
+  });
+
+  var out = [];
+  rows.forEach(function (r) {
+    var st = String(r.status || 'active').toLowerCase();
+    if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return;
+    if (roleFilter && String(r.role_title || '').toLowerCase().indexOf(roleFilter) < 0) return;
+
+    var first = firstOf(r), f = slug(first);
+    var nick = String(r.preferred_name || '').trim();
+    var doubts = [];
+    if (firstCount[f] > 1) doubts.push('FIRST NAME COLLIDES with ' + (firstCount[f] - 1) + ' other active staff');
+    if (nick && slug(nick) !== f) doubts.push('goes by "' + nick + '", so the mailbox may be ' + slug(nick) + '@');
+    /*
+     * employee_id was seeded from what DUTCHIE and LEADERBOARD call people — i.e. what they
+     * actually go by day to day — while full_name now carries the legal form from HR/METRC.
+     * Where those two disagree on the first name, the convention is ambiguous even though
+     * nothing looks wrong: "Samuel Keck" with id sam_keck is a sam@, not a samuel@.
+     */
+    var idFirst = slug(String(r.employee_id || '').split('_')[0]);
+    if (idFirst && f && idFirst !== f) {
+      doubts.push('known elsewhere as "' + idFirst + '" (employee_id ' + r.employee_id +
+                  '), so the mailbox may be ' + idFirst + '@');
+    }
+    if (!f) doubts.push('no usable first name');
+    out.push({
+      employee_id: String(r.employee_id || ''), name: String(r.full_name || ''),
+      role: String(r.role_title || ''), preferred_name: nick,
+      has_account: !!String(r.user_id || '').trim(),
+      existing_user_id: String(r.user_id || ''),
+      proposed: f ? f + '@greencrosscanna.com' : '',
+      confident: doubts.length === 0,
+      doubts: doubts
+    });
+  });
+
+  out.sort(function (a, b) { return a.name.localeCompare(b.name); });
+  return { ok: true, policy: 'firstname@greencrosscanna.com (GX Core, gxSeedTeamEmails)',
+           counted: out.length,
+           needing_account: out.filter(function (x) { return !x.has_account; }).length,
+           confident: out.filter(function (x) { return !x.has_account && x.confident; }).length,
+           needs_a_human: out.filter(function (x) { return !x.has_account && !x.confident; }).length,
+           note: 'PROPOSALS ONLY — nothing written. A derived address is not a mailbox; confirm in Workspace before use.',
+           proposals: out };
 }
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
