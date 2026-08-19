@@ -6,6 +6,7 @@
 #     curl -fsSL https://greencrosscanna.github.io/greencross-gx-theme/gx-sync.sh > gx-sync.sh
 #     chmod +x gx-sync.sh
 # Then, any time the shared files change upstream:   ./gx-sync.sh
+# It updates ITSELF first, so a stale copy can no longer silently skip newly-added shared files.
 # It fetches each canonical file and fills __APP__ from .gx_app, so the shared files stay identical
 # across every spoke and the app key lives in exactly one place per repo.
 set -eu
@@ -24,6 +25,24 @@ fetch() {
     rm -f "$tmp"; echo "  ✗ $1 (skipped — fetch failed, left existing file untouched)"; return 1
   fi
 }
+
+# ─── Self-update ────────────────────────────────────────────────────────────────────────────────
+# This script used to be the one file that did NOT update itself, so a spoke would happily sync using
+# a stale copy and silently skip newly-added shared files. It now fetches itself first.
+# The new copy is RUN FROM A TEMP PATH and only then written over this file -- overwriting a shell
+# script while sh is still reading it makes the shell execute whatever bytes now sit at its current
+# offset, which is a genuinely nasty way to fail.
+if [ "${GX_SYNC_SELFUPDATED:-}" != "1" ]; then
+  _new="$(mktemp)"
+  if curl -fsSL "$BASE/gx-sync.sh" > "$_new" 2>/dev/null && [ -s "$_new" ] && ! cmp -s "$_new" "$0"; then
+    echo "  gx-sync.sh is out of date — updating itself and re-running"
+    GX_SYNC_SELFUPDATED=1 sh "$_new" "$@"; _status=$?
+    cat "$_new" > "$0" && chmod 755 "$0"
+    rm -f "$_new"
+    exit $_status
+  fi
+  rm -f "$_new"
+fi
 
 echo "Syncing shared GX spoke files for app=$APP …"
 fetch gx-brain-notes.sh .claude/gx-brain-notes.sh || true
@@ -66,4 +85,4 @@ JSON
 else
   echo "  • .claude/settings.json exists — leave it; ensure it runs 'sh .claude/gx-brain-notes.sh' on SessionStart"
 fi
-echo "Done. (gx-sync.sh itself is not self-updating — re-copy it from gx-theme if it changes.)"
+echo "Done. (gx-sync.sh keeps itself up to date from here on.)"
