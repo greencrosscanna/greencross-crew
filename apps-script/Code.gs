@@ -102,6 +102,7 @@ function route_(e) {
       case 'assign_numbers': return json_(assignNumbers_(p), p.callback);
       case 'set_number':     return json_(setNumber_(p), p.callback);
       case 'email_proposals': return json_(emailProposals_(p), p.callback);
+      case 'create_accounts': return json_(createAccounts_(p, body), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
       case 'review':         return json_(getReview_(p), p.callback);
@@ -633,6 +634,82 @@ function emailProposals_(p) {
            needs_a_human: out.filter(function (x) { return !x.has_account && !x.confident; }).length,
            note: 'PROPOSALS ONLY — nothing written. A derived address is not a mailbox; confirm in Workspace before use.',
            proposals: out };
+}
+
+
+// ─── Account creation (verified addresses only) ─────────────────────────────────
+/*
+ * Creates the users row and links employees.user_id to it. Addresses come in from the payload
+ * because they must be VERIFIED, never derived — this roster produced three cases no rule would
+ * have got right: Sam Keck is samuel@, Pam Johnson is pamela@, but Zach Babcock is zach@.
+ *
+ * Note gxUpsertUser does NOT read-merge — it replaces the row. We therefore send the FULL users
+ * schema rather than a partial record. That is safe here because passwords live in the separate
+ * user_auth tab, so a rewrite cannot cost anyone their login; but it is the reason nothing
+ * partial should ever be sent to it.
+ *
+ * A users row is identity + address only. It grants NO app access on its own (that is app_access,
+ * superadmin-gated) and carries no password, so creating one cannot let anybody in.
+ */
+function createAccounts_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var list = (body && body.accounts) || [];
+  if (!list.length) return { ok: false, error: 'no accounts in payload' };
+  var dry = String(p.confirm || '') !== 'yes';
+
+  var identity = GXCore.getEmployees() || [];
+  var byId = {};
+  identity.forEach(function (r) { byId[String(r.employee_id || '').trim()] = r; });
+
+  var plan = [], problems = [];
+  list.forEach(function (a) {
+    var eid   = String(a.employee_id || '').trim();
+    var email = String(a.email || '').trim().toLowerCase();
+    var emp   = byId[eid];
+    if (!emp)   { problems.push('unknown employee_id: ' + eid); return; }
+    if (!/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(email)) {
+      problems.push(emp.full_name + ': not a valid address: ' + email); return;
+    }
+    // user_id follows the existing convention: the mailbox name, not a name slug.
+    var uid = String(a.user_id || email.split('@')[0]).toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (!uid) { problems.push(emp.full_name + ': could not derive a user_id'); return; }
+    if (String(emp.user_id || '').trim() && String(emp.user_id).trim() !== uid) {
+      problems.push(emp.full_name + ': already linked to account "' + emp.user_id +
+                    '" — refusing to relink to "' + uid + '"');
+      return;
+    }
+    var store = String(emp.home_store || '').trim();
+    plan.push({ employee_id: eid, name: String(emp.full_name || ''), user_id: uid, email: email,
+                // corporate is not a kiosk store, so it is not a default_store
+                default_store: store === 'corporate' ? '' : store,
+                already_linked: String(emp.user_id || '').trim() === uid });
+  });
+
+  var out = { ok: true, mode: dry ? 'preview' : 'commit',
+              would_create: plan.filter(function (x) { return !x.already_linked; }).length,
+              already_linked: plan.filter(function (x) { return x.already_linked; }).length,
+              plan: plan, problems: problems };
+  if (dry) { out.note = 'DRY RUN — nothing written. Repeat with confirm=yes.'; return out; }
+
+  var linked = [];
+  plan.forEach(function (a) {
+    GXCore.gxUpsertUser({
+      user_id: a.user_id, display_name: a.name, email: a.email, status: 'active',
+      employee_id: a.employee_id, default_store: a.default_store, is_superadmin: 'FALSE',
+      notes: 'created by GX Crew from a verified address'
+    });
+    var prior = byId[a.employee_id];
+    var merged = {};
+    Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });   // read-merge-write
+    merged.employee_id = a.employee_id;
+    merged.user_id = a.user_id;
+    GXCore.gxUpsertEmployee(merged);
+    linked.push(a.name + ' → ' + a.user_id + ' <' + a.email + '>');
+  });
+  bustRosterCache_();
+  out.linked = linked;
+  out.note = 'users rows carry no password and grant no app access — app_access is separate.';
+  return out;
 }
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
