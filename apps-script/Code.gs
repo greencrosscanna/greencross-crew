@@ -107,6 +107,7 @@ function route_(e) {
       // without a Crew login. See avatarSave_ for why it is not a public write.
       case 'metrc_health': return json_(metrcHealth_(p), p.callback);
       case 'metrc_setup':  return json_(metrcSandboxSetup_(p), p.callback);
+      case 'metrc_probe':  return json_(metrcAuthProbe_(p), p.callback);
       case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
 
       case 'avatars':      return json_(avatarsForKiosk_(p), p.callback);
@@ -1021,6 +1022,55 @@ function metrcSandboxSetup_(p) {
     out.note = 'No key-like field found. Inspect response_fields and set METRC_USER_KEY by hand.';
   }
   return out;
+}
+
+
+/**
+ * Auth probe. Metrc's sandbox setup call is asynchronous and returns no key, and the docs list
+ * no GET to retrieve one — so before anyone goes hunting through the portal, establish what the
+ * vendor key alone can actually reach, and whether the key comes back in a HEADER we ignored.
+ * Read-only target (tagtypes) so nothing is created while probing.
+ */
+function metrcAuthProbe_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var c = metrcCreds_();
+  if (!c.vendor) return { ok: false, error: 'METRC_VENDOR_KEY is not set' };
+
+  var target = c.base + '/sandbox/v2/tagtypes';
+  var b64 = function (x) { return Utilities.base64Encode(x); };
+  var attempts = [
+    { how: 'Basic vendor:vendor', headers: { Authorization: 'Basic ' + b64(c.vendor + ':' + c.vendor) } },
+    { how: 'Basic vendor:(empty)', headers: { Authorization: 'Basic ' + b64(c.vendor + ':') } },
+    { how: 'x-metrc-key header only', headers: { 'x-metrc-key': c.vendor } },
+    { how: 'x-metrc-key + Basic vendor:vendor', headers: {
+        'x-metrc-key': c.vendor, Authorization: 'Basic ' + b64(c.vendor + ':' + c.vendor) } }
+  ];
+  var results = attempts.map(function (a) {
+    try {
+      var r = UrlFetchApp.fetch(target, { method: 'get', muteHttpExceptions: true, headers: a.headers });
+      return { how: a.how, http: r.getResponseCode(), body: r.getContentText().slice(0, 120) };
+    } catch (e) { return { how: a.how, error: String((e && e.message) || e) }; }
+  });
+
+  // Re-run setup and capture RESPONSE HEADERS — a key handed back out-of-band would be here.
+  var setupHeaders = {}, setupCode = null, setupBody = '';
+  try {
+    var sr = UrlFetchApp.fetch(c.base + '/sandbox/v2/integrator/setup', {
+      method: 'post', muteHttpExceptions: true, contentType: 'application/json',
+      headers: { 'x-metrc-key': c.vendor }, payload: '{}'
+    });
+    setupCode = sr.getResponseCode();
+    setupBody = sr.getContentText().slice(0, 200);
+    var h = sr.getAllHeaders();
+    Object.keys(h).forEach(function (k) {
+      // Names and lengths only — if a credential IS in here, do not print it.
+      var v = h[k];
+      setupHeaders[k] = (typeof v === 'string' && v.length > 40) ? '<' + v.length + ' chars>' : v;
+    });
+  } catch (e) { setupBody = 'error: ' + String((e && e.message) || e); }
+
+  return { ok: true, base: c.base, target: target, attempts: results,
+           setup_http: setupCode, setup_body: setupBody, setup_headers: setupHeaders };
 }
 
 /** Everyone METRC currently knows about, deduped across licences, keyed by permit number. */
