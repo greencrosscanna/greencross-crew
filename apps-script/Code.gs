@@ -106,6 +106,7 @@ function route_(e) {
       // Leaderboard's avatar service — its backend calls these so staff keep self-service
       // without a Crew login. See avatarSave_ for why it is not a public write.
       case 'metrc_health': return json_(metrcHealth_(p), p.callback);
+      case 'metrc_setup':  return json_(metrcSandboxSetup_(p), p.callback);
       case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
 
       case 'avatars':      return json_(avatarsForKiosk_(p), p.callback);
@@ -942,6 +943,82 @@ function metrcHealth_(p) {
   } catch (e) {
     out.ok = false;
     out.error = String((e && e.message) || e);
+  }
+  return out;
+}
+
+
+/**
+ * Bootstrap a SANDBOX user key. Metrc's sandbox lets an integrator mint its own industry user
+ * key via POST /sandbox/v2/integrator/setup, authenticated with the vendor key on an
+ * `x-metrc-key` HEADER — note that is API-Key auth, unlike every other endpoint, which uses
+ * Basic base64(vendor:user). Getting that wrong is the obvious first stumble.
+ *
+ * The returned key is written STRAIGHT INTO SCRIPT PROPERTIES and never included in the
+ * response: a credential that travels back over HTTP to a caller has been exposed to the
+ * caller's logs, terminal history and mine. We return its shape, not its value.
+ */
+function metrcSandboxSetup_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var c = metrcCreds_();
+  if (!c.vendor) return { ok: false, error: 'METRC_VENDOR_KEY is not set' };
+  if (!/sandbox/i.test(c.base)) {
+    return { ok: false, error: 'Refusing to run sandbox setup against ' + c.base +
+             ' — this endpoint only exists in the sandbox environment.' };
+  }
+  var res = UrlFetchApp.fetch(c.base + '/sandbox/v2/integrator/setup', {
+    method: 'post', muteHttpExceptions: true, contentType: 'application/json',
+    headers: { 'x-metrc-key': c.vendor }, payload: '{}'
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code >= 300) return { ok: false, http: code, error: body.slice(0, 400) };
+
+  /*
+   * This endpoint is ASYNCHRONOUS and does not hand back the key. Observed live:
+   *   first call  -> 200 "User queued for creation"  (plain text, not JSON)
+   *   later calls -> 200 with an empty body          (nothing left to do)
+   * Neither is an error, and calling either one a failure sends you debugging a working
+   * integration. The key itself is issued into Metrc Connect, not returned over the wire.
+   */
+  var trimmed = String(body || '').trim();
+  var data = null;
+  if (trimmed) { try { data = JSON.parse(trimmed); } catch (e) { data = null; } }
+  if (!data) {
+    return { ok: true, http: code, user_key_stored: false, async: true,
+             metrc_said: trimmed || '(empty body)',
+             note: trimmed
+               ? 'Metrc QUEUED the sandbox user. It does not return the key — collect it from ' +
+                 'Metrc Connect > Users, then set METRC_USER_KEY.'
+               : 'Nothing to do: the sandbox user already exists from an earlier call. Collect ' +
+                 'its key from Metrc Connect > Users, then set METRC_USER_KEY.' };
+  }
+
+  // The field name is not documented consistently across states — find the key without guessing.
+  var found = '', foundIn = '';
+  function scan(o, path) {
+    if (!o || typeof o !== 'object') return;
+    Object.keys(o).forEach(function (k) {
+      var v = o[k];
+      if (typeof v === 'string' && v.length >= 20 && /key/i.test(k) && !found) {
+        found = v; foundIn = (path ? path + '.' : '') + k;
+      } else if (v && typeof v === 'object') { scan(v, (path ? path + '.' : '') + k); }
+    });
+  }
+  scan(Array.isArray(data) ? { list: data } : data, '');
+
+  var out = { ok: true, http: code, response_fields: Object.keys(
+    Array.isArray(data) ? (data[0] || {}) : data).sort() };
+  if (found) {
+    PropertiesService.getScriptProperties().setProperty('METRC_USER_KEY', found);
+    out.user_key_stored = true;
+    out.found_in_field = foundIn;
+    out.key_length = found.length;   // shape only — never the value
+    out.note = 'Sandbox user key written to METRC_USER_KEY. Its value is deliberately not returned.';
+  } else {
+    out.user_key_stored = false;
+    out.raw_preview = body.slice(0, 400);
+    out.note = 'No key-like field found. Inspect response_fields and set METRC_USER_KEY by hand.';
   }
   return out;
 }
