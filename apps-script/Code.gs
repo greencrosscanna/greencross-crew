@@ -1215,6 +1215,13 @@ function rosterJoin_() {
       employee_id: id, name_key: nameToKey_(r.full_name), name: String(r.full_name || ''),
       store: String(r.home_store || ''),
       preferred_name: String(r.preferred_name || ''),
+      avatar_config: String(r.avatar_config || ''),
+      /* THE AVATAR SEED. DiceBear generates a face from a seed, and Leaderboard historically
+         seeded on nameKey — which derives from the NAME, so a rename or one of our merges
+         silently produced a different person's face. Pinned to employee_number, which is
+         issued once and never reused. employee_id is only a fallback for someone not yet
+         numbered; they get a stable face the moment a number is assigned. */
+      avatar_seed: String(a.employee_number || r.employee_number || r.employee_id || ''),
       dutchie_employee_id: String(r.dutchie_employee_id || ''),
       user_id: String(r.user_id || ''),
       role: String(r.role_title || '').trim() || 'Budtender',
@@ -1299,7 +1306,8 @@ function timeWithCompany_(hireIso, today) {
  * link to the users tab that owns email). core-admin lost these once already and caught it only
  * by diffing all 75 rows. We read the live row, lay changes on top, and write the whole thing back.
  */
-var IDENTITY_FIELDS = ['full_name', 'preferred_name', 'home_store', 'role_title', 'hire_date'];
+var IDENTITY_FIELDS = ['full_name', 'preferred_name', 'home_store', 'role_title', 'hire_date',
+                       'avatar_config'];
 
 function saveIdentity_(p) {
   var auth = requireCrew_(p);
@@ -1334,6 +1342,20 @@ function saveIdentity_(p) {
     changes.home_store = st;
   }
   if (p.role_title != null) changes.role_title = String(p.role_title).trim();
+  if (p.avatar_config != null) {
+    var av = String(p.avatar_config).trim();
+    if (av) {
+      // Store the config, never a rendered image — Core keeps DiceBear params only.
+      try {
+        var parsed = JSON.parse(av);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+        av = JSON.stringify(parsed);
+      } catch (e) {
+        return { ok: false, error: 'avatar_config must be a JSON object of DiceBear params' };
+      }
+    }
+    changes.avatar_config = av;
+  }
   if (p.hire_date != null) {
     var hd = String(p.hire_date).trim();
     if (hd && !normDate_(hd)) return { ok: false, error: 'invalid hire date: ' + hd + ' (expected YYYY-MM-DD)' };

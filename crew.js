@@ -106,6 +106,106 @@
     return id ? (state.stores[id] || PSEUDO_STORES[id] || id) : '—';
   }
 
+
+  /* ── Avatars ────────────────────────────────────────────────────────────────
+   * buildAvatarUrl and the GC hat SVG are lifted VERBATIM from Leaderboard so a face is
+   * byte-identical in both apps. Do not "tidy" the parameter rules — each one encodes a
+   * DiceBear quirk: `_none` means probability 0 and skip the colour, `_gchat` renders
+   * shortFlat underneath with our hat overlaid, and hat/winterHat1 take hatColor rather
+   * than hairColor. Leaderboard keeps only these render bits; Crew owns the data.
+   */
+  var GC_HAT_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 280.01"><g><g><path d="M86.239,62.287c48.508-3.223,59.204-3.223,107.712,0,2.156,9.668,18.16,23.768,9.425,19.336-13.835-7.019-113.784-7.302-125.645.412-6.37,4.143,6.352-10.08,8.507-19.748Z" fill="#2c302d" stroke="#000" stroke-linejoin="round" stroke-width="4"/><path d="M86.7,67.121c-6.468-46.192,32.82-57.199,53.6-57.199,23.549,0,59.586,11.007,53.119,57.199h-106.718Z" fill="#2c302d" stroke="#000" stroke-linejoin="round" stroke-width="4"/><path d="M140.3,4.3c2.679,0,4.851.598,4.851,3.268s-1.931,2.341-4.61,2.341-5.091.329-5.091-2.341,2.172-3.268,4.851-3.268Z"/></g><path d="M146.709,23.878l.003,4.438c0,1.872-1.514,3.387-3.387,3.387l-.003-6.751c0-.578-.468-1.074-1.074-1.074h-4.02c-.578,0-1.074.496-1.074,1.074l-.029,6.405c0,1.873-1.514,3.387-3.359,3.387h-6.334c-.578,0-1.074.496-1.074,1.074v4.02c0,.606.496,1.074,1.074,1.074h4.998c.579,0,1.074-.468,1.074-1.074v-.22c0-1.983,1.597-3.58,3.58-3.58v4.681c0,1.983-1.597,3.58-3.58,3.58h-7.146c-1.982,0-3.58-1.597-3.58-3.58v-5.755c0-1.982,1.597-3.607,3.58-3.607h7.418s0-.748,0-.748l-.008-6.731c0-1.982,1.625-3.58,3.607-3.58h5.755c1.983,0,3.58,1.597,3.58,3.58ZM133.769,51.891l-.003-4.438c0-1.872,1.514-3.387,3.387-3.387l.003,6.751c0,.578.468,1.074,1.074,1.074h4.02c.578,0,1.074-.496,1.074-1.074l-.008-6.751c1.873,0,3.387,1.515,3.387,3.387l.008,4.438c0,1.982-1.625,3.58-3.607,3.58h-5.755c-1.983,0-3.58-1.597-3.58-3.58ZM157.192,44.365h-10.415c-1.982,0-3.58-1.597-3.58-3.58v-5.755c0-1.982,1.597-3.607,3.58-3.607h10.446c0,1.873-1.515,3.387-3.387,3.387h-5.985c-.578,0-1.074.496-1.074,1.074v4.02c0,.606.496,1.074,1.074,1.074h5.954c1.872,0,3.387,1.515,3.387,3.387Z" fill="#93d500"/></g></svg>';
+
+  var HAT_TOPS = { hat: true, winterHat1: true };
+
+  function buildAvatarUrl(cfg, seed) {
+    var params = [];
+    params.push('seed=' + encodeURIComponent(seed || 'unknown'));
+    var noAccessories = cfg.accessories === '_none';
+    var noFacialHair  = cfg.facialHair  === '_none';
+    var isGcHat       = cfg.top === '_gchat';
+    var noHair        = cfg.top === '_none';
+    var isHat         = !!(cfg.top && HAT_TOPS[cfg.top]);
+    Object.keys(cfg).forEach(function (k) {
+      var v = cfg[k];
+      if (v == null || v === '_none') return;
+      if (k === 'seed') return;
+      if (k === 'top' && isGcHat) { params.push('top=shortFlat'); return; }
+      if (k === 'accessoriesColor' && noAccessories) return;
+      if (k === 'facialHairColor'  && noFacialHair)  return;
+      if (k === 'hairColor'        && (noHair || isHat)) return;
+      if (k === 'hatColor'         && !isHat)         return;
+      params.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+    });
+    params.push('accessoriesProbability=' + (noAccessories ? '0' : '100'));
+    params.push('facialHairProbability='  + (noFacialHair  ? '0' : '100'));
+    params.push('topProbability='         + ((noHair && !isGcHat) ? '0' : '100'));
+    return 'https://api.dicebear.com/9.x/avataaars/svg?' + params.join('&');
+  }
+
+  var AVATAR_OPTIONS = {
+    skinColor:    ['ffdbb4','f8d25c','fd9841','edb98a','d08b5b','ae5d29','614335'],
+    top: ['_none','_gchat','hat','winterHat1','bigHair','bob','bun','curly','curvy','dreads','dreads01','dreads02','frida','frizzle','fro','froBand','longButNotTooLong','miaWallace','shaggy','shaggyMullet','shavedSides','shortCurly','shortFlat','shortRound','shortWaved','sides','straight01','straight02','straightAndStrand','theCaesar','theCaesarAndSidePart'],
+    hairColor:    ['2c1b18','4a312c','724133','a55728','b58143','c93305','d6b370','e8e1e1','ecdcbf','f59797'],
+    hatColor:     ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff'],
+    eyes:         ['default','eyeRoll','happy','hearts','side','squint','surprised','wink'],
+    eyebrows:     ['default','defaultNatural','flatNatural','frownNatural','raisedExcited','raisedExcitedNatural','upDown','upDownNatural'],
+    mouth:        ['default','smile','twinkle','tongue','serious','disbelief'],
+    facialHair:      ['_none','beardLight','beardMajestic','beardMedium','moustacheFancy','moustacheMagnum'],
+    facialHairColor: ['2c1b18','4a312c','724133','a55728','b58143','c93305','d6b370','e8e1e1','ecdcbf','f59797'],
+    clothing:     ['blazerAndShirt','blazerAndSweater','collarAndSweater','graphicShirt','hoodie','shirtCrewNeck','shirtScoopNeck','shirtVNeck'],
+    clothesColor: ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff'],
+    accessories:  ['_none','prescription01','prescription02','round','sunglasses','wayfarers'],
+    accessoriesColor: ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff']
+  };
+  var COLOR_KEYS = { skinColor:1, hairColor:1, hatColor:1, facialHairColor:1, clothesColor:1, accessoriesColor:1 };
+  var OPTION_ORDER = ['top','hairColor','hatColor','skinColor','eyes','eyebrows','mouth',
+                      'facialHair','facialHairColor','clothing','clothesColor',
+                      'accessories','accessoriesColor'];
+  var OPTION_LABEL = { top:'Hair / hat', hairColor:'Hair colour', hatColor:'Hat colour',
+    skinColor:'Skin', eyes:'Eyes', eyebrows:'Brows', mouth:'Mouth', facialHair:'Facial hair',
+    facialHairColor:'Facial hair colour', clothing:'Clothing', clothesColor:'Clothing colour',
+    accessories:'Glasses', accessoriesColor:'Glasses colour' };
+
+  var DEFAULT_AVATAR = { skinColor:'ffdbb4', top:'shortFlat', hairColor:'4a312c', hatColor:'262e33',
+    eyes:'default', eyebrows:'default', mouth:'default', facialHair:'_none',
+    facialHairColor:'2c1b18', clothing:'shirtCrewNeck', clothesColor:'262e33',
+    accessories:'_none', accessoriesColor:'3c4f5c' };
+
+  function parseCfg(row) {
+    if (!row.avatar_config) return null;
+    try { return JSON.parse(row.avatar_config); } catch (e) { return null; }
+  }
+  function initialsOf(name) {
+    return String(name || '').trim().split(/\s+/).slice(0, 2)
+      .map(function (w) { return w.charAt(0); }).join('').toUpperCase();
+  }
+  /* Puck: the rendered avatar, or initials when nobody has picked one. Faces come from an
+     external service, so a failed load falls back to initials rather than a broken image. */
+  function avatarPuck(row, size) {
+    var cfg = parseCfg(row);
+    var puck = el('span', 'crew-ava' + (size ? ' is-' + size : ''));
+    if (!cfg) {
+      puck.classList.add('is-initials');
+      puck.textContent = initialsOf(row.name);
+      return puck;
+    }
+    var img = el('img');
+    img.src = buildAvatarUrl(cfg, row.avatar_seed || row.employee_id);
+    img.alt = '';
+    img.addEventListener('error', function () {
+      puck.classList.add('is-initials');
+      puck.innerHTML = '';
+      puck.textContent = initialsOf(row.name);
+    });
+    puck.appendChild(img);
+    if (cfg.top === '_gchat') {
+      var hat = el('span', 'crew-ava-hat', GC_HAT_SVG);
+      puck.appendChild(hat);
+    }
+    return puck;
+  }
+
   // ─── views ───────────────────────────────────────────────────────────────────
   function renderLogin(errMsg) {
     clear();
@@ -471,9 +571,12 @@
       tr.appendChild(el('td', flagCls(row, 'employee_number', 'crew-numcell'),
         esc(row.employee_number || '—')));
 
-      tr.appendChild(el('td', null, '<b>' + esc(row.name) + '</b>' +
+      var tdName = el('td', 'crew-namecell');
+      tdName.appendChild(avatarPuck(row));
+      tdName.appendChild(el('span', null, '<b>' + esc(row.name) + '</b>' +
         (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '') +
         (row.retired ? ' <span class="crew-tag">retired</span>' : '')));
+      tr.appendChild(tdName);
       tr.appendChild(el('td', flagCls(row,'store','gx-muted'), esc(row.store ? storeName(row.store) : '—')));
       tr.appendChild(el('td', flagCls(row,'role','gx-muted'), esc(row.role) +
         (row.role_is_default ? '<span title="No role on file — defaulted"> *</span>' : '')));
@@ -610,6 +713,78 @@
                typing one risks handing a new person a retired employee's history. */
             '<label>Employee #<input value="' + esc(row.employee_number || 'auto') +
               '" size="4" disabled title="Assigned automatically — never reused"></label>';
+
+          /* Avatar picker. Lives beside the nickname because they are the same decision —
+             how this person is presented on the kiosk — and Crew is now the only place
+             either is set. */
+          var pickWrap = el('div', 'crew-avapick');
+          var working = parseCfg(row) || null;
+          var preview = el('div', 'crew-avapreview');
+          var seedNote = el('p', 'crew-editnote');
+          function paintPreview() {
+            preview.innerHTML = '';
+            var shown = { name: row.name, avatar_config: working ? JSON.stringify(working) : '',
+                          avatar_seed: row.avatar_seed, employee_id: row.employee_id };
+            preview.appendChild(avatarPuck(shown, 'lg'));
+            seedNote.innerHTML = working
+              ? 'Seed pinned to employee&nbsp;#<b>' + esc(row.avatar_seed || '—') +
+                '</b> — renaming will not change this face.'
+              : 'No avatar set — the kiosk shows initials.';
+          }
+          function paintControls() {
+            controls.innerHTML = '';
+            if (!working) return;
+            OPTION_ORDER.forEach(function (key) {
+              // Only offer a colour when the feature it colours is actually switched on.
+              if (key === 'hatColor' && !HAT_TOPS[working.top]) return;
+              if (key === 'hairColor' && (working.top === '_none' || HAT_TOPS[working.top])) return;
+              if (key === 'facialHairColor' && working.facialHair === '_none') return;
+              if (key === 'accessoriesColor' && working.accessories === '_none') return;
+              /* A config may not carry every key — Sky's had no hatColor at all, so choosing a
+                 hat rendered a control showing a value the config did not hold, and the avatar
+                 came back with DiceBear's default instead. Adopt the displayed value into the
+                 config so what you see is always what gets saved. */
+              if (working[key] == null) working[key] = AVATAR_OPTIONS[key][0];
+              var wrap = el('label', 'crew-avaopt');
+              var isColor = !!COLOR_KEYS[key];
+              var opts = AVATAR_OPTIONS[key].map(function (v) {
+                var lbl = v === '_none' ? 'none' : v === '_gchat' ? 'GC hat' : v;
+                return '<option value="' + esc(v) + '"' + (working[key] === v ? ' selected' : '') +
+                       '>' + esc(lbl) + '</option>';
+              }).join('');
+              wrap.innerHTML = '<span>' + esc(OPTION_LABEL[key] || key) + '</span>' +
+                '<select>' + opts + '</select>' +
+                (isColor ? '<i class="crew-avaswatch" style="background:#' + esc(working[key] || '000') + '"></i>' : '');
+              wrap.querySelector('select').addEventListener('change', function () {
+                working[key] = this.value;
+                // Controls first: choosing a hat introduces hatColor, and paintControls is what
+                // adopts that default into `working`. Painting the preview first would render
+                // one change behind, silently dropping the new key from the URL.
+                paintControls(); paintPreview();
+              });
+              controls.appendChild(wrap);
+            });
+          }
+          var controls = el('div', 'crew-avacontrols');
+          var avaActs = el('div', 'crew-avaacts');
+          var bStart = el('button', 'crew-save', working ? 'Reset to default' : 'Give them an avatar');
+          bStart.addEventListener('click', function () {
+            working = JSON.parse(JSON.stringify(DEFAULT_AVATAR));
+            bClear.style.display = '';
+            paintControls(); paintPreview();
+          });
+          var bClear = el('button', 'crew-save', 'Remove avatar');
+          bClear.style.display = working ? '' : 'none';
+          bClear.addEventListener('click', function () {
+            working = null; bClear.style.display = 'none';
+            paintControls(); paintPreview();
+          });
+          avaActs.appendChild(bStart); avaActs.appendChild(bClear);
+          pickWrap.appendChild(preview);
+          var pickCol = el('div', 'crew-avacol');
+          pickCol.appendChild(controls); pickCol.appendChild(avaActs); pickCol.appendChild(seedNote);
+          pickWrap.appendChild(pickCol);
+          paintControls(); paintPreview();
           var linked = [];
           if (row.dutchie_employee_id) linked.push('Dutchie ' + row.dutchie_employee_id);
           if (row.user_id) linked.push('account ' + row.user_id);
@@ -627,6 +802,7 @@
               ['full_name','preferred_name','home_store','role_title','hire_date'].forEach(function (f) {
                 q[f] = form.querySelector('[name=' + f + ']').value;
               });
+              q.avatar_config = working ? JSON.stringify(working) : '';
               var r = await Engine.jsonp('roster_identity', q, { timeoutMs: 45000, retries: 2 });
               if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
 
@@ -640,7 +816,7 @@
             }
           });
           acts.appendChild(go); acts.appendChild(st2);
-          cell.appendChild(form); cell.appendChild(note); cell.appendChild(acts);
+          cell.appendChild(form); cell.appendChild(pickWrap); cell.appendChild(note); cell.appendChild(acts);
           erow.appendChild(cell);
           tr.parentNode.insertBefore(erow, tr.nextSibling);
         });
