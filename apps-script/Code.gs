@@ -53,8 +53,17 @@ var ALIAS_HEADERS = ['alias_key', 'alias_name', 'employee_id', 'merged_at', 'mer
 /** Attributes a manager may edit from the roster UI. Everything else is import-owned. */
 var EDITABLE_ATTRS = ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage'];
 
-/** The HR workbook these numbers come from — surfaced in the UI so the source is one click away. */
-var HR_SHEET_URL = 'https://docs.google.com/spreadsheets/d/19AU1uywwizpb_x3NWqYwfgPOK94pbNBv/edit';
+/*
+ * The HR workbook is NO LONGER THE SOURCE OF TRUTH (Sky, 2026-08-18). GX Crew — backed by the
+ * GX Core registry — is. The spreadsheet is kept only as the historical record it came from.
+ *
+ * This is not just a label change. An import from a superseded source must be structurally
+ * incapable of overturning curated data: re-sending the sheet is exactly how four role
+ * corrections were silently reverted minutes after being made. hrImport_ therefore defaults to
+ * FILL mode — it writes a field only where the current value is EMPTY. Overwriting now takes an
+ * explicit mode=overwrite, which nothing routine should ever pass.
+ */
+var HR_SHEET_URL = '';   // no longer surfaced in the UI; Crew is the record
 
 /** Allowed shirt sizes. Kept server-side so the UI can't write junk into payroll-adjacent data. */
 var SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
@@ -651,12 +660,12 @@ function reviewItems_() {
   rows.forEach(function (r) {
     if (r.retired) return;
     if (!r.employee_number) {
-      add('missing_field', r, 'employee_number', '', 'assign next number', 'HR sheet',
-          'No employee number — the canonical stable key.', 'warn');
+      add('missing_field', r, 'employee_number', '', 'assign next number', 'GX Crew',
+          'No employee number — the canonical stable key. Run the auto-assign to issue the next one.', 'warn');
     }
     if (!r.hire_date) {
-      add('missing_field', r, 'hire_date', '', 'needs a hire date', 'HR sheet',
-          'No hire date, so tenure and work anniversary cannot be derived.', 'warn');
+      add('missing_field', r, 'hire_date', '', 'needs a hire date', 'GX Crew',
+          'No hire date, so tenure and work anniversary cannot be derived. Set it in the identity panel.', 'warn');
     }
   });
 
@@ -1359,6 +1368,7 @@ function hrImport_(p, body) {
   var list = (body && body.employees) || [];
   if (!list.length) return { ok: false, error: 'no employees in payload' };
   var dry = String(p.confirm || '') !== 'yes';
+  var overwrite = String(p.mode || '') === 'overwrite';
 
   var existing = [];
   try { existing = GXCore.getEmployees() || []; }
@@ -1404,11 +1414,12 @@ function hrImport_(p, body) {
     merged.employee_id = id;
     ['full_name', 'home_store', 'role_title', 'status', 'hire_date', 'employee_number'].forEach(function (k) {
       var v = String(r[k] == null ? '' : r[k]).trim();
-      if (v !== '') merged[k] = v;
+      if (v === '') return;
+      // FILL mode: never overturn a value the roster already holds. Crew is the system of
+      // record now, so an import can complete it but not contradict it.
+      if (!overwrite && String(merged[k] || '').trim() !== '') return;
+      merged[k] = v;
     });
-    // status is the one field an empty value must still be able to change — a retire is
-    // expressed by sending 'retired', never by omitting the field.
-    if (String(r.status || '').trim()) merged.status = String(r.status).trim();
     idRows.push(merged);
 
     var was = attrs[id] || {};
@@ -1418,7 +1429,8 @@ function hrImport_(p, body) {
       var v = String(r[k] == null ? '' : r[k]).trim();
       if (k === 'birthday') v = normBirthday_(v);
       if (k === 'shirt_size') v = normShirt_(v) || (was[k] || '');
-      a[k] = v !== '' ? v : (was[k] || '');
+      var current = String(was[k] || '').trim();
+      a[k] = (!overwrite && current !== '') ? current : (v !== '' ? v : current);
     });
     a.updated_at = new Date().toISOString();
     a.updated_by = 'hr-import';
@@ -1427,6 +1439,7 @@ function hrImport_(p, body) {
 
   var summary = {
     ok: true, mode: dry ? 'preview' : 'commit',
+    write_mode: overwrite ? 'OVERWRITE (contradicts the roster)' : 'fill-only (never overturns a held value)',
     incoming: list.length,
     matched_existing: idRows.length - created.length,
     would_create: created.length, created_names: created.slice(0, 40),

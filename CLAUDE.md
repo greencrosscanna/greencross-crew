@@ -60,6 +60,24 @@ run `./deploy.sh`, then `dev_ship` the job. Don't open PRs for routine work.
 **Revert to branch + PR the moment Crew goes live to anyone but Sky** — from then on staff are looking at
 it, and the ordinary policy applies.
 
+## System of record — Crew, not the spreadsheet (decided 2026-08-18)
+The HR workbook (`GreenCross_Staff.xlsx`) built the initial roster and is now **history**. **GX Crew,
+backed by the GX Core `employees` registry, is the point of truth for people data.**
+
+This is enforced, not just documented: `hr_import` defaults to **fill-only** — it writes a field only
+where the current value is empty, and overturning a held value needs an explicit `mode=overwrite`.
+That default exists because re-sending the sheet once silently reverted four role corrections minutes
+after they were made. A superseded source must not be able to contradict the record.
+
+Related invariants worth keeping:
+- **`employee_number` is issued, never typed** — `assign_numbers` allocates `max(ever seen) + 1`,
+  counting retired and merged rows, so a number is never reused. `00` is reserved for the owner and
+  sits outside the sequence. `set_number` (deploy-secret) is the only override.
+- **Every write to GX Core is read-merge-write.** `gxWrite_` replaces the whole row, so a partial
+  write blanks `dutchie_employee_id` (SPIFF/Leaderboard attribution) and `user_id` (email link).
+- **Leading zeros need plain-text columns.** Sheets coerces `"00"` to `0`; `employee_number`,
+  `birthday` and `permit_number` are pinned to `@` format, and number comparisons are numeric.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.

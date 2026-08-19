@@ -375,10 +375,8 @@
     bar.innerHTML = '<span>Signed in as <b>' + esc(state.user) + '</b> · ' + esc(state.role) +
       (state.canEdit ? '' : ' <em>(read-only)</em>') + '</span>';
     var right = el('span', 'crew-bar-right');
-    if (state.hrSheetUrl) {
-      right.innerHTML = '<a class="crew-link" href="' + esc(state.hrSheetUrl) +
-        '" target="_blank" rel="noopener">HR staff sheet ↗</a>';
-    }
+    /* The HR spreadsheet link is gone deliberately: Crew is the system of record now, and a
+       one-click path back to the superseded source is an invitation to edit the wrong thing. */
     var out = el('button', 'crew-link', 'Sign out');
     out.addEventListener('click', function () { setSession('', ''); boot(); });
     right.appendChild(out);
@@ -659,6 +657,7 @@
       (state.canEdit && !state.editMode
         ? 'Read-only. Turn on <b>Edit mode</b> to change wage, tee, birthday or OLCC details. ' : '') +
       'Employee numbers are assigned automatically and never reused. ' +
+      'This roster is the system of record — the HR spreadsheet it was built from is now history. ' +
       'Red marks missing or questionable data — it clears as soon as the value is filled in. ' +
       'Birthdays are month + day only, no birth year. Permit columns are imported from METRC ' +
       'and read-only here. Leaderboard receives a derived celebrations flag, never a date.'));
