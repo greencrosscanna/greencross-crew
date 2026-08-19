@@ -6,7 +6,17 @@
   <title>GX Crew</title>
   <!-- Shared GX runtime (theme + resilient GX Core client) — same-origin org Pages -->
   <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-theme.css">
-  <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-client.js"></script>
+  <script src="gx-dev.js"></script>
+<script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-client.js"></script>
+<script>
+  // Dev guard: non-mutating actions. Anything NOT listed is blocked when this page is served
+  // from localhost, until writes are armed (banner button / ?arm=1 / GXDev.arm()). Inert in
+  // production. Add new READS here; leave writes off the list.
+  // Guarded writes: review_resolve, roster_identity, roster_merge, roster_retire, roster_save
+  if (window.GXDev) window.GXDev.declareReads([
+    'config', 'login', 'review', 'roster', 'stores'
+  ]);
+</script>
   <style>
     /* Shell layout only. Every colour comes from gx-theme.css tokens — never hardcode one here,
        or the app drifts out of the suite's look the next time the theme moves. */

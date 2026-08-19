@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "crew",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "serve.py"
+      ],
+      "port": 8755
+    }
+  ]
+}
