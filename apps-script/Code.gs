@@ -102,6 +102,11 @@ function route_(e) {
       case 'assign_numbers': return json_(assignNumbers_(p), p.callback);
       case 'set_number':     return json_(setNumber_(p), p.callback);
       case 'email_proposals': return json_(emailProposals_(p), p.callback);
+
+      // Leaderboard's avatar service — its backend calls these so staff keep self-service
+      // without a Crew login. See avatarSave_ for why it is not a public write.
+      case 'avatars':      return json_(avatarsForKiosk_(p), p.callback);
+      case 'avatar_save':  return json_(avatarSave_(p, body), p.callback);
       case 'create_accounts': return json_(createAccounts_(p, body), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
@@ -710,6 +715,131 @@ function createAccounts_(p, body) {
   out.linked = linked;
   out.note = 'users rows carry no password and grant no app access — app_access is separate.';
   return out;
+}
+
+
+// ─── Avatar service for Leaderboard (server-to-server) ──────────────────────────
+/*
+ * Staff change their own avatar by clicking their puck on the kiosk — no login, no Crew
+ * access. That flow must keep working exactly as it does today; only the destination moves.
+ *
+ * WHY LEADERBOARD DOES NOT WRITE CORE DIRECTLY:
+ *   • core-admin's model is that Crew is the SOLE writer to the employees registry. Two writers
+ *     is how rows get silently clobbered, which we have already lived through once.
+ *   • gxWrite_ replaces whole rows, so every writer needs the read-merge-write discipline. Better
+ *     to keep that in one place than to reimplement it correctly in a second app.
+ *   • Leaderboard binds an older GXCore; avatar_config only exists from v127. Going through here
+ *     means no re-pin, and no risk of taking Leaderboard down for a cosmetic feature.
+ *
+ * WHY IT IS SECRET-GATED AND NOT PUBLIC:
+ *   The kiosk page is public JS and cannot hold a secret. So the browser calls LEADERBOARD's
+ *   backend (which already knows who is logged in), and that backend calls this with the shared
+ *   secret. Staff never authenticate to Crew, and there is no open write surface on the internet.
+ */
+function resolveEmployee_(rows, ref) {
+  var want = String(ref || '').trim();
+  if (!want) return null;
+  var lower = want.toLowerCase();
+  var byNum = null, byId = null;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r.employee_id || '').trim().toLowerCase() === lower) byId = r;
+    var n = String(r.employee_number || '').trim();
+    if (n && (n === want || parseInt(n, 10) === parseInt(want, 10))) byNum = byNum || r;
+  }
+  if (byId) return byId;
+  if (byNum && /^\d+$/.test(want)) return byNum;
+  // A merge or rename may have retired this key — follow the alias before giving up.
+  var alias = readAliases_()[nameToKey_(want.replace(/_/g, ' '))] || readAliases_()[lower];
+  if (alias) {
+    for (var j = 0; j < rows.length; j++) {
+      if (String(rows[j].employee_id || '').trim() === alias) return rows[j];
+    }
+  }
+  for (var k = 0; k < rows.length; k++) {
+    if (samePerson_(want.replace(/_/g, ' '), rows[k].full_name)) return rows[k];
+  }
+  return null;
+}
+
+/** Everything Leaderboard needs to render faces, keyed both ways so either join works. */
+function avatarsForKiosk_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var rows = GXCore.getEmployees() || [];
+  var attrs = readAttrs_();
+  var byKey = {}, byNumber = {}, names = {};
+  rows.forEach(function (r) {
+    var st = String(r.status || 'active').toLowerCase();
+    if (st === 'merged') return;
+    var id  = String(r.employee_id || '').trim();
+    var num = String((attrs[id] || {}).employee_number || r.employee_number || '').trim();
+    var cfg = String(r.avatar_config || '').trim();
+    if (cfg) {
+      var parsed = null;
+      try { parsed = JSON.parse(cfg); } catch (e) { parsed = null; }
+      if (parsed) {
+        // Seed travels WITH the config so Leaderboard never has to derive it from a name.
+        parsed.seed = num || id;
+        byKey[id] = parsed;
+        if (num) byNumber[num] = parsed;
+      }
+    }
+    var nick = String(r.preferred_name || '').trim();
+    if (nick) names[id] = nick;
+  });
+  return { ok: true, avatarConfigs: byKey, byEmployeeNumber: byNumber, nicknames: names,
+           note: 'seed is inside each config — do not regenerate it from a name key' };
+}
+
+/** Write one person's avatar. Called by Leaderboard's backend on behalf of a signed-in user. */
+function avatarSave_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var ref = String(p.employee || p.nameKey || p.employee_id || '').trim();
+  var raw = (body && body.config) || p.config || '';
+  var rows = GXCore.getEmployees() || [];
+  var emp = resolveEmployee_(rows, ref);
+  if (!emp) return { ok: false, error: 'could not resolve "' + ref + '" to anyone on the roster' };
+
+  var cfg = null;
+  if (String(raw).trim()) {
+    try {
+      cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('not an object');
+    } catch (e) { return { ok: false, error: 'config must be a JSON object of DiceBear params' }; }
+  }
+
+  var id = String(emp.employee_id).trim();
+  var attrs = readAttrs_();
+  var num = String((attrs[id] || {}).employee_number || emp.employee_number || '').trim();
+  if (cfg) cfg.seed = num || id;   // pin the seed; a rename must never change the face
+
+  var merged = {};
+  Object.keys(emp).forEach(function (k) { merged[k] = emp[k]; });   // read-merge-write
+  merged.employee_id = id;
+  merged.avatar_config = cfg ? JSON.stringify(cfg) : '';
+
+  /*
+   * gxWrite_ serialises on the script lock and gives up after 30s. Under any concurrent write
+   * that surfaces as "Lock timeout", which a staff member would see as their avatar failing to
+   * save for no reason they can act on. Observed on the very first live call, so it is not
+   * theoretical. Retry a couple of times before admitting defeat.
+   */
+  var lastErr = null;
+  for (var attempt = 0; attempt < 3; attempt++) {
+    try { GXCore.gxUpsertEmployee(merged); lastErr = null; break; }
+    catch (e) {
+      lastErr = e;
+      if (!/lock/i.test(String((e && e.message) || e))) break;   // only lock contention is retryable
+      Utilities.sleep(1500 * (attempt + 1));
+    }
+  }
+  if (lastErr) {
+    return { ok: false, retryable: /lock/i.test(String(lastErr.message || lastErr)),
+             error: String(lastErr.message || lastErr) };
+  }
+  bustRosterCache_();
+  return { ok: true, employee_id: id, name: emp.full_name, seed: num || id,
+           cleared: !cfg, resolved_from: ref };
 }
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
