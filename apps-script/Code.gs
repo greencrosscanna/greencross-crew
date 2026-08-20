@@ -126,6 +126,10 @@ function route_(e) {
       // browser (GXCore set_eom); this reads that value back and keeps Crew's own log of it.
       case 'eom_history':    return json_(getEomHistory_(p), p.callback);
 
+      // Enter the months that predate the log. Deploy-secret, and confirm=yes to write, because
+      // it is the only way anything reaches this record that Crew did not observe for itself.
+      case 'eom_backfill':   return json_(eomBackfill_(p, body), p.callback);
+
       case 'review':         return json_(getReview_(p), p.callback);
       case 'review_resolve': return json_(resolveReview_(p), p.callback);
       case 'review_report':  return json_(reportConflicts_(p, body), p.callback);
@@ -2631,6 +2635,21 @@ function identityRepair_(p) {
  * Core stores when the award is cleared.
  */
 
+/*
+ * The log's own sheet. started_at and recorded_at are pinned to PLAIN TEXT for the reason the
+ * roster's employee_number and birthday are: Sheets coerces anything date-shaped, and a coerced
+ * cell reads back as "Sun Mar 01 2026 …" rather than the ISO string this file compares and sorts
+ * on. Every ordering decision here is a string compare, so the format is load-bearing.
+ */
+function eomSheet_() {
+  var sh = sheetOf_(EOM_TAB, EOM_HEADERS);
+  try {
+    sh.getRange('C:C').setNumberFormat('@');
+    sh.getRange('E:E').setNumberFormat('@');
+  } catch (e) { /* formatting is a nicety; never fail a write over it */ }
+  return sh;
+}
+
 /** cfg.eom, normalised. undefined = never set, null = deliberately nobody, else the holder. */
 function eomCurrent_() {
   var raw;
@@ -2680,7 +2699,7 @@ function eomSync_(names) {
   }
   var name = wantId ? String((names || {})[wantId] || '') : '';
   var setBy = wantId ? String(cur.set_by || '') : '';
-  sheetOf_(EOM_TAB, EOM_HEADERS).appendRow([wantId, name, startedAt, setBy, now, 'observed']);
+  eomSheet_().appendRow([wantId, name, startedAt, setBy, now, 'observed']);
   rows.push({ employee_id: wantId, name: name, started_at: startedAt,
               set_by: setBy, recorded_at: now, source: 'observed' });
   return { rows: rows, error: '' };
@@ -2718,10 +2737,113 @@ function getEomHistory_(p) {
       ended_at: i < rows.length - 1 ? rows[i + 1].started_at : '',
       set_by: r.set_by,
       current: i === rows.length - 1,
-      nobody: !r.employee_id
+      nobody: !r.employee_id,
+      // Observed from cfg.eom, or entered by hand for a month that predates the log.
+      backfilled: r.source === 'backfill'
     });
   }
   return { ok: true, history: out, sync_error: synced.error || '' };
+}
+
+/*
+ * Enter reigns that predate the log.
+ *
+ * The engine can only observe what cfg.eom holds, and cfg.eom holds one value — so every month
+ * before Crew started watching is gone from the machine and survives only in somebody's memory.
+ * That is not a reason to leave the record starting in August; it is a reason to let a human put
+ * the earlier months in, and to mark them as what they are.
+ *
+ * Rows land with source='backfill', which the tab renders as "recorded" rather than passing them
+ * off as observed. A month is the granularity the record actually has — nobody remembers which
+ * Tuesday — so a backfilled reign starts on the 1st, the day is nominal, and the tab shows month
+ * and year only, which is the truth about how precise this is.
+ *
+ * DEDUPED ON (employee_id, month), not on the exact timestamp, for the same reason: re-running
+ * this must not seat a second August beside the one already observed, even though the observed
+ * one starts on the 20th.
+ *
+ * The tab is re-sorted by started_at afterwards. eomSync_ compares against the LAST row to decide
+ * whether cfg.eom has moved on, so a history appended out of order would make it think the award
+ * had changed hands every time anybody opened the tab.
+ */
+function eomBackfill_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var want = (body && body.rows) || null;
+  if (!want && p.rows) { try { want = JSON.parse(p.rows); } catch (e) { want = null; } }
+  if (!Array.isArray(want) || !want.length) {
+    return { ok: false, error: 'rows required: [{ employee_id, started_at }, …]' };
+  }
+
+  var known = {};
+  try {
+    (GXCore.getEmployees() || []).forEach(function (r) {
+      known[String(r.employee_id || '').trim()] = String(r.full_name || '');
+    });
+  } catch (e) { return { ok: false, error: 'could not read the registry: ' + String((e && e.message) || e) }; }
+
+  // Validate the WHOLE batch before writing any of it — a half-entered history is worse than a
+  // refusal, because the gap looks like a month nobody held it.
+  var plan = [];
+  for (var i = 0; i < want.length; i++) {
+    var id = String((want[i] && want[i].employee_id) || '').trim();
+    var at = String((want[i] && want[i].started_at) || '').trim();
+    if (!id) return { ok: false, error: 'row ' + (i + 1) + ': employee_id required' };
+    // Someone who held it and has since retired or been merged away still held it, so any status
+    // is acceptable — but the id must be a real person, not a typo that logs a reign to nobody.
+    if (!(id in known)) return { ok: false, error: 'row ' + (i + 1) + ': unknown employee_id ' + id };
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(at)) {
+      return { ok: false, error: 'row ' + (i + 1) + ': started_at must be a full ISO timestamp, got "' + at + '"' };
+    }
+    plan.push({ employee_id: id, name: known[id], started_at: at, month: at.slice(0, 7) });
+  }
+
+  /*
+   * REFUSE TO BACKFILL THE MONTH THAT IS CURRENTLY RUNNING. cfg.eom is live and eomSync_ will
+   * record it with its real timestamp the next time anybody opens the tab; entering it by hand
+   * first seats a second row for the same person in the same month, because the two disagree on
+   * the day and observation is deliberately exact where memory is not. Backfill is for months
+   * the log could never have seen, and the running one is not that.
+   */
+  var cur = eomCurrent_();
+  if (cur.state === 'held' && cur.since) {
+    var liveMonth = String(cur.since).slice(0, 7);
+    for (var j = 0; j < plan.length; j++) {
+      if (plan[j].month === liveMonth) {
+        return { ok: false, error: plan[j].month + ' is the month currently held by ' +
+          (known[cur.employee_id] || cur.employee_id) + ' — it will record itself. ' +
+          'Backfill only months that ended before the log started.' };
+      }
+    }
+  }
+
+  var have = {};
+  readTab_(EOM_TAB, EOM_HEADERS).forEach(function (r) {
+    have[r.employee_id + '|' + String(r.started_at).slice(0, 7)] = true;
+  });
+
+  if (String(p.confirm || '') !== 'yes') {
+    return { ok: true, mode: 'preview', would_add: plan.filter(function (x) {
+      return !have[x.employee_id + '|' + x.month]; }),
+      already_logged: plan.filter(function (x) { return have[x.employee_id + '|' + x.month]; })
+        .map(function (x) { return x.month + ' ' + x.name; }),
+      note: 're-run with confirm=yes to write' };
+  }
+
+  var sh = eomSheet_();
+  var now = new Date().toISOString();
+  var added = [], skipped = [];
+  plan.forEach(function (x) {
+    var key = x.employee_id + '|' + x.month;
+    if (have[key]) { skipped.push(x.month + ' ' + x.name); return; }
+    have[key] = true;
+    sh.appendRow([x.employee_id, x.name, x.started_at, '', now, 'backfill']);
+    added.push(x.month + ' ' + x.name);
+  });
+
+  var last = sh.getLastRow();
+  if (last > 2) sh.getRange(2, 1, last - 1, EOM_HEADERS.length).sort({ column: 3, ascending: true });
+
+  return { ok: true, mode: 'commit', added: added, skipped_already_logged: skipped };
 }
 
 // ─── Celebrations (the PII-free feed Leaderboard consumes) ──────────────────────

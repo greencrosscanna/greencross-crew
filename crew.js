@@ -651,7 +651,11 @@
       }
 
       li.appendChild(el('span', 'crew-eomlog-when', esc(eomSpan(h))));
-      if (h.set_by) li.appendChild(el('span', 'crew-eomlog-by', 'set by ' + esc(h.set_by)));
+      /* Provenance, because the two are not the same claim. An observed reign is what GX Core
+         actually held; a backfilled one is somebody's memory of a month that predates the log,
+         accurate to the month at best. Saying which is which costs one word. */
+      if (h.backfilled) li.appendChild(el('span', 'crew-eomlog-by', 'recorded'));
+      else if (h.set_by) li.appendChild(el('span', 'crew-eomlog-by', 'set by ' + esc(h.set_by)));
       list.appendChild(li);
     });
 
