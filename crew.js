@@ -385,7 +385,7 @@
     var nav = document.getElementById('navTabs');
     if (!nav) return null;
     nav.innerHTML = '';
-    [['roster', 'Roster'], ['review', 'Review']].forEach(function (v) {
+    [['roster', 'Roster'], ['review', 'Review'], ['eom', 'EoM']].forEach(function (v) {
       var n = state.reviewCounts || {};
       var badge = '';
       if (v[0] === 'review' && (n.high || n.warn)) {
@@ -395,7 +395,9 @@
       var b = el('button', 'gx-topnav-tab' + (state.view === v[0] ? ' is-active' : ''), v[1] + badge);
       b.addEventListener('click', function () {
         state.view = v[0];
-        if (v[0] === 'review' && !state.review) loadReview(); else render();
+        if (v[0] === 'review' && !state.review) loadReview();
+        else if (v[0] === 'eom' && state.eom === undefined) loadEom();
+        else render();
       });
       nav.appendChild(b);
     });
@@ -528,8 +530,110 @@
     mount.appendChild(card('Review <span class="gx-muted crew-count">' + items.length + '</span>', nodes));
   }
 
+
+  /* ── Employee of the Month ─────────────────────────────────────────────────────────────────────
+     An HR call, so it lives here rather than in Leaderboard, which only RENDERS the badge on the
+     kiosk. Moved out of Leaderboard's Settings along with nicknames, avatars and job titles.
+
+     Stored in GX Core as `cfg.eom`, keyed on employee_id — never on a name. Leaderboard used to key
+     it on a name-derived string, so renaming somebody silently dropped the star off the board. Same
+     flaw we already fixed for avatar seeds by pinning them to employee_number.
+
+     Writes go to GX Core directly with the signed-in user's token; Core checks the crew grant and
+     that the id belongs to a live employee. Crew deliberately holds no deploy secret. */
+
+  async function loadEom() {
+    state.eom = null;
+    try {
+      var r = await GXCore.jsonp('config', { key: 'cfg.eom' }, { retries: 1, timeoutMs: 8000 });
+      var raw = r && r.value;
+      if (raw) {
+        var v = (typeof raw === 'object') ? raw : JSON.parse(raw);
+        state.eom = (v && v.employee_id) ? String(v.employee_id) : null;
+      }
+    } catch (e) { state.eom = null; }
+    render();
+  }
+
+  async function setEom(employeeId, label) {
+    var prev = state.eom;
+    state.eom = employeeId || null;            // optimistic: the radio has already moved
+    renderEom();
+    try {
+      var r = await GXCore.jsonp('set_eom',
+        { token: token(), employee_id: employeeId || '' }, { retries: 1, timeoutMs: 12000 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'Save failed');
+      renderStatus(employeeId ? ('Employee of the Month: <b>' + esc(label) + '</b>')
+                              : 'Employee of the Month cleared');
+    } catch (e) {
+      state.eom = prev;                        // put it back rather than lie about what is stored
+      renderEom();
+      renderStatus('Could not save: ' + esc(e.message || String(e)));
+    }
+  }
+
+  function renderEom() {
+    clear();
+    navBar();
+    renderUserChip();
+
+    var live = (state.rows || []).filter(function (r) { return !r.retired; });
+    live.sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+
+    var nodes = [];
+    var bar = el('div', 'crew-bar');
+    bar.innerHTML = '<span>One person at a time. Picking saves immediately' +
+      (state.canEdit ? '' : ' <em>(read-only — you cannot change this)</em>') + '.</span>';
+    nodes.push(bar);
+
+    if (state.eom === undefined) {
+      nodes.push(el('div', 'gx-muted', 'Loading…'));
+      mount.appendChild(card('Employee of the Month', nodes));
+      return;
+    }
+
+    var grid = el('div', 'crew-eom');
+    live.forEach(function (row) {
+      var isCur = state.eom && String(row.employee_id) === String(state.eom);
+      var lbl = el('label', 'crew-eom-pick' + (isCur ? ' is-current' : ''));
+
+      var radio = el('input');
+      radio.type = 'radio';
+      radio.name = 'crewEom';
+      radio.checked = !!isCur;
+      radio.disabled = !state.canEdit;
+      radio.addEventListener('change', function () {
+        if (radio.checked) setEom(String(row.employee_id), row.name);
+      });
+      lbl.appendChild(radio);
+      lbl.appendChild(avatarPuck(row));
+
+      // Crew's own naming convention: legal name bold, nickname in quotes beside it.
+      lbl.appendChild(el('span', 'crew-eom-name',
+        '<b>' + esc(row.name) + '</b>' +
+        (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '')));
+      lbl.appendChild(el('span', 'crew-eom-store', esc(row.store ? storeName(row.store) : '')));
+      grid.appendChild(lbl);
+    });
+
+    if (!live.length) grid.appendChild(el('div', 'gx-muted', 'No active employees on the roster.'));
+    nodes.push(grid);
+
+    if (state.canEdit) {
+      var clearBtn = el('button', 'gx-btn', 'Clear');
+      clearBtn.disabled = !state.eom;
+      clearBtn.addEventListener('click', function () { setEom('', ''); });
+      var foot = el('div', 'crew-eom-foot');
+      foot.appendChild(clearBtn);
+      nodes.push(foot);
+    }
+
+    mount.appendChild(card('Employee of the Month', nodes));
+  }
+
   function render() {
     if (state.view === 'review') renderReview();
+    else if (state.view === 'eom') renderEom();
     else renderRoster();
   }
 

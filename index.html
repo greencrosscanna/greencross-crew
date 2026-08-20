@@ -291,6 +291,24 @@
       appearance: none; -webkit-appearance: none; }
     .crew-table input:disabled.is-flagged, .crew-table select:disabled.is-flagged {
       color: var(--gx-red); border-color: transparent; }
+
+    /* Employee of the Month picker. A radio list rather than a table: exactly one person holds it,
+    and picking is the whole interaction — there is no Save button to forget to press. */
+    .crew-eom { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 6px; padding: 4px 0 2px; }
+    .crew-eom-pick { display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-width: 0;
+    border: 1px solid var(--gx-border); border-radius: var(--gx-radius-md); cursor: pointer;
+    transition: border-color .15s, background .15s; }
+    .crew-eom-pick:hover { border-color: var(--gx-border-strong); background: var(--gx-surface-2); }
+    .crew-eom-pick.is-current { border-color: var(--gx-gold); background: rgba(234,179,8,0.06); }
+    .crew-eom-pick input { accent-color: var(--gx-green); flex-shrink: 0; margin: 0; }
+    .crew-eom-pick input:disabled { cursor: not-allowed; }
+    .crew-eom-name { font-size: 13px; color: var(--gx-text); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .crew-eom-store { margin-left: auto; font-size: 10px; letter-spacing: .8px;
+    text-transform: uppercase; color: var(--gx-text-mute); flex-shrink: 0; }
+    .crew-eom-foot { display: flex; justify-content: flex-end; padding-top: 10px; }
+
   </style>
 </head>
 <body class="gx-app">
