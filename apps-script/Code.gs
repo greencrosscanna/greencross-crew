@@ -106,6 +106,7 @@ var ROLE_ALIASES = {
   'assistant mgr':            'Assistant Manager',
   'asst manager':             'Assistant Manager',
   'assistant general manager':'Assistant Manager',
+  'inventory coordinator':    'Assistant Manager',   // Sky's ruling, 2026-08-20
   'bud tender':               'Budtender',
   'budtenders':               'Budtender',
   'sales associate':          'Budtender'
@@ -2231,7 +2232,7 @@ var GROUP_RANK = [
   ['Admin',                    'Admin'],
   ['Store Managers',           'Store Manager'],
   ['Assistant Store Managers', 'Assistant Manager'],
-  ['Inventory Coordinators',   'Inventory Coordinator'],
+  ['Inventory Coordinators',   'Assistant Manager'],
   ['Accounting',               'Accounting'],
   ['Inventory',                'Inventory'],
   ['Bud Tenders',              'Budtender']
