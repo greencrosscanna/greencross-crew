@@ -43,8 +43,12 @@ the current Leaderboard incentive output for a full pay period.
   never `create-deployment`, which mints a *new* /exec URL and orphans `cfg.crewEngineUrl`.
   Note `clasp create` clones the remote manifest over the local one, wiping the GXCore binding;
   restore `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.)
-- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, binds **GXCore v121** —
-  v116 is where `gxUpsertEmployee`/`gxUpsertEmployees` landed, so anything below that cannot write identity).
+- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, binds **GXCore v155** —
+  v139 is where `gxUpsertEmployee` began read-merge-writing instead of rebuilding a row from the payload,
+  and v150 made that unconditional plus refused to blank a live `full_name`, so anything below v150 can
+  still blank the columns a partial write omits. The engine's `health` route reports the version the LIVE
+  DEPLOYMENT runs (`lib`), which is the only pin that matters — a manifest bump that was never deployed
+  still runs the old snapshot).
   Deploy the engine with clasp (`clasp create --type webapp --rootDir apps-script` on first setup, then
   `clasp push` / `clasp deploy`).
 - **Shared dev files** (`deploy.sh`, `.claude/` SessionStart hook + settings) come from gx-theme via
@@ -88,7 +92,7 @@ Core. Coordination is the **central brain-notes inbox** in GX Core: `/gxbrain` r
 `to_app=crew`, resolves done ones (`resolve_note`), and writes note-backs to any app (`add_note`). The
 SessionStart hook surfaces the same inbox.
 
-App-specific facts for the sync check: app key **`crew`** in GX Core; binds `GXCore` library **v121**;
+App-specific facts for the sync check: app key **`crew`** in GX Core; binds `GXCore` library **v155**;
 version recorded on deploy via the shared `deploy_version` endpoint (`deploy.sh`, reading `crew.js?v=N`)
 using the shared untracked `.gx_deploy_secret`.
 

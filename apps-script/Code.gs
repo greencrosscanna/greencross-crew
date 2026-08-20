@@ -149,8 +149,14 @@ function route_(e) {
       // One-time-ish migration of Leaderboard's nickname + avatar maps into Core display fields.
       case 'migrate_leaderboard': return json_(migrateLeaderboard_(p, body), p.callback);
 
+      // `lib` is the GXCore version this DEPLOYMENT actually runs, not the one appsscript.json
+      // reads today — a library call executes the snapshot the live deployment pinned, so the
+      // manifest in git can say 155 while the deployed engine still runs 152. This is the only
+      // way to tell from outside. Guarded because libVersion() itself only exists from v139.
       case 'health':
-        return json_({ ok: true, app: 'crew', ts: new Date().toISOString() }, p.callback);
+        var lib_ = null;
+        try { lib_ = GXCore.libVersion(); } catch (e) { lib_ = 'pre-139'; }
+        return json_({ ok: true, app: 'crew', lib: lib_, ts: new Date().toISOString() }, p.callback);
 
       // ── Roster (auth-gated — holds PII) ─────────────────────────────────────
       case 'roster':       return json_(getRoster_(p), p.callback);
