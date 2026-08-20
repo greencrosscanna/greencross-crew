@@ -34,7 +34,24 @@ var ATTR_TAB           = 'crew_attributes';
 var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'birthday', 'work_anniversary', 'employee_number', 'wage',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
+                          'celebrations_opt_out',
                           'updated_at', 'updated_by'];
+
+/* celebrations_opt_out: 'yes' keeps someone out of the kiosk celebrations feed.
+ *
+ * WHY A FLAG AND NOT A RULE. Some people are on the roster for ACCESS rather than for work —
+ * Sky is the owner, holds employee_number 00, and rings nothing — and the all-staff kiosk
+ * announcing his work anniversary is wrong. Every property that could be used to infer this
+ * belongs to real staff too: `corporate` is Mike's and Tawny's home_store, and `Admin` is a
+ * role people actually hold. So it cannot be derived; somebody has to say it.
+ *
+ * OPT-OUT, NOT OPT-IN, so an empty column means celebrate — every existing row keeps working
+ * and a new hire is never silently left out by a field nobody knew to set.
+ *
+ * SCOPE: celebrations ONLY. It deliberately does not touch EoM eligibility, perks, or payroll,
+ * because "don't announce my birthday on the kiosk" and "cannot be Employee of the Month" are
+ * different claims and one should not quietly imply the other. If those need it, read it there
+ * on purpose. */
 
 /* Review queue. Conflicts are DETECTED live, never stored — the roster is the truth and a
  * stale conflict list would be worse than none. What IS stored is the DECISION, so a resolved
@@ -426,6 +443,16 @@ function writeAttrs_(rec) {
 }
 
 // ─── Normalisation ──────────────────────────────────────────────────────────────
+
+/**
+ * A stored yes/no. Sheets hands back a checkbox as the BOOLEAN true, a typed cell as the string
+ * 'TRUE', and our own writes as 'yes' — readAttrs_ stringifies all three, so compare on text and
+ * accept every spelling rather than betting on which one a human used.
+ */
+function isTruthyFlag_(v) {
+  var s = String(v == null ? '' : v).trim().toLowerCase();
+  return s === 'yes' || s === 'true' || s === 'y' || s === '1';
+}
 
 /**
  * Leaderboard's join key. MUST stay byte-identical to `nameToKey_` in the Leaderboard repo
@@ -1761,6 +1788,7 @@ function rosterJoin_() {
       employee_number: a.employee_number || '', wage: a.wage || '',
       shirt_size: normShirt_(a.shirt_size), birthday: normBirthday_(a.birthday),
       work_anniversary: anniv, anniversary_is_override: !!normDate_(a.work_anniversary),
+      celebrations_opt_out: isTruthyFlag_(a.celebrations_opt_out),
       permit_number: a.permit_number || '', permit_expires: a.permit_expires || '',
       permit_status: a.permit_status || '',
       permit_days_left: a.permit_expires && dateFromIso_(a.permit_expires)
@@ -2021,6 +2049,9 @@ function saveRosterAttrs_(p) {
     permit_expires:   p.permit_expires == null ? (existing.permit_expires || '') : (normDate_(String(p.permit_expires).trim()) || ''),
     permit_status:    p.permit_expires != null && String(p.permit_expires).trim() && !existing.permit_status
                         ? 'Active' : (existing.permit_status || ''),
+    celebrations_opt_out: p.celebrations_opt_out == null
+                        ? (existing.celebrations_opt_out || '')
+                        : (isTruthyFlag_(p.celebrations_opt_out) ? 'yes' : ''),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };
@@ -3014,6 +3045,7 @@ function getCelebrations_(p) {
     var a = attrs[id];
     var person = byId[id];
     if (!person) return;   // inactive or unknown — don't celebrate someone who left
+    if (isTruthyFlag_(a.celebrations_opt_out)) return;   // on the roster for access, not for work
     var base = {
       name_key: nameToKey_(person.full_name),
       name:     String(person.full_name || ''),

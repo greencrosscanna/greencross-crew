@@ -932,6 +932,37 @@
         });
         tdS.appendChild(ret);
 
+        /* Celebrations opt-out. A toggle here rather than a table column, because it applies to
+           the handful of people who are on the roster for ACCESS rather than for work — the
+           kiosk should not announce the owner's work anniversary to the whole company. It is
+           deliberately not inferred from role or store: `corporate` and `Admin` both belong to
+           real staff who should be celebrated. */
+        var cel = el('button', 'crew-link crew-celebrate',
+          row.celebrations_opt_out ? 'Celebrations: off' : 'Celebrations: on');
+        cel.title = row.celebrations_opt_out
+          ? 'Hidden from the kiosk birthday / anniversary feed. Click to include them again.'
+          : 'Shown on the kiosk birthday / anniversary feed. Click to hide them.';
+        cel.addEventListener('click', async function () {
+          var turningOff = !row.celebrations_opt_out;
+          cel.disabled = true; status.textContent = '…'; status.className = 'crew-save-status';
+          try {
+            var r = await Engine.jsonp('roster_save', { token: token(), employee_id: row.employee_id,
+              /* 'no', not '' — an empty param can be dropped on the way out, and a dropped field
+                 means "leave alone" to the engine, so turning celebrations back ON would look
+                 like it saved and change nothing. */
+              celebrations_opt_out: turningOff ? 'yes' : 'no' },
+              { timeoutMs: 45000, retries: 2 });
+            if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
+            row.celebrations_opt_out = turningOff;
+            cel.textContent = turningOff ? 'Celebrations: off' : 'Celebrations: on';
+            status.textContent = 'Saved'; status.className = 'crew-save-status ok';
+          } catch (e) {
+            status.textContent = (e && e.message) || 'Failed';
+            status.className = 'crew-save-status err';
+          } finally { cel.disabled = false; }
+        });
+        tdS.appendChild(cel);
+
         /* Merge is two clicks: mark one row, then pick the row to keep. Duplicates are always
            two rows in this table, so selecting them here beats typing ids into a form. */
         var mg = el('button', 'crew-link crew-merge',
