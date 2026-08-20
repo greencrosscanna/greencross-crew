@@ -33,7 +33,7 @@
   var mount = document.getElementById('app');
   var GXCore = window.GXClient(GXCORE_URL);
   var Engine = null;           // built once we know the engine URL
-  var state  = { rows: [], canEdit: false, shirtSizes: [], user: '', role: '', identity: null,
+  var state  = { rows: [], canEdit: false, shirtSizes: [], roleTitles: [], user: '', role: '', identity: null,
                  stores: {}, showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
                  sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false,
                  view: 'roster', review: null, reviewCounts: {},
@@ -978,13 +978,32 @@
                      esc(state.stores[sid]) + '</option>'; }))
             .concat(['<option value="corporate"' + (row.store === 'corporate' ? ' selected' : '') +
                      '>Corporate</option>']).join('');
+
+          /*
+           * Role is a closed set of four, so it is picked and never typed. A free-text box is how
+           * "Assistant Store Manager" and "Assistant Manager" both ended up in a registry that
+           * Leaderboard groups by, and neither one is a typo anybody would notice.
+           *
+           * The one subtlety: a row may already HOLD a title outside the four, put there by an
+           * older import. Dropping it from the list would mean opening the panel to fix a
+           * birthday and silently re-filing that person as somebody else on save. So an
+           * off-list value is carried as its own option, selected, and labelled — visible, kept,
+           * and one click from being corrected.
+           */
+          var held = row.role_is_default ? '' : String(row.role || '').trim();
+          var offList = held && state.roleTitles.indexOf(held) < 0;
+          var roleOpts = ['<option value="">— none — (shows as Budtender)</option>']
+            .concat(state.roleTitles.map(function (t) {
+              return '<option value="' + esc(t) + '"' + (held === t ? ' selected' : '') + '>' +
+                     esc(t) + '</option>'; }))
+            .concat(offList ? ['<option value="' + esc(held) + '" selected>' + esc(held) +
+                               ' — not a standard role</option>'] : []).join('');
           form.innerHTML =
             '<label>Full name<input name="full_name" value="' + esc(row.name) + '"></label>' +
             '<label>Nickname<input name="preferred_name" value="' + esc(row.preferred_name || '') +
               '" placeholder="shown on the board"></label>' +
             '<label>Store<select name="home_store">' + storeOpts + '</select></label>' +
-            '<label>Role<input name="role_title" value="' + esc(row.role_is_default ? '' : row.role) +
-              '" placeholder="Budtender"></label>' +
+            '<label>Role<select name="role_title">' + roleOpts + '</select></label>' +
             '<label>Hire date<input name="hire_date" type="date" value="' + esc(row.hire_date || '') + '"></label>' +
             /* Shown, never editable. The number is issued by the system and never reused —
                typing one risks handing a new person a retired employee's history. */
@@ -1153,6 +1172,9 @@
       state.rows       = r.rows || [];
       state.canEdit    = !!r.can_edit;
       state.shirtSizes = r.shirt_sizes || [];
+      // The role vocabulary is the engine's, not the UI's — so the dropdown can never offer a
+      // title the engine would refuse, and adding a fifth role is a one-line server change.
+      state.roleTitles = r.role_titles || [];
       state.user       = r.user || '';
       state.role       = r.role || '';
       state.identity   = r.identity_source || null;

@@ -75,6 +75,57 @@ var HR_SHEET_URL = '';   // no longer surfaced in the UI; Crew is the record
 /** Allowed shirt sizes. Kept server-side so the UI can't write junk into payroll-adjacent data. */
 var SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
 
+/*
+ * THE ROLE VOCABULARY. Four titles, and role_title is a closed set — the roster offers these
+ * as a dropdown and the engine refuses anything else, so a role can never arrive misspelled or
+ * in a variant nobody else recognises.
+ *
+ * It has to be enforced here and not only in the UI. role_title is GX Core identity, read by
+ * Leaderboard and SPIFF, and Crew is its only writer — but not through one door: the roster
+ * panel, hr_import, the Dutchie seed and the review queue all reach role_title. A dropdown
+ * closes exactly one of those.
+ *
+ * Ranked most senior first; the roster orders the dropdown this way rather than alphabetically.
+ */
+var ROLE_TITLES = ['Admin', 'Store Manager', 'Assistant Manager', 'Budtender'];
+
+/*
+ * Names other systems use for the same four jobs. Dutchie's permission groups and the old HR
+ * sheet each spell them their own way, and "Assistant Store Manager" is not a fifth role — it
+ * is this one, typed differently. Mapping is how an import stays useful without being allowed
+ * to widen the vocabulary. Keys are lower-cased and space-collapsed.
+ */
+var ROLE_ALIASES = {
+  'administrator':            'Admin',
+  'admin manager':            'Admin',
+  'store mgr':                'Store Manager',
+  'general manager':          'Store Manager',
+  'assistant store manager':  'Assistant Manager',
+  'asst store manager':       'Assistant Manager',
+  'asst. store manager':      'Assistant Manager',
+  'assistant mgr':            'Assistant Manager',
+  'asst manager':             'Assistant Manager',
+  'assistant general manager':'Assistant Manager',
+  'bud tender':               'Budtender',
+  'budtenders':               'Budtender',
+  'sales associate':          'Budtender'
+};
+
+/**
+ * Canonicalise a role title, or return '' if it is not one of the four.
+ *
+ * '' is the honest answer for an unknown title and callers must treat it as a refusal, not as
+ * "no role" — silently writing '' would erase a title someone deliberately set.
+ */
+function normRole_(v) {
+  var s = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  for (var i = 0; i < ROLE_TITLES.length; i++) {
+    if (ROLE_TITLES[i].toLowerCase() === s.toLowerCase()) return ROLE_TITLES[i];
+  }
+  return ROLE_ALIASES[s.toLowerCase()] || '';
+}
+
 /** How far ahead `celebrations` looks. Kiosk wants "today + coming up this week or so". */
 var CELEBRATION_HORIZON_DAYS = 14;
 
@@ -1348,6 +1399,18 @@ function resolveReview_(p) {
       applied = 'merged ' + item.merge_from_name + ' into ' + item.name;
     } else if (item.kind === 'name_spelling' || item.kind === 'role') {
       var field = item.kind === 'role' ? 'role_title' : 'full_name';
+      var value = item.proposed_value;
+      /* A role proposal comes from outside (an import posts it via review_report), so it can
+         name a title we do not carry. Accepting is a WRITE to Core identity and gets the same
+         closed set as the roster dropdown — "keep" and "dismiss" are still open, so the item
+         can be cleared without widening the vocabulary through the back door. */
+      if (field === 'role_title') {
+        value = normRole_(value);
+        if (!value) {
+          return { ok: false, error: 'cannot accept role "' + item.proposed_value + '" — not one of ' +
+                                     ROLE_TITLES.join(', ') + '. Keep or dismiss instead.' };
+        }
+      }
       var identity = GXCore.getEmployees() || [];
       var prior = null;
       for (var z = 0; z < identity.length; z++) {
@@ -1356,9 +1419,9 @@ function resolveReview_(p) {
       if (!prior) return { ok: false, error: 'unknown employee_id: ' + item.employee_id };
       var merged = {};
       Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
-      merged[field] = item.proposed_value;
+      merged[field] = value;
       GXCore.gxUpsertEmployee(merged);
-      applied = field + ' → ' + item.proposed_value;
+      applied = field + ' → ' + value;
     } else {
       // Compliance items (renew a permit, revoke access, fill a gap) are actioned OUTSIDE this
       // app. Accepting records that it was handled; it does not pretend to have done it.
@@ -1724,7 +1787,7 @@ function getRoster_(p) {
 
   return {
     ok: true, user: auth.user, role: auth.role, can_edit: canEdit_(auth),
-    shirt_sizes: SHIRT_SIZES, hr_sheet_url: HR_SHEET_URL,
+    shirt_sizes: SHIRT_SIZES, role_titles: ROLE_TITLES, hr_sheet_url: HR_SHEET_URL,
     include_retired: includeRetired, retired_total: retiredCount, cached: joined.cached,
     rows: joined.rows.filter(function (r) { return includeRetired || !r.retired; }),
     identity_source: {
@@ -1800,7 +1863,19 @@ function saveIdentity_(p) {
     }
     changes.home_store = st;
   }
-  if (p.role_title != null) changes.role_title = String(p.role_title).trim();
+  if (p.role_title != null) {
+    var rt = String(p.role_title).replace(/\s+/g, ' ').trim();
+    /* The roster sends one of ROLE_TITLES or ''. Anything else reached us around the dropdown,
+       so refuse rather than store it — this is the field Leaderboard renders and SPIFF groups by,
+       and a one-off variant here becomes an unmatchable role everywhere else.
+       The exception is a title this row ALREADY holds: rows predating the vocabulary carry one,
+       the panel offers it back unchanged, and refusing it would make every other field on that
+       person uneditable until somebody re-filed them. Keeping a value is not introducing one. */
+    if (rt && !normRole_(rt) && rt !== String(prior.role_title || '').replace(/\s+/g, ' ').trim()) {
+      return { ok: false, error: 'invalid role: ' + rt + ' (expected one of ' + ROLE_TITLES.join(', ') + ')' };
+    }
+    changes.role_title = rt ? (normRole_(rt) || rt) : '';
+  }
   if (p.avatar_config != null) {
     var av = String(p.avatar_config).trim();
     if (av) {
@@ -2020,7 +2095,7 @@ function hrImport_(p, body) {
 
   var attrs = readAttrs_();
   var aliases = readAliases_();
-  var idRows = [], attrRows = [], renamed = [], created = [], viaAlias = [];
+  var idRows = [], attrRows = [], renamed = [], created = [], viaAlias = [], skippedRoles = [];
 
   list.forEach(function (r) {
     var full = String(r.full_name || '').trim();
@@ -2058,6 +2133,12 @@ function hrImport_(p, body) {
     merged.employee_id = id;
     ['full_name', 'home_store', 'role_title', 'status', 'hire_date', 'employee_number'].forEach(function (k) {
       var v = String(r[k] == null ? '' : r[k]).trim();
+      /* A title the sheet spells its own way maps onto one of the four; one that maps to nothing
+         is skipped, not written. The sheet is history and cannot widen the vocabulary. */
+      if (k === 'role_title' && v !== '') {
+        v = normRole_(v);
+        if (!v) { skippedRoles.push(full + ': ' + String(r[k]).trim()); return; }
+      }
       if (v === '') return;
       // FILL mode: never overturn a value the roster already holds. Crew is the system of
       // record now, so an import can complete it but not contradict it.
@@ -2088,6 +2169,9 @@ function hrImport_(p, body) {
     matched_existing: idRows.length - created.length,
     would_create: created.length, created_names: created.slice(0, 40),
     matched_despite_name_drift: renamed, matched_via_merge_alias: viaAlias,
+    // Named, never silent: a title the sheet holds that is not one of the four was dropped,
+    // and somebody has to decide which of the four that person actually is.
+    skipped_unknown_roles: skippedRoles,
     active: idRows.filter(function (r) { return String(r.status).toLowerCase() !== 'retired'; }).length,
     retired: idRows.filter(function (r) { return String(r.status).toLowerCase() === 'retired'; }).length,
     with_permit: attrRows.filter(function (r) { return r.permit_number; }).length,
@@ -2146,7 +2230,7 @@ var FACET_FIELDS = ['status', 'groups', 'defaultLocation', 'permissionsLocation'
 var GROUP_RANK = [
   ['Admin',                    'Admin'],
   ['Store Managers',           'Store Manager'],
-  ['Assistant Store Managers', 'Assistant Store Manager'],
+  ['Assistant Store Managers', 'Assistant Manager'],
   ['Inventory Coordinators',   'Inventory Coordinator'],
   ['Accounting',               'Accounting'],
   ['Inventory',                'Inventory'],
