@@ -230,6 +230,9 @@
 
     /* ── v8: identity edit panel ─────────────────────────────────────────── */
     .crew-nick { color: var(--gx-green); font-size: 12px; }
+    /* A blanked identity row. Red rather than muted on purpose: this is damage to the
+       record, not a field somebody has not filled in yet. */
+    .crew-noname { color: var(--gx-red); }
     .crew-edit { margin-left: 10px; font-size: 11px; }
     .crew-editrow td { background: var(--gx-surface-2); padding: 16px 14px !important; }
     .crew-editform { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
@@ -327,6 +330,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=11"></script>
+  <script src="crew.js?v=12"></script>
 </body>
 </html>

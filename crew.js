@@ -196,7 +196,19 @@
   }
   function initialsOf(name) {
     return String(name || '').trim().split(/\s+/).slice(0, 2)
-      .map(function (w) { return w.charAt(0); }).join('').toUpperCase();
+      .map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?';
+  }
+  /* How Crew writes a person, everywhere it writes one: legal name bold, nickname in quotes
+     beside it. A row with NO name is not a blank to render as whitespace — it is a GX Core
+     identity row that a partial write blanked, and the roster drew it as an avatar floating
+     beside nothing at all, which is exactly how it went unnoticed. Name the damage instead. */
+  function nameHtml(row) {
+    if (!String(row.name || '').trim()) {
+      return '<b class="crew-noname">⚠ Record blanked</b>' +
+             ' <span class="crew-nick">' + esc(row.employee_id || '') + '</span>';
+    }
+    return '<b>' + esc(row.name) + '</b>' +
+      (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '');
   }
   /* Puck: the rendered avatar, or initials when nobody has picked one. Faces come from an
      external service, so a failed load falls back to initials rather than a broken image. */
@@ -608,10 +620,7 @@
       lbl.appendChild(radio);
       lbl.appendChild(avatarPuck(row));
 
-      // Crew's own naming convention: legal name bold, nickname in quotes beside it.
-      lbl.appendChild(el('span', 'crew-eom-name',
-        '<b>' + esc(row.name) + '</b>' +
-        (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '')));
+      lbl.appendChild(el('span', 'crew-eom-name', nameHtml(row)));
       lbl.appendChild(el('span', 'crew-eom-store', esc(row.store ? storeName(row.store) : '')));
       grid.appendChild(lbl);
     });
@@ -761,8 +770,7 @@
 
       var tdName = el('td', 'crew-namecell');
       tdName.appendChild(avatarPuck(row));
-      tdName.appendChild(el('span', null, '<b>' + esc(row.name) + '</b>' +
-        (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '') +
+      tdName.appendChild(el('span', null, nameHtml(row) +
         (row.retired ? ' <span class="crew-tag">retired</span>' : '')));
       tr.appendChild(tdName);
       tr.appendChild(el('td', flagCls(row,'store','gx-muted'), esc(row.store ? storeName(row.store) : '—')));

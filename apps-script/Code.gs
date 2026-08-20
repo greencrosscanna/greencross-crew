@@ -144,6 +144,12 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(identityHealth_(), p.callback);
 
+      // Puts a blanked identity row back together. Preview by default; writing takes confirm=yes.
+      // See identityRepair_ for what a "blanked row" is and why one appears.
+      case 'identity_repair':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(identityRepair_(p), p.callback);
+
       // Script-property KEYS only (never values) — the Apps Script UI caps its property list at
       // 50, so a big Leaderboard hand-off like GC_NICKNAMES_JSON becomes invisible there. This
       // says what actually landed. Values stay hidden: some properties are secrets.
@@ -1591,6 +1597,10 @@ function mergeEmployees_(p) {
  */
 function rowFlags_(r) {
   var f = [];
+  // Checked BEFORE the retired escape hatch: an incomplete retired record is expected, but a
+  // record with no NAME is not incomplete, it is damaged — a GX Core row that a partial write
+  // blanked. identityRepair_ explains the mechanism and puts it back.
+  if (!String(r.name || '').trim()) f.push('name');
   if (r.retired) return f;                       // retired records are allowed to be incomplete
   if (!r.employee_number)          f.push('employee_number');
   if (!r.hire_date)                f.push('hire_date');
@@ -2440,6 +2450,107 @@ function identityHealth_() {
     missing_home_store: missingStore, missing_dutchie_id: missingDutchieId,
     with_hire_date: rows.filter(function (r) { return String(r.hire_date || '').trim(); }).length
   };
+}
+
+/*
+ * Puts a BLANKED identity row back together.
+ *
+ * The damage signature is a GX Core employee row that still has its employee_id and is still
+ * "active", but holds nothing else — no name, no store, no role, no dutchie id. In the roster
+ * that renders as a person with a face and no details, which is exactly how it was found.
+ *
+ * The mechanism is the one hr_import already guards against, arriving from another app:
+ * gxWrite_ REPLACES the whole row, rebuilding every column from the record it is handed, so an
+ * upsert of { employee_id, avatar_config } writes '' over everything it did not mention. Crew's
+ * own writers (saveIdentity_, avatarSave_, hrImport_) all read-merge-write and cannot do this;
+ * a partial upsert from outside Crew can, and did.
+ *
+ * Two sources still hold the truth, neither of which the wipe touched:
+ *   • Crew's attribute sheet — full_name and employee_number, kept independently of Core
+ *   • Dutchie — home_store, role_title and dutchie_employee_id, re-derived exactly as the seed
+ *     derives them, so a repaired row is identical to a freshly seeded one
+ *
+ * FILL ONLY, for the same reason hr_import is: a field is written only where Core currently
+ * holds nothing, so a repair can complete a row but never contradict a curated value. hire_date
+ * has no machine source at all (Dutchie carries none) and is reported as still empty for a human
+ * to fill rather than guessed at.
+ *
+ * Preview by default. Pass confirm=yes to write, employee_id=<id> to look at one row.
+ */
+function identityRepair_(p) {
+  var only   = String(p.employee_id || '').trim();
+  var commit = String(p.confirm || '') === 'yes';
+
+  var live = [];
+  try { live = GXCore.getEmployees() || []; }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+
+  var damaged = live.filter(function (r) {
+    if (String(r.status || '').toLowerCase() === 'merged') return false;
+    if (only) return String(r.employee_id || '').trim() === only;
+    return !String(r.full_name || '').trim();
+  });
+  if (!damaged.length) {
+    return { ok: true, mode: 'preview', damaged: 0, repaired: [],
+             note: only ? 'no live row with employee_id ' + only
+                        : 'every identity row still has its name' };
+  }
+
+  var attrs = readAttrs_();
+  var seed = {}, seedError = '';
+  try {
+    buildIdentityRows_().rows.forEach(function (r) { seed[r.employee_id] = r; });
+  } catch (e) { seedError = String((e && e.message) || e); }
+
+  var REFILL = ['full_name', 'home_store', 'role_title', 'dutchie_employee_id',
+                'employee_number', 'status'];
+  var report = [];
+
+  damaged.forEach(function (row) {
+    var id = String(row.employee_id || '').trim();
+    var a  = attrs[id] || {};
+    var d  = seed[id]  || {};
+    var source = {
+      full_name:           a.full_name || d.full_name || '',
+      home_store:          d.home_store || '',
+      role_title:          d.role_title || '',
+      dutchie_employee_id: d.dutchie_employee_id || '',
+      // Crew's attribute sheet is where a number is ISSUED, so it is authoritative here and the
+      // Core column is only a mirror of it — but SPIFF and Leaderboard read that mirror.
+      employee_number:     a.employee_number || '',
+      status:              d.status || 'active'
+    };
+
+    var merged = {}, filled = [], stillEmpty = [];
+    Object.keys(row).forEach(function (k) { merged[k] = row[k]; });   // <- every column survives
+    merged.employee_id = id;
+    REFILL.forEach(function (k) {
+      if (String(merged[k] || '').trim()) return;      // fill only
+      var v = String(source[k] || '').trim();
+      if (!v) { stillEmpty.push(k); return; }
+      merged[k] = v;
+      filled.push(k + ' = ' + v);
+    });
+    if (!String(merged.hire_date || '').trim()) stillEmpty.push('hire_date');
+
+    if (commit && filled.length) GXCore.gxUpsertEmployee(merged);
+
+    report.push({
+      employee_id: id,
+      employee_number: a.employee_number || '',
+      name_source: a.full_name ? 'crew attributes' : (d.full_name ? 'dutchie' : '(none — cannot name this row)'),
+      filled: filled,
+      still_empty: stillEmpty,
+      // The seed is stamped into avatar_config and pinned to employee_number, so a repaired
+      // person keeps the same face they had before the wipe.
+      keeps_avatar: !!String(row.avatar_config || '').trim()
+    });
+  });
+
+  if (commit) bustRosterCache_();
+  return { ok: true, mode: commit ? 'commit' : 'preview',
+           damaged: damaged.length, dutchie_error: seedError, repaired: report,
+           note: commit ? 'written to GX Core' : 're-run with confirm=yes to write' };
 }
 
 // ─── Celebrations (the PII-free feed Leaderboard consumes) ──────────────────────
