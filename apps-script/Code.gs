@@ -3040,12 +3040,20 @@ function getCelebrations_(p) {
 
   var attrs = readAttrs_();
   var out = [];
+  /* Who is being SUPPRESSED, not just who is being celebrated. An opt-out only shows its effect
+     on one day a year, so without this the only way to confirm the flag is set is to open the
+     roster and look — or to wait for the date it is meant to prevent. Names, no dates: the
+     caller is already trusted with the celebration names below. */
+  var suppressed = [];
 
   Object.keys(attrs).forEach(function (id) {
     var a = attrs[id];
     var person = byId[id];
     if (!person) return;   // inactive or unknown — don't celebrate someone who left
-    if (isTruthyFlag_(a.celebrations_opt_out)) return;   // on the roster for access, not for work
+    if (isTruthyFlag_(a.celebrations_opt_out)) {        // on the roster for access, not for work
+      suppressed.push(String(person.full_name || id));
+      return;
+    }
     var base = {
       name_key: nameToKey_(person.full_name),
       name:     String(person.full_name || ''),
@@ -3077,5 +3085,7 @@ function getCelebrations_(p) {
   });
 
   out.sort(function (x, y) { return x.days_away - y.days_away || x.name.localeCompare(y.name); });
-  return { ok: true, app: 'crew', horizon_days: horizon, today: Utilities.formatDate(today, STORE_TZ, 'yyyy-MM-dd'), celebrations: out };
+  suppressed.sort();
+  return { ok: true, app: 'crew', horizon_days: horizon, today: Utilities.formatDate(today, STORE_TZ, 'yyyy-MM-dd'),
+           celebrations: out, opted_out: suppressed };
 }
