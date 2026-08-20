@@ -55,6 +55,22 @@ the current Leaderboard incentive output for a full pay period.
   `gx-sync.sh`, filled from `.gx_app` (= `crew`). Re-run `./gx-sync.sh` to refresh them. This CLAUDE.md is
   intentionally **not** synced — keep it app-specific.
 
+## gx-theme is core-admin's — send a request, don't edit (rule from Sky, 2026-08-20)
+**Never edit `greencross-gx-theme` from this chat.** Five apps load `gx-theme.css`, `gx-client.js`,
+`gx-topnav.js`, `gx-avatar.js`, `gx-session.js` and `gx-stores.js` **live from Pages**, so a change there
+is not a change to one app — it reaches every app on its next load, inside the 10-minute cache, with no
+deploy and no review in between. That reach is the point of the shared layer and exactly why it does not
+get six editors. If Crew needs something from it, `add_note` to `core-admin` saying what and why;
+requests are welcome and quick.
+
+**The corollary matters just as much: do not restyle a shared component from inside Crew either.** A local
+rule that beats `.gx-btn-green` or `.gx-input` wins here and silently diverges from the other five — that
+is literally how the suite ended up with six different login screens.
+
+**What still belongs to Crew** is anything that is genuinely this app's character. The test is *"should all
+six get this?"* — if no, it is app-local and stays here. Note `gx-sync.sh` pulls **from** gx-theme; it is
+a one-way read, not an editing channel.
+
 ## Shipping — direct to `main` until launch (decided 2026-08-18)
 GX Crew is **pre-launch**: nobody outside Sky has access yet, so there are no staff to watch a feature
 bake. The shared `/gxbrain` ship policy's *feature → branch + PR + merge-when-done* rule exists to protect
