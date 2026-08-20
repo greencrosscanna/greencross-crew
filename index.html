@@ -312,6 +312,25 @@
     text-transform: uppercase; color: var(--gx-text-mute); flex-shrink: 0; }
     .crew-eom-foot { display: flex; justify-content: flex-end; padding-top: 10px; }
 
+    /* The history below the picker. A list rather than a table: three facts per reign, and a
+    table's rules would carry more weight than the content does. The gold marker matches the
+    picker's is-current, so the same person reads as the same person in both. */
+    .crew-eomlog { list-style: none; margin: 2px 0 0; padding: 0; }
+    .crew-eomlog-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px;
+    border-bottom: 1px solid var(--gx-border); }
+    .crew-eomlog-row:last-child { border-bottom: 0; }
+    .crew-eomlog-row.is-current { border-left: 2px solid var(--gx-gold); padding-left: 10px;
+    margin-left: -12px; }
+    .crew-eomlog-name { font-size: 13px; color: var(--gx-text); white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .crew-eomlog-none { display: inline-flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%;
+    border: 1px dashed var(--gx-border-strong); color: var(--gx-text-mute); font-size: 12px; }
+    .crew-eomlog-when { margin-left: auto; font-size: 11px; color: var(--gx-text-dim);
+    white-space: nowrap; flex-shrink: 0; }
+    .crew-eomlog-by { font-size: 10px; letter-spacing: .6px; text-transform: uppercase;
+    color: var(--gx-text-mute); white-space: nowrap; flex-shrink: 0; }
+
   </style>
 </head>
 <body class="gx-app">
@@ -330,6 +349,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=12"></script>
+  <script src="crew.js?v=13"></script>
 </body>
 </html>

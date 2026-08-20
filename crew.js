@@ -565,6 +565,23 @@
       }
     } catch (e) { state.eom = null; }
     render();
+    loadEomHistory();
+  }
+
+  /* The log is a SECOND request on purpose, not folded into the one above: picking somebody is
+     the whole point of this tab, and it must not wait on history to render. The engine reads
+     cfg.eom back itself and appends what it finds, so this call is also what records a pick —
+     the browser never tells it who holds the award. */
+  async function loadEomHistory() {
+    try {
+      var r = await Engine.jsonp('eom_history', { token: token() }, { timeoutMs: 20000, retries: 1 });
+      state.eomHistory = (r && r.ok && r.history) ? r.history : [];
+      state.eomHistoryErr = (r && r.ok) ? '' : ((r && r.error) || 'could not load the history');
+    } catch (e) {
+      state.eomHistory = [];
+      state.eomHistoryErr = (e && e.message) || 'could not load the history';
+    }
+    if (state.view === 'eom') renderEom();
   }
 
   async function setEom(employeeId, label) {
@@ -577,11 +594,70 @@
       if (!r || r.ok === false) throw new Error((r && r.error) || 'Save failed');
       renderStatus(employeeId ? ('Employee of the Month: <b>' + esc(label) + '</b>')
                               : 'Employee of the Month cleared');
+      // Only now, once Core holds the new value — the engine logs what it READS, so asking any
+      // earlier would just record the reign that is being replaced.
+      state.eomHistory = undefined;
+      loadEomHistory();
     } catch (e) {
       state.eom = prev;                        // put it back rather than lie about what is stored
       renderEom();
       renderStatus('Could not save: ' + esc(e.message || String(e)));
     }
+  }
+
+  /* Bare month and year. A reign is a month-scale thing, so a day and a clock time would be
+     false precision — and the one date we cannot know exactly is a cleared award's, which the
+     engine can only stamp when it first noticed. */
+  var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function eomMonth(iso) {
+    var d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return '—';
+    return MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+  }
+  /* "Aug 2026 — present" while it runs, one month if it began and ended in the same one, a
+     range otherwise. Reading "Mar 2026 – Mar 2026" tells you nothing the single month does not. */
+  function eomSpan(h) {
+    var from = eomMonth(h.started_at);
+    if (h.current) return from + ' — present';
+    var to = eomMonth(h.ended_at);
+    return from === to ? from : from + ' – ' + to;
+  }
+
+  function eomHistoryNodes() {
+    if (state.eomHistory === undefined) return [el('div', 'gx-muted', 'Loading…')];
+    if (state.eomHistoryErr) return [el('div', 'gx-muted', esc(state.eomHistoryErr))];
+    if (!state.eomHistory.length) {
+      return [el('p', 'crew-hint', 'Nobody has held it yet. Each pick is recorded here from now on.')];
+    }
+
+    var byId = {};
+    (state.rows || []).forEach(function (r) { byId[String(r.employee_id)] = r; });
+
+    var list = el('ol', 'crew-eomlog');
+    state.eomHistory.forEach(function (h) {
+      var li = el('li', 'crew-eomlog-row' + (h.current ? ' is-current' : ''));
+
+      if (h.nobody) {
+        /* A deliberate "nobody" is part of the record, not a gap in it — the same distinction
+           Core draws by storing an empty value instead of deleting the key. */
+        li.appendChild(el('span', 'crew-eomlog-none', '—'));
+        li.appendChild(el('span', 'crew-eomlog-name', '<i>Nobody held it</i>'));
+      } else {
+        /* The face comes from the roster where they are still on it, but the NAME comes from the
+           log: someone who has since been renamed or retired held it under the name they held it
+           under, and quietly restating the present would not be a record of the past. */
+        li.appendChild(avatarPuck(byId[h.employee_id] || { name: h.name, employee_id: h.employee_id }));
+        li.appendChild(el('span', 'crew-eomlog-name', '<b>' + esc(h.name || h.employee_id) + '</b>'));
+      }
+
+      li.appendChild(el('span', 'crew-eomlog-when', esc(eomSpan(h))));
+      if (h.set_by) li.appendChild(el('span', 'crew-eomlog-by', 'set by ' + esc(h.set_by)));
+      list.appendChild(li);
+    });
+
+    return [list, el('p', 'crew-hint',
+      'Crew keeps this log — GX Core stores only who holds it right now, so a pick that is not ' +
+      'recorded here cannot be recovered later.')];
   }
 
   function renderEom() {
@@ -638,6 +714,7 @@
     }
 
     mount.appendChild(card('Employee of the Month', nodes));
+    mount.appendChild(card('Who has held it', eomHistoryNodes()));
   }
 
   function render() {

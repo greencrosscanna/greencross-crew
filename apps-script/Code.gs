@@ -50,6 +50,13 @@ var DECISION_HEADERS = ['decision_key', 'kind', 'employee_id', 'field', 'chose',
 var ALIAS_TAB     = 'crew_aliases';
 var ALIAS_HEADERS = ['alias_key', 'alias_name', 'employee_id', 'merged_at', 'merged_by'];
 
+/* Employee of the Month, one row per reign. APPEND-ONLY: a reign is never edited to record its
+ * end, because the end is simply the moment the next row begins. A row with a blank employee_id
+ * is the "deliberately nobody" marker — the same distinction cfg.eom draws by holding an empty
+ * value rather than being deleted — and it closes the reign before it. */
+var EOM_TAB     = 'crew_eom_history';
+var EOM_HEADERS = ['employee_id', 'name', 'started_at', 'set_by', 'recorded_at', 'source'];
+
 /** Attributes a manager may edit from the roster UI. Everything else is import-owned. */
 var EDITABLE_ATTRS = ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage'];
 
@@ -115,6 +122,10 @@ function route_(e) {
       case 'create_accounts': return json_(createAccounts_(p, body), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
+      // Employee of the Month history. The PICK itself is written straight to GX Core by the
+      // browser (GXCore set_eom); this reads that value back and keeps Crew's own log of it.
+      case 'eom_history':    return json_(getEomHistory_(p), p.callback);
+
       case 'review':         return json_(getReview_(p), p.callback);
       case 'review_resolve': return json_(resolveReview_(p), p.callback);
       case 'review_report':  return json_(reportConflicts_(p, body), p.callback);
@@ -2438,6 +2449,8 @@ function identityHealth_() {
     getEmployeeByNumber:  typeof GXCore.getEmployeeByNumber === 'function',
     getEmployeeByDutchieId: typeof GXCore.getEmployeeByDutchieId === 'function',
     getEmployeeByName:    typeof GXCore.getEmployeeByName === 'function',
+    // EoM history reads cfg.eom back through this; without it the log cannot record a pick.
+    getKv:                typeof GXCore.getKv === 'function',
     columns: Object.keys(probe).sort()
   };
   return {
@@ -2591,6 +2604,124 @@ function identityRepair_(p) {
   return { ok: true, mode: commit ? 'commit' : 'preview',
            damaged: damaged.length, dutchie_error: seedError, repaired: report,
            note: commit ? 'written to GX Core' : 're-run with confirm=yes to write' };
+}
+
+// ─── Employee of the Month history ──────────────────────────────────────────────
+/*
+ * Crew keeps the record of who has held EoM. GX Core's cfg.eom holds only the CURRENT holder —
+ * one object, overwritten on every pick — so by the time you want to know who had it in March,
+ * March is gone. That is fine for Core and for the kiosk, which only ever ask "who is it now",
+ * and wrong for HR, which is the one party that needs the series.
+ *
+ * WHERE THE LOG COMES FROM, and why it is not written where the pick is made. The pick goes
+ * straight from the browser to GX Core (GXCore set_eom), deliberately — it needed no engine
+ * change and no library re-pin. So the Crew engine never sees the write. Rather than add a
+ * second client-side write that could fail on its own and silently lose a reign, the engine
+ * READS cfg.eom back with GXCore.getKv and appends whenever the live value differs from the
+ * newest row it already has. The browser never supplies the values, so it cannot falsify them.
+ *
+ * That reconciliation runs on every read of this tab, which has a useful consequence: a change
+ * made outside Crew entirely still lands in the history the next time somebody opens the tab.
+ * Its one blind spot is honest and worth stating — two changes between two reads leave the
+ * middle holder unrecorded. For a monthly award picked by a handful of managers that is a trade
+ * worth making against a write path that can half-succeed.
+ *
+ * APPEND-ONLY. A reign's end is the next reign's start, so nothing is ever edited; a blank
+ * employee_id is the "deliberately nobody" row, carrying the same meaning as the empty value
+ * Core stores when the award is cleared.
+ */
+
+/** cfg.eom, normalised. undefined = never set, null = deliberately nobody, else the holder. */
+function eomCurrent_() {
+  var raw;
+  try { raw = GXCore.getKv('cfg.eom'); }
+  catch (e) { return { error: String((e && e.message) || e) }; }
+  if (raw === null || raw === undefined) return { state: 'unset' };
+  if (String(raw).trim() === '') return { state: 'nobody' };
+  var v;
+  try { v = (typeof raw === 'object') ? raw : JSON.parse(raw); }
+  catch (e) { return { error: 'cfg.eom is not JSON: ' + String(raw).slice(0, 80) }; }
+  var id = String((v && v.employee_id) || '').trim();
+  if (!id) return { state: 'nobody' };
+  return { state: 'held', employee_id: id,
+           since: String((v && v.since) || ''), set_by: String((v && v.set_by) || '') };
+}
+
+/**
+ * Bring the log level with cfg.eom, appending at most one row. Returns the rows, oldest first.
+ *
+ * Identity of a reign is (employee_id, started_at): the same person picked again after somebody
+ * else held it is a NEW reign and gets its own row, while re-reading an unchanged value appends
+ * nothing however many times the tab is opened.
+ */
+function eomSync_(names) {
+  var rows = readTab_(EOM_TAB, EOM_HEADERS);
+  var cur  = eomCurrent_();
+  if (cur.error || cur.state === 'unset') return { rows: rows, error: cur.error || '' };
+
+  var last = rows.length ? rows[rows.length - 1] : null;
+  var wantId = cur.state === 'nobody' ? '' : cur.employee_id;
+  /* A cleared award has no timestamp of its own — Core stores an empty VALUE, which cannot carry
+     one — so a clear is deduped on "the log already ends in a clear" rather than on its time,
+     and its recorded_at is when Crew first saw it rather than when it happened. */
+  var same = last && String(last.employee_id) === wantId &&
+             (wantId === '' || String(last.started_at) === String(cur.since || ''));
+  if (same) return { rows: rows, error: '' };
+
+  var now = new Date().toISOString();
+  var startedAt = wantId ? String(cur.since || now) : now;
+  /* The log is a timeline, so it must not be able to step backwards. cfg.eom's `since` is
+     stamped by GX Core and a clear is stamped here, so clock skew between the two — or a
+     hand-edited cfg.eom — could otherwise seat a reign before the one it replaces, and the tab
+     would show somebody's month ending before it began. ISO-8601 in UTC sorts lexicographically,
+     which is why a plain string compare is the right one. */
+  if (last && last.started_at && startedAt < String(last.started_at)) {
+    startedAt = String(last.started_at);
+  }
+  var name = wantId ? String((names || {})[wantId] || '') : '';
+  var setBy = wantId ? String(cur.set_by || '') : '';
+  sheetOf_(EOM_TAB, EOM_HEADERS).appendRow([wantId, name, startedAt, setBy, now, 'observed']);
+  rows.push({ employee_id: wantId, name: name, started_at: startedAt,
+              set_by: setBy, recorded_at: now, source: 'observed' });
+  return { rows: rows, error: '' };
+}
+
+/**
+ * The history, newest first, each reign carrying the moment it ended.
+ *
+ * Names are stored WITH the row and only refreshed from the registry where the row has none.
+ * Someone who has since been renamed, retired or merged away still held it under the name they
+ * held it under, and a log that quietly restates the present is not a record of the past.
+ */
+function getEomHistory_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  var names = {};
+  try {
+    (GXCore.getEmployees() || []).forEach(function (r) {
+      names[String(r.employee_id || '').trim()] = String(r.full_name || '');
+    });
+  } catch (e) { /* a name lookup failure must not cost us the log */ }
+
+  var synced = eomSync_(names);
+  var rows = synced.rows;
+
+  var out = [];
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var r = rows[i];
+    out.push({
+      employee_id: r.employee_id,
+      name: r.name || names[r.employee_id] || '',
+      started_at: r.started_at,
+      // The reign ended when the next one began; the newest row is still running.
+      ended_at: i < rows.length - 1 ? rows[i + 1].started_at : '',
+      set_by: r.set_by,
+      current: i === rows.length - 1,
+      nobody: !r.employee_id
+    });
+  }
+  return { ok: true, history: out, sync_error: synced.error || '' };
 }
 
 // ─── Celebrations (the PII-free feed Leaderboard consumes) ──────────────────────
