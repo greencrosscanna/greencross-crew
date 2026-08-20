@@ -2475,11 +2475,40 @@ function identityHealth_() {
  * has no machine source at all (Dutchie carries none) and is reported as still empty for a human
  * to fill rather than guessed at.
  *
+ * SUPPLYING WHAT NO MACHINE SOURCE HAS. Some fields cannot be re-derived by anyone: hire_date
+ * exists in no system Crew can read, and home_store is genuinely ambiguous for the managers who
+ * hold permissions at several stores — the seed refuses to guess between them, correctly. Pass
+ * those as parameters alongside employee_id and they are treated as the highest-priority source,
+ * still FILL-ONLY, so this stays a repair and never becomes a back door for editing a live value.
+ * Ordinary identity edits belong in the UI, where they are attributable to a signed-in person.
+ *
  * Preview by default. Pass confirm=yes to write, employee_id=<id> to look at one row.
  */
 function identityRepair_(p) {
   var only   = String(p.employee_id || '').trim();
   var commit = String(p.confirm || '') === 'yes';
+
+  // Values a human supplies for this one row. Validated up front: a repair that half-applies,
+  // or that writes an unknown store into the registry six apps read, is worse than a refusal.
+  var GIVEN_FIELDS = ['full_name', 'home_store', 'role_title', 'preferred_name', 'hire_date'];
+  var given = {};
+  GIVEN_FIELDS.forEach(function (k) { if (p[k] != null) given[k] = String(p[k]).trim(); });
+  if (Object.keys(given).length && !only) {
+    return { ok: false, error: 'supplying a value needs an employee_id — a repair fills one named row' };
+  }
+  if (given.home_store) {
+    var known = (GXCore.getStores() || []).some(function (x) {
+      return String(x.store_id).trim() === given.home_store;
+    });
+    if (!known && given.home_store !== 'corporate') {
+      return { ok: false, error: 'unknown store: ' + given.home_store };
+    }
+  }
+  if (given.hire_date) {
+    var hd = normDate_(given.hire_date);
+    if (!hd) return { ok: false, error: 'invalid hire date: ' + given.hire_date + ' (expected YYYY-MM-DD)' };
+    given.hire_date = hd;
+  }
 
   var live = [];
   try { live = GXCore.getEmployees() || []; }
@@ -2502,8 +2531,8 @@ function identityRepair_(p) {
     buildIdentityRows_().rows.forEach(function (r) { seed[r.employee_id] = r; });
   } catch (e) { seedError = String((e && e.message) || e); }
 
-  var REFILL = ['full_name', 'home_store', 'role_title', 'dutchie_employee_id',
-                'employee_number', 'status'];
+  var REFILL = ['full_name', 'home_store', 'role_title', 'preferred_name', 'hire_date',
+                'dutchie_employee_id', 'employee_number', 'status'];
   var report = [];
 
   damaged.forEach(function (row) {
@@ -2511,9 +2540,13 @@ function identityRepair_(p) {
     var a  = attrs[id] || {};
     var d  = seed[id]  || {};
     var source = {
-      full_name:           a.full_name || d.full_name || '',
-      home_store:          d.home_store || '',
-      role_title:          d.role_title || '',
+      full_name:           given.full_name  || a.full_name || d.full_name || '',
+      home_store:          given.home_store || d.home_store || '',
+      role_title:          given.role_title || d.role_title || '',
+      preferred_name:      given.preferred_name || '',
+      // No machine anywhere holds a hire date: Dutchie carries none, and Crew's attribute sheet
+      // stores work_anniversary rather than the date itself. A human is the only source.
+      hire_date:           given.hire_date  || '',
       dutchie_employee_id: d.dutchie_employee_id || '',
       // Crew's attribute sheet is where a number is ISSUED, so it is authoritative here and the
       // Core column is only a mirror of it — but SPIFF and Leaderboard read that mirror.
@@ -2531,7 +2564,6 @@ function identityRepair_(p) {
       merged[k] = v;
       filled.push(k + ' = ' + v);
     });
-    if (!String(merged.hire_date || '').trim()) stillEmpty.push('hire_date');
 
     if (commit && filled.length) GXCore.gxUpsertEmployee(merged);
 
@@ -2541,6 +2573,14 @@ function identityRepair_(p) {
       name_source: a.full_name ? 'crew attributes' : (d.full_name ? 'dutchie' : '(none — cannot name this row)'),
       filled: filled,
       still_empty: stillEmpty,
+      /* Crew's attribute sheet is a SEPARATE store and a wipe of the Core row cannot touch it.
+         Saying which of those fields are on file — presence only, never the values, because
+         wage and birthday are exactly the PII this channel should not be shipping — is what
+         distinguishes "the wipe took this" from "nobody ever filled it in". */
+      attributes_on_file: ['employee_number', 'wage', 'shirt_size', 'birthday',
+                           'work_anniversary', 'permit_number'].reduce(function (o, k) {
+        o[k] = !!String(a[k] || '').trim(); return o;
+      }, {}),
       // The seed is stamped into avatar_config and pinned to employee_number, so a repaired
       // person keeps the same face they had before the wipe.
       keeps_avatar: !!String(row.avatar_config || '').trim()
