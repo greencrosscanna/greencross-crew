@@ -2383,12 +2383,24 @@ function seedIdentityPreview() {
   var b = buildIdentityRows_();
   var noStore = b.rows.filter(function (r) { return !r.home_store; }).length;
   var noTitle = b.rows.filter(function (r) { return !r.role_title; }).length;
+  /*
+   * Dutchie has permission groups that are not one of the four roles — Inventory Coordinator,
+   * Accounting, Inventory — and GROUP_RANK still maps them, because deciding which of the four
+   * an Inventory Coordinator IS is an HR call, not a mapping one.
+   *
+   * So the seed is not allowed to make it quietly. The dry run is a mandatory step before
+   * commit, and it names every person a re-seed would file under a title the roster dropdown
+   * cannot offer. Nothing to fix here if the list is empty; if it is not, decide first.
+   */
+  var offVocab = b.rows.filter(function (r) { return r.role_title && !normRole_(r.role_title); })
+    .map(function (r) { return r.full_name + ': ' + r.role_title; });
   var out = {
     ok: true, mode: 'preview', would_upsert: b.rows.length,
     dutchie_rows_seen: b.seen,
     skipped_inactive: b.skipped_inactive, skipped_non_person: b.skipped_non_person,
     excluded_logins: b.excluded,
     without_home_store: noStore, without_role_title: noTitle,
+    roles_outside_vocabulary: offVocab,
     multi_store_people: b.multi_store, store_errors: b.errors,
     first_5: b.rows.slice(0, 5),
     // FIELD NAMES ONLY. Dutchie's /employees payload carries loginId, stateId (OLCC permit) and
