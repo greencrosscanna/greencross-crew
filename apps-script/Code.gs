@@ -970,6 +970,32 @@ function avatarSeed_(employeeId, priorRow) {
   return avatarSeedFrom_(readAttrs_()[employeeId], priorRow, employeeId);
 }
 
+/**
+ * Which fields did the caller ask to BLANK that are still set afterwards?
+ *
+ * GX Core's gxUpsertEmployee is a PATCH: `if (p[k] === '') return;  // absent means "leave alone"`.
+ * That guard is deliberate and good — it is what stops a partial write blanking a live record, the
+ * failure that reduced a real employee to an id and a status in August. But it has a consequence
+ * nobody had written down: THERE IS NO WAY TO CLEAR A FIELD. A requested blank is not refused, it
+ * is ignored, and the write reports success.
+ *
+ * Crew was reporting its own INTENT as the outcome — `cleared: !cfg`, computed from what Crew meant
+ * to do rather than from what happened — while Core was returning the truth in `cleared` and Crew
+ * discarded the return value. So "Remove avatar" reported success and changed nothing.
+ *
+ * This compares the request against Core's own answer. Callers must surface the result: a silent
+ * no-op that claims success is the exact failure mode this app keeps finding elsewhere.
+ */
+function unclearedFields_(prior, changes, res) {
+  var actuallyCleared = {};
+  ((res && res.cleared) || []).forEach(function (k) { actuallyCleared[k] = 1; });
+  return Object.keys(changes || {}).filter(function (k) {
+    return String(changes[k] == null ? '' : changes[k]) === '' &&   // caller asked to blank it
+           String((prior && prior[k]) || '').trim() &&              // there was something there
+           !actuallyCleared[k];                                     // and Core did not remove it
+  });
+}
+
 /** Write one person's avatar. Called by Leaderboard's backend on behalf of a signed-in user. */
 function avatarSave_(p, body) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
@@ -1002,9 +1028,9 @@ function avatarSave_(p, body) {
    * save for no reason they can act on. Observed on the very first live call, so it is not
    * theoretical. Retry a couple of times before admitting defeat.
    */
-  var lastErr = null;
+  var lastErr = null, res = null;
   for (var attempt = 0; attempt < 3; attempt++) {
-    try { GXCore.gxUpsertEmployee(merged); lastErr = null; break; }
+    try { res = GXCore.gxUpsertEmployee(merged); lastErr = null; break; }
     catch (e) {
       lastErr = e;
       if (!/lock/i.test(String((e && e.message) || e))) break;   // only lock contention is retryable
@@ -1016,6 +1042,15 @@ function avatarSave_(p, body) {
              error: String(lastErr.message || lastErr) };
   }
   bustRosterCache_();
+  var uncleared = unclearedFields_(emp, { avatar_config: merged.avatar_config }, res);
+  if (uncleared.length) {
+    // Fail LOUD. The caller asked to remove this avatar and it is still there; saying ok here is
+    // how the button came to lie in the first place.
+    return { ok: false, employee_id: id, name: emp.full_name, cleared: false,
+             error: 'GX Core cannot blank a field: an empty value means "leave alone" in its patch ' +
+                    'path, so this avatar is still set. Removing one needs an explicit clear in Core.',
+             not_cleared: uncleared, resolved_from: ref };
+  }
   return { ok: true, employee_id: id, name: emp.full_name, seed: seed,
            cleared: !cfg, resolved_from: ref };
 }
@@ -2024,7 +2059,13 @@ function saveIdentity_(p) {
     merged[k] = changes[k];
   });
   merged.employee_id = id;
-  GXCore.gxUpsertEmployee(merged);
+  var res = GXCore.gxUpsertEmployee(merged);
+  /* Every blankable field here has the same limitation — preferred_name, home_store, role_title,
+     hire_date and avatar_config alike. Report the truth rather than the request. */
+  var uncleared = unclearedFields_(prior, changes, res);
+  if (uncleared.length) {
+    touched = touched.filter(function (k) { return uncleared.indexOf(k) < 0; });
+  }
 
   // employee_id is derived from the name, so a rename leaves the old key stranded in every
   // other app. Record an alias so imports and lookups keep resolving to this row.
@@ -2036,7 +2077,11 @@ function saveIdentity_(p) {
   }
 
   bustRosterCache_();
-  return { ok: true, employee_id: id, changed: touched,
+  return { ok: true, employee_id: id, changed: touched, not_cleared: uncleared,
+           warning: uncleared.length
+             ? 'Could not clear ' + uncleared.join(', ') + ' — GX Core treats an empty value as ' +
+               '"leave alone", so these keep their previous value. Everything else saved.'
+             : '',
            preserved: ['dutchie_employee_id', 'user_id', 'employee_number', 'avatar_config']
              .filter(function (k) { return String(prior[k] || '').trim(); }) };
 }

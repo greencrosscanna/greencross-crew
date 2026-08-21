@@ -1118,12 +1118,17 @@
             bClear.style.display = '';
             paintControls(); paintPreview();
           });
+          /* Removing an avatar is NOT currently possible: GX Core's patch path reads an empty
+             value as "leave alone", so the write is ignored and reports success. The button used
+             to clear the preview and look like it worked, and the face came back on reload.
+             Disabled rather than deleted, with the reason on it, so the capability is visibly
+             pending instead of silently missing — restore it when Core can clear a field. */
           var bClear = el('button', 'crew-save', 'Remove avatar');
+          bClear.disabled = true;
+          bClear.title = 'Not available yet — GX Core cannot blank a field (an empty value means ' +
+                         '"leave alone" in its patch path, the guard that stops partial writes ' +
+                         'wiping a record). Requested from core-admin. Editing an avatar works.';
           bClear.style.display = working ? '' : 'none';
-          bClear.addEventListener('click', function () {
-            working = null; bClear.style.display = 'none';
-            paintControls(); paintPreview();
-          });
           avaActs.appendChild(bStart); avaActs.appendChild(bClear);
           pickWrap.appendChild(preview);
           var pickCol = el('div', 'crew-avacol');
@@ -1151,8 +1156,16 @@
               var r = await Engine.jsonp('roster_identity', q, { timeoutMs: 45000, retries: 2 });
               if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
 
-              st2.textContent = '✓ ' + (r.changed.length ? 'updated ' + r.changed.join(', ') : 'no change');
-              st2.className = 'crew-save-status ok';
+              /* A save can partly succeed: GX Core treats an empty value as "leave alone", so a
+                 field the user cleared keeps its old value while everything else lands. Saying
+                 just "✓ updated" there would repeat the exact lie this fixes. */
+              if (r.warning) {
+                st2.textContent = '⚠ ' + r.warning;
+                st2.className = 'crew-save-status err';
+              } else {
+                st2.textContent = '✓ ' + (r.changed.length ? 'updated ' + r.changed.join(', ') : 'no change');
+                st2.className = 'crew-save-status ok';
+              }
               state.rows = []; state.review = null;
               setTimeout(function () { boot(true); }, 700);
             } catch (e) {
