@@ -314,12 +314,18 @@ function canEdit_(auth) {
  * The deploy secret gates machine-to-machine calls (celebrations feed, seed preview) where there
  * is no user session.
  *
- * The suite's deploy secret lives in GX Core as the `GC_DEPLOY_SECRET` script property, and Core
- * only exposes it through a private validator, so a spoke cannot read it via the library. Rather
- * than copy the secret into every spoke (one more place to leak it, one more place to rotate), we
- * ASK Core whether a given secret is good, using a cheap already-secret-gated route.
+ * The suite's deploy secret lives in GX Core, which only exposes it through a private validator,
+ * so a spoke cannot read it via the library. Rather than copy the secret into every spoke (one
+ * more place to leak it, one more place to rotate), we ASK Core whether a given secret is good,
+ * using a cheap already-secret-gated route.
  *
- * A local GX_DEPLOY_SECRET script property short-circuits this if anyone sets one later.
+ * The property name is `GX_DEPLOY_SECRET` suite-wide (decided 2026-08-20 — every other constant
+ * is GX_, and GC_ was the lone outlier, which is exactly how two names drifted apart unnoticed).
+ * Core still tolerates GC_ as a migration fallback; do NOT write new code against that name.
+ *
+ * A local GX_DEPLOY_SECRET script property short-circuits this if anyone sets one later. Both
+ * halves have to agree — this is the name the CODE reads, and the name SET in Script Properties
+ * cannot be read from outside the project, so a mismatch fails silently and looks like success.
  * Positive results are cached briefly, keyed by digest — never by the secret itself.
  */
 function deploySecretOk_(p) {
