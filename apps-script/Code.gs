@@ -120,7 +120,21 @@ var MANAGER_ROLE_RE = /manager/i;
  * is this one, typed differently. Mapping is how an import stays useful without being allowed
  * to widen the vocabulary. Keys are lower-cased and space-collapsed.
  */
-var ROLE_ALIASES = {
+/*
+ * PROTOTYPE-LESS ON PURPOSE (pricecards' finding, suite-wide fix in GXCore v170).
+ * A LOOKUP TABLE IS NOT A WHITELIST. Every plain object inherits constructor, __proto__, toString,
+ * valueOf, hasOwnProperty and isPrototypeOf, so those names pass ANY map lookup as truthy.
+ * Measured here before fixing: normRole_('constructor') returned Object's constructor FUNCTION and
+ * normRole_('__proto__') returned an object — both truthy, so both sailed through the guard whose
+ * whole job is to refuse a title that is not one of the four, and would have been written into
+ * role_title, the field Leaderboard renders and SPIFF groups by. 'toString' and 'valueOf' missed
+ * only because the lookup lowercases first, which is luck, not a defence.
+ *
+ * Fixed on the MAP rather than at each call site: a null-prototype object inherits nothing, so
+ * every present and future lookup is safe by construction. Patching lookups one by one leaves the
+ * next call site to get it wrong.
+ */
+var ROLE_ALIASES = Object.assign(Object.create(null), {
   'administrator':            'Admin',
   'admin manager':            'Admin',
   'store mgr':                'Store Manager',
@@ -135,7 +149,7 @@ var ROLE_ALIASES = {
   'bud tender':               'Budtender',
   'budtenders':               'Budtender',
   'sales associate':          'Budtender'
-};
+});
 
 /**
  * Canonicalise a role title, or return '' if it is not one of the four.
@@ -442,10 +456,10 @@ function attrHeaders_(sh) {
 function readAttrs_() {
   var sh = crewSheet_();
   var last = sh.getLastRow();
-  if (last < 2) return {};
+  if (last < 2) return Object.create(null);
   var hdr = attrHeaders_(sh);
   var values = sh.getRange(2, 1, last - 1, hdr.length).getValues();
-  var out = {};
+  var out = Object.create(null);
   for (var i = 0; i < values.length; i++) {
     var row = {};
     for (var c = 0; c < hdr.length; c++) row[hdr[c]] = String(values[i][c] == null ? '' : values[i][c]).trim();
@@ -738,7 +752,7 @@ function emailProposals_(p) {
 
   // Count first-name usage across EVERY active person, not just the filtered set — a collision
   // with someone outside the filter is still a collision.
-  var firstCount = {};
+  var firstCount = Object.create(null);
   rows.forEach(function (r) {
     var st = String(r.status || 'active').toLowerCase();
     if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return;
@@ -812,7 +826,7 @@ function createAccounts_(p, body) {
   var dry = String(p.confirm || '') !== 'yes';
 
   var identity = GXCore.getEmployees() || [];
-  var byId = {};
+  var byId = Object.create(null);
   identity.forEach(function (r) { byId[String(r.employee_id || '').trim()] = r; });
 
   var plan = [], problems = [];
@@ -916,7 +930,7 @@ function avatarsForKiosk_(p) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var rows = GXCore.getEmployees() || [];
   var attrs = readAttrs_();
-  var byKey = {}, byNumber = {}, names = {};
+  var byKey = Object.create(null), byNumber = Object.create(null), names = Object.create(null);
   rows.forEach(function (r) {
     var st = String(r.status || 'active').toLowerCase();
     if (st === 'merged') return;
@@ -1397,10 +1411,10 @@ function decisionKey_(kind, employeeId, field, proposed) {
 function reviewItems_() {
   var joined = rosterJoin_();
   var rows = joined.rows;
-  var byId = {};
+  var byId = Object.create(null);
   rows.forEach(function (r) { byId[r.employee_id] = r; });
 
-  var decided = {};
+  var decided = Object.create(null);
   readTab_(DECISION_TAB, DECISION_HEADERS).forEach(function (d) { decided[d.decision_key] = d; });
 
   var items = [];
@@ -1622,7 +1636,7 @@ function migrateLeaderboard_(p, body) {
 
   var existing = GXCore.getEmployees() || [];
   var attrs = readAttrs_();
-  var byId = {};
+  var byId = Object.create(null);
   existing.forEach(function (r) { byId[String(r.employee_id || '').trim()] = r; });
 
   function resolve(k) {
@@ -1635,7 +1649,7 @@ function migrateLeaderboard_(p, body) {
     return null;
   }
 
-  var writes = {}, resolved = [], unmatched = [], collisions = [];
+  var writes = Object.create(null), resolved = [], unmatched = [], collisions = [];
 
   Object.keys(nicknames).forEach(function (k) {
     var e = resolve(k);
@@ -1711,9 +1725,9 @@ function aliasSheet_() {
 function readAliases_() {
   var sh = aliasSheet_();
   var last = sh.getLastRow();
-  if (last < 2) return {};
+  if (last < 2) return Object.create(null);
   var v = sh.getRange(2, 1, last - 1, ALIAS_HEADERS.length).getValues();
-  var out = {};
+  var out = Object.create(null);
   v.forEach(function (r) {
     var k = String(r[0] || '').trim();
     if (k) out[k] = String(r[2] || '').trim();
@@ -2212,10 +2226,10 @@ function saveRosterAttrs_(p) {
  */
 
 /** Nicknames seen across Dutchie / METRC / the HR sheet. Explicit and reviewable, not guessed. */
-var NICKNAMES = { mike: 'michael', zach: 'zachary', chris: 'christopher', sam: 'samuel',
+var NICKNAMES = Object.assign(Object.create(null), { mike: 'michael', zach: 'zachary', chris: 'christopher', sam: 'samuel',
                   jon: 'jonathan', nick: 'nicholas', dan: 'daniel', matt: 'matthew',
                   jen: 'jennifer', tanner: 'taner', sky: 'skyler', skylar: 'skyler',
-                  bob: 'robert', rob: 'robert', tom: 'thomas' };
+                  bob: 'robert', rob: 'robert', tom: 'thomas' });
 
 function canonFirst_(f) {
   var x = String(f || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -2980,7 +2994,7 @@ function getEomHistory_(p) {
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
 
-  var names = {};
+  var names = Object.create(null);
   try {
     (GXCore.getEmployees() || []).forEach(function (r) {
       names[String(r.employee_id || '').trim()] = String(r.full_name || '');
@@ -3080,7 +3094,7 @@ function eomBackfill_(p, body) {
     }
   }
 
-  var have = {};
+  var have = Object.create(null);
   readTab_(EOM_TAB, EOM_HEADERS).forEach(function (r) {
     have[r.employee_id + '|' + String(r.started_at).slice(0, 7)] = true;
   });
@@ -3161,7 +3175,7 @@ function getCelebrations_(p) {
 
   var identity = [];
   try { identity = GXCore.getEmployees() || []; } catch (e) { identity = []; }
-  var byId = {};
+  var byId = Object.create(null);
   identity.forEach(function (r) {
     var st = String(r.status || 'active').toLowerCase();
     if (st === 'inactive' || st === 'terminated' || st === 'false') return;
