@@ -855,8 +855,17 @@
         (row.retired ? ' <span class="crew-tag">retired</span>' : '')));
       tr.appendChild(tdName);
       tr.appendChild(el('td', flagCls(row,'store','gx-muted'), esc(row.store ? storeName(row.store) : '—')));
+      /* NO ACCOUNT rides on the Role cell because the role is WHY it is expected — a budtender
+         without a login is normal, the same gap on a manager is a defect. Spelled out as a tag
+         rather than left as red text: red says "something here is wrong", and the person fixing
+         it needs to know it is not the role title itself. */
       tr.appendChild(el('td', flagCls(row,'role','gx-muted'), esc(row.role) +
-        (row.role_is_default ? '<span title="No role on file — defaulted"> *</span>' : '')));
+        (row.role_is_default ? '<span title="No role on file — defaulted"> *</span>' : '') +
+        (has(row,'no_account')
+          ? '<span class="crew-tag crew-tag-warn" title="Managers are expected to have a GX account. ' +
+            'This one has no linked login, so Send-to-Managers and every notification skip them ' +
+            'silently — nothing errors. Fix with Create accounts.">no account</span>'
+          : '')));
       tr.appendChild(el('td', flagCls(row,'hire_date','gx-muted'), esc(row.hire_date || '—')));
       tr.appendChild(el('td', 'gx-muted', esc(row.time_with_company || '—')));
 

@@ -158,6 +158,9 @@
     .crew-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
       color: var(--gx-text-mute); border: 1px solid var(--gx-border-strong);
       border-radius: var(--gx-radius-sm); padding: 1px 5px; margin-left: 6px; }
+    /* The warn variant of a tag. Same shape as the neutral one so the row does not jump; only
+       the colour carries the difference, and it borrows --gx-red rather than defining a red. */
+    .crew-tag-warn { color: var(--gx-red); border-color: var(--gx-red); }
     tr.is-retired td { opacity: .55; }
     tr.is-retired td b { font-weight: 400; }
 
@@ -349,6 +352,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=18"></script>
+  <script src="crew.js?v=19"></script>
 </body>
 </html>

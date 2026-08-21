@@ -107,6 +107,14 @@ var SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
 var ROLE_TITLES = ['Admin', 'Store Manager', 'Assistant Manager', 'Budtender'];
 
 /*
+ * Who "manager" means for the account rule. Copied deliberately from GX Core's identity_health
+ * rather than rebuilt from ROLE_TITLES, so the two stay one definition: a regex over the title
+ * matches 'Store Manager' and 'Assistant Manager', and keeps matching a non-canonical variant
+ * like 'Assistant Store Manager' that reached Core without passing through normRole_.
+ */
+var MANAGER_ROLE_RE = /manager/i;
+
+/*
  * Names other systems use for the same four jobs. Dutchie's permission groups and the old HR
  * sheet each spell them their own way, and "Assistant Store Manager" is not a fifth role — it
  * is this one, typed differently. Mapping is how an import stays useful without being allowed
@@ -1724,6 +1732,19 @@ function rowFlags_(r) {
   if (!r.hire_date)                f.push('hire_date');
   if (!r.store)                    f.push('store');
   if (r.role_is_default)           f.push('role');
+  /* A manager with no GX account is a DEFECT, not a preference (Sky, 2026-08-20: every manager
+     having an account is deliberate policy, not something that merely accumulated).
+
+     It matters because it fails SILENTLY. Send-to-Managers and every notification target the
+     employees.user_id -> users.email join, so an unlinked manager is not refused — they are
+     simply never contacted, and the send reports success. That is how sam_keck sat unreachable
+     with a perfectly good account already sitting in `users`; only the LINK was missing.
+
+     Deliberately the same test GX Core's identity_health uses -- /manager/i on the role title,
+     active rows only -- so the roster and the suite-wide detector can never disagree about who
+     counts. Two detectors that answer differently are worse than one. Admin is excluded there
+     and so here: notifications target managers. Retired rows never reach this line. */
+  if (MANAGER_ROLE_RE.test(r.role) && !String(r.user_id || '').trim()) f.push('no_account');
   if (!r.wage)                     f.push('wage');
   if (!r.birthday)                 f.push('birthday');
   if (!r.permit_number)            f.push('permit');
