@@ -173,22 +173,28 @@
     facialHairColor: ['2c1b18','4a312c','724133','a55728','b58143','c93305','d6b370','e8e1e1','ecdcbf','f59797'],
     clothing:     ['blazerAndShirt','blazerAndSweater','collarAndSweater','graphicShirt','hoodie','shirtCrewNeck','shirtScoopNeck','shirtVNeck'],
     clothesColor: ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff'],
+    /* The design printed on a graphic shirt. It is here because it was the LAST attribute the
+       seed still chose: everything else in a config is pinned, so once the seed was fixed to
+       employee_number this was the only thing that could still differ between apps — and it did,
+       because each app passed a different seed. Two people wore a shirt nobody had picked. */
+    clothingGraphic: ['bat','bear','cumbia','deer','diamond','hola','pizza','resist','skull','skullOutline'],
     accessories:  ['_none','prescription01','prescription02','round','sunglasses','wayfarers'],
     accessoriesColor: ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff']
   };
   var COLOR_KEYS = { skinColor:1, hairColor:1, hatColor:1, facialHairColor:1, clothesColor:1, accessoriesColor:1 };
   var OPTION_ORDER = ['top','hairColor','hatColor','skinColor','eyes','eyebrows','mouth',
-                      'facialHair','facialHairColor','clothing','clothesColor',
+                      'facialHair','facialHairColor','clothing','clothesColor','clothingGraphic',
                       'accessories','accessoriesColor'];
   var OPTION_LABEL = { top:'Hair / hat', hairColor:'Hair colour', hatColor:'Hat colour',
     skinColor:'Skin', eyes:'Eyes', eyebrows:'Brows', mouth:'Mouth', facialHair:'Facial hair',
     facialHairColor:'Facial hair colour', clothing:'Clothing', clothesColor:'Clothing colour',
+    clothingGraphic:'Shirt graphic',
     accessories:'Glasses', accessoriesColor:'Glasses colour' };
 
   var DEFAULT_AVATAR = { skinColor:'ffdbb4', top:'shortFlat', hairColor:'4a312c', hatColor:'262e33',
     eyes:'default', eyebrows:'default', mouth:'default', facialHair:'_none',
     facialHairColor:'2c1b18', clothing:'shirtCrewNeck', clothesColor:'262e33',
-    accessories:'_none', accessoriesColor:'3c4f5c' };
+    clothingGraphic:'bat', accessories:'_none', accessoriesColor:'3c4f5c' };
 
   function parseCfg(row) {
     if (!row.avatar_config) return null;
@@ -1076,6 +1082,9 @@
               if (key === 'hairColor' && (working.top === '_none' || HAT_TOPS[working.top])) return;
               if (key === 'facialHairColor' && working.facialHair === '_none') return;
               if (key === 'accessoriesColor' && working.accessories === '_none') return;
+              // Only graphicShirt has a graphic to choose. Same rule as the colours above: do not
+              // offer a control for something the current clothing does not render.
+              if (key === 'clothingGraphic' && working.clothing !== 'graphicShirt') return;
               /* A config may not carry every key — Sky's had no hatColor at all, so choosing a
                  hat rendered a control showing a value the config did not hold, and the avatar
                  came back with DiceBear's default instead. Adopt the displayed value into the
