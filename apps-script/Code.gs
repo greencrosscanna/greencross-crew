@@ -1035,6 +1035,10 @@ function avatarSave_(p, body) {
   Object.keys(emp).forEach(function (k) { merged[k] = emp[k]; });   // read-merge-write
   merged.employee_id = id;
   merged.avatar_config = cfg ? JSON.stringify(cfg) : '';
+  /* Removing an avatar has to NAME the field. An empty value alone means "leave alone" in Core's
+     patch path — the guard that stops a partial write blanking a record — so clearing is opt-in
+     by naming, never by omitting (GXCore v174, added at Crew's request). */
+  if (!cfg) merged.clear = 'avatar_config';
 
   /*
    * gxWrite_ serialises on the script lock and gives up after 30s. Under any concurrent write
@@ -1058,11 +1062,10 @@ function avatarSave_(p, body) {
   bustRosterCache_();
   var uncleared = unclearedFields_(emp, { avatar_config: merged.avatar_config }, res);
   if (uncleared.length) {
-    // Fail LOUD. The caller asked to remove this avatar and it is still there; saying ok here is
-    // how the button came to lie in the first place.
+    // Fail LOUD. The caller asked to remove this avatar and it is still there. With clear= wired
+    // up this should no longer happen — which is exactly why it must still be reported if it does.
     return { ok: false, employee_id: id, name: emp.full_name, cleared: false,
-             error: 'GX Core cannot blank a field: an empty value means "leave alone" in its patch ' +
-                    'path, so this avatar is still set. Removing one needs an explicit clear in Core.',
+             error: 'asked GX Core to clear avatar_config and it is still set',
              not_cleared: uncleared, resolved_from: ref };
   }
   return { ok: true, employee_id: id, name: emp.full_name, seed: seed,
@@ -2073,9 +2076,17 @@ function saveIdentity_(p) {
     merged[k] = changes[k];
   });
   merged.employee_id = id;
+  /* Every field the caller deliberately emptied that currently holds a value. Core will not blank
+     on an empty value alone, so these must be NAMED — and naming them is what keeps an ordinary
+     partial write from ever blanking anything by accident. */
+  var wantClear = Object.keys(changes).filter(function (k) {
+    return String(changes[k] == null ? '' : changes[k]) === '' && String(prior[k] || '').trim();
+  });
+  if (wantClear.length) merged.clear = wantClear.join(',');
   var res = GXCore.gxUpsertEmployee(merged);
-  /* Every blankable field here has the same limitation — preferred_name, home_store, role_title,
-     hire_date and avatar_config alike. Report the truth rather than the request. */
+  /* Kept as a safety net even though clear= now works: it compares Core's OWN answer against the
+     request, so if a field ever stops being clearable this reports it instead of quietly claiming
+     a change that did not happen. That silent-success is the bug this pair exists to prevent. */
   var uncleared = unclearedFields_(prior, changes, res);
   if (uncleared.length) {
     touched = touched.filter(function (k) { return uncleared.indexOf(k) < 0; });
