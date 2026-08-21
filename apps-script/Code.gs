@@ -928,7 +928,7 @@ function avatarsForKiosk_(p) {
       try { parsed = JSON.parse(cfg); } catch (e) { parsed = null; }
       if (parsed) {
         // Seed travels WITH the config so Leaderboard never has to derive it from a name.
-        parsed.seed = num || id;
+        parsed.seed = avatarSeedFrom_(attrs[id], r, id);
         byKey[id] = parsed;
         if (num) byNumber[num] = parsed;
       }
@@ -938,6 +938,36 @@ function avatarsForKiosk_(p) {
   });
   return { ok: true, avatarConfigs: byKey, byEmployeeNumber: byNumber, nicknames: names,
            note: 'seed is inside each config — do not regenerate it from a name key' };
+}
+
+/**
+ * THE avatar seed for one person — the single definition, because there is more than one door.
+ *
+ * A face is generated from this seed, so it must never move: it is pinned to employee_number,
+ * which is issued once and never reused, precisely so a rename or a merge cannot hand someone a
+ * different face. employee_id is only a fallback for someone not yet numbered; they get a stable
+ * face the moment a number is assigned.
+ *
+ * It lives in a function because avatar_config can be written through TWO routes — avatar_save
+ * (Leaderboard's self-service path) and roster_identity (Crew's own picker) — and for a while
+ * only the first one stamped. Nothing broke, because avatarsForKiosk_ re-derives the seed at READ
+ * time, so a config stored without one still rendered correctly. That is exactly what made it
+ * hard to notice: the stored record quietly drifted from the invariant while every rendered face
+ * stayed right. One function, called by both doors, is what keeps that from happening again.
+ */
+function avatarSeedFrom_(attrRow, coreRow, employeeId) {
+  var num = String((attrRow && attrRow.employee_number) ||
+                   (coreRow && coreRow.employee_number) || '').trim();
+  return num || String(employeeId || '').trim();
+}
+
+/*
+ * Convenience for the SINGLE-record write paths, which hold no attrs map. The bulk paths
+ * (avatarsForKiosk_, migrateLeaderboard_, rosterJoin_) have already read attrs for their whole
+ * loop and call avatarSeedFrom_ directly rather than re-reading the sheet per person.
+ */
+function avatarSeed_(employeeId, priorRow) {
+  return avatarSeedFrom_(readAttrs_()[employeeId], priorRow, employeeId);
 }
 
 /** Write one person's avatar. Called by Leaderboard's backend on behalf of a signed-in user. */
@@ -958,9 +988,8 @@ function avatarSave_(p, body) {
   }
 
   var id = String(emp.employee_id).trim();
-  var attrs = readAttrs_();
-  var num = String((attrs[id] || {}).employee_number || emp.employee_number || '').trim();
-  if (cfg) cfg.seed = num || id;   // pin the seed; a rename must never change the face
+  var seed = avatarSeed_(id, emp);
+  if (cfg) cfg.seed = seed;        // pin the seed; a rename must never change the face
 
   var merged = {};
   Object.keys(emp).forEach(function (k) { merged[k] = emp[k]; });   // read-merge-write
@@ -987,7 +1016,7 @@ function avatarSave_(p, body) {
              error: String(lastErr.message || lastErr) };
   }
   bustRosterCache_();
-  return { ok: true, employee_id: id, name: emp.full_name, seed: num || id,
+  return { ok: true, employee_id: id, name: emp.full_name, seed: seed,
            cleared: !cfg, resolved_from: ref };
 }
 
@@ -1591,8 +1620,7 @@ function migrateLeaderboard_(p, body) {
     if (writes[id].avatar_config) { collisions.push(e.full_name + ' (keys ' + k + ' and another)'); }
     // Pin the seed to employee_number so no future rename can scramble the face. Fall back to
     // employee_id only when a number is genuinely absent.
-    var num = String((attrs[id] || {}).employee_number || e.employee_number || '').trim();
-    cfg.seed = num || id;
+    cfg.seed = avatarSeedFrom_(attrs[id], e, id);
     writes[id].avatar_config = JSON.stringify(cfg);
     if (k !== id) resolved.push('avatar ' + k + ' → ' + e.full_name);
   });
@@ -1828,7 +1856,7 @@ function rosterJoin_() {
          silently produced a different person's face. Pinned to employee_number, which is
          issued once and never reused. employee_id is only a fallback for someone not yet
          numbered; they get a stable face the moment a number is assigned. */
-      avatar_seed: String(a.employee_number || r.employee_number || r.employee_id || ''),
+      avatar_seed: avatarSeedFrom_(a, r, id),
       dutchie_employee_id: String(r.dutchie_employee_id || ''),
       user_id: String(r.user_id || ''),
       role: String(r.role_title || '').trim() || 'Budtender',
@@ -1969,6 +1997,12 @@ function saveIdentity_(p) {
       try {
         var parsed = JSON.parse(av);
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+        /* Stamp the seed here too, not just in avatar_save. The picker builds a config from
+           DEFAULT_AVATAR, which carries no seed, so a brand-new avatar created in Crew used to be
+           stored without one — and it RENDERED fine, because the seed is re-derived at read time.
+           The invariant regressed silently while every face stayed correct. Unconditional, like
+           the other door: it also repairs a config that arrives carrying a stale seed. */
+        parsed.seed = avatarSeed_(id, prior);
         av = JSON.stringify(parsed);
       } catch (e) {
         return { ok: false, error: 'avatar_config must be a JSON object of DiceBear params' };
