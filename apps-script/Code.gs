@@ -183,6 +183,18 @@ function route_(e) {
         try { lib_ = GXCore.libVersion(); } catch (e) { lib_ = 'pre-139'; }
         return json_({ ok: true, app: 'crew', lib: lib_, ts: new Date().toISOString() }, p.callback);
 
+      // The SUITE-STANDARD spelling of the question `health` already answers (inventory, 2026-08-20).
+      // Kept as a separate route rather than folding into health because the point is that ONE curl
+      // works across every spoke: a fleet check that has to special-case Crew's response shape is
+      // the thing this route exists to avoid. Pre-auth on purpose — needing a session to ask "what
+      // version am I running" is the kind of friction that means nobody asks.
+      //
+      // An old pin IDENTIFIES ITSELF instead of throwing. A pre-v153 library has no libVersion(),
+      // and letting that blow up would break the diagnostic exactly when it is most needed: a 500
+      // says nothing about WHICH version you are on. Reported as data, so the route always answers.
+      case 'libversion':
+        return json_(libVersion_(), p.callback);
+
       // ── Roster (auth-gated — holds PII) ─────────────────────────────────────
       case 'roster':       return json_(getRoster_(p), p.callback);
       case 'roster_save':  return json_(saveRosterAttrs_(p), p.callback);
@@ -291,6 +303,18 @@ function json_(obj, callback) {
  * password/session/grant system across the suite — Crew never mints or checks credentials itself.
  * Returns { ok, user, role } or { ok:false, error }.
  */
+function libVersion_() {
+  try {
+    if (typeof GXCore === 'undefined' || !GXCore) return { ok: false, error: 'GXCore not bound' };
+    if (typeof GXCore.libVersion !== 'function') {
+      return { ok: false, error: 'pinned GXCore has no libVersion() - pre-v153' };
+    }
+    return { ok: true, gxcore: GXCore.libVersion() };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
 function requireCrew_(p) {
   return GXCore.requireAuth(p, 'crew');
 }
