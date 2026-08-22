@@ -48,8 +48,15 @@ except Exception:
     raise SystemExit(1)
 
 if not d.get("ok"):
-    print("✗ " + str(d.get("error", "unknown error")))
-    print("  A bad-secret error here means the local .gx_deploy_secret does not match the engine.")
+    err = str(d.get("error", "unknown error"))
+    print("✗ " + err)
+    # Name the actual cause. The first run of this said "bad secret" at an "unknown action" error,
+    # which sends you to check a credential when the real answer is that the engine has not been
+    # redeployed yet. A wrong hint costs more than no hint.
+    if "unknown action" in err.lower():
+        print("  The engine is running an older deployment. Redeploy it:  ./gxengine.sh --deploy")
+    elif "secret" in err.lower():
+        print("  The local .gx_deploy_secret does not match the engine's GX_DEPLOY_SECRET.")
     raise SystemExit(1)
 
 print("checked %d roster rows\n" % d.get("checked", 0))
