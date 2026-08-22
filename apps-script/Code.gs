@@ -37,6 +37,29 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'celebrations_opt_out',
                           'updated_at', 'updated_by'];
 
+/* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
+ *
+ * DERIVED, NOT LISTED, and that is the whole point. writeAttrs_ writes the FULL row: it maps over the
+ * sheet's headers and writes '' for anything the record omits. So any writer that rebuilds a record
+ * from a hand-written field list silently BLANKS every column missing from that list.
+ *
+ * That already happened. `celebrations_opt_out` was added to ATTR_HEADERS but not to the four
+ * hand-written lists, so assigning or setting an employee number cleared it — and the person
+ * reappeared in the all-staff kiosk celebrations feed. The flag's own comment names the victim: Sky
+ * holds employee_number 00 and rings nothing, so `assign_numbers` re-exposed exactly the person it
+ * was written to protect.
+ *
+ * Deriving it means the next column added to ATTR_HEADERS is carried by every writer automatically,
+ * instead of being dropped by whichever one nobody remembered to update.
+ */
+var ATTR_IDENTITY_COLS = ['employee_id', 'name_key', 'full_name'];
+var ATTR_AUDIT_COLS    = ['updated_at', 'updated_by'];
+function attrFields_() {
+  return ATTR_HEADERS.filter(function (h) {
+    return ATTR_IDENTITY_COLS.indexOf(h) === -1 && ATTR_AUDIT_COLS.indexOf(h) === -1;
+  });
+}
+
 /* celebrations_opt_out: 'yes' keeps someone out of the kiosk celebrations feed.
  *
  * WHY A FLAG AND NOT A RULE. Some people are on the roster for ACCESS rather than for work —
@@ -267,6 +290,11 @@ function route_(e) {
       case 'identity_health':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(identityHealth_(), p.callback);
+
+      // Stored name_keys vs what nameToKey_ would produce now. Read-only; see nameKeyHealth_.
+      case 'namekey_health':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(nameKeyHealth_(), p.callback);
 
       // Puts a blanked identity row back together. Preview by default; writing takes confirm=yes.
       // See identityRepair_ for what a "blanked row" is and why one appears.
@@ -512,7 +540,12 @@ function isTruthyFlag_(v) {
  * drift here shows up as staff silently missing from the board rather than as an error.
  */
 function nameToKey_(name) {
-  return String(name || '').toLowerCase().replace(/["'`]/g, '').replace(/\./g, '').replace(/\s+/g, '_').trim();
+  // trim() must come BEFORE whitespace becomes underscores. It used to run last, so a padded cell
+  // produced a DIFFERENT key: "  Sky Pinnick " -> "_sky_pinnick_" rather than "sky_pinnick", and
+  // trim() then had no whitespace left to remove. Trailing spaces in spreadsheet cells are routine,
+  // and this is the key the whole suite joins a person on — the failure is not an error, it is a
+  // person silently detached from their own record.
+  return String(name || '').toLowerCase().replace(/["'`]/g, '').replace(/\./g, '').trim().replace(/\s+/g, '_');
 }
 
 /**
@@ -655,10 +688,10 @@ function assignNumbers_(p) {
     var rec = { employee_id: a.employee_id, name_key: nameToKey_(prior.full_name),
                 full_name: String(prior.full_name || ''), employee_number: String(a.number),
                 updated_at: new Date().toISOString(), updated_by: auth.user + ' (auto-number)' };
-    ['shirt_size', 'birthday', 'work_anniversary', 'wage',
-     'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
-      rec[k] = was[k] || '';
-    });
+    // Carry EVERY stored attribute forward first, then apply the one field this call changes.
+    // writeAttrs_ replaces the whole row, so anything not carried here is erased.
+    attrFields_().forEach(function (k) { rec[k] = was[k] || ''; });
+    rec.employee_number = String(a.number);
     writeAttrs_(rec);
   });
   if (idRows.length) GXCore.gxUpsertEmployees(idRows);
@@ -710,10 +743,8 @@ function setNumber_(p) {
   var rec = { employee_id: id, name_key: nameToKey_(prior.full_name),
               full_name: String(prior.full_name || ''), employee_number: num,
               updated_at: new Date().toISOString(), updated_by: 'tooling (reserved number)' };
-  ['shirt_size', 'birthday', 'work_anniversary', 'wage',
-   'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
-    rec[k] = a[k] || '';
-  });
+  attrFields_().forEach(function (k) { rec[k] = a[k] || ''; });
+  rec.employee_number = num;
   writeAttrs_(rec);
   bustRosterCache_();
   return { ok: true, employee_id: id, name: prior.full_name, was: was || '(none)', now: num };
@@ -1764,8 +1795,7 @@ function mergeEmployees_(p) {
   var wa = attrs[winner] || {}, la = attrs[loser] || {};
   var merged = { employee_id: winner, name_key: nameToKey_(W.full_name), full_name: String(W.full_name || '') };
   var filled = [];
-  ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage',
-   'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
+  attrFields_().forEach(function (k) {
     var mine = String(wa[k] || '').trim(), theirs = String(la[k] || '').trim();
     merged[k] = mine || theirs;
     if (!mine && theirs) filled.push(k);
@@ -2342,8 +2372,7 @@ function hrImport_(p, body) {
 
     var was = attrs[id] || {};
     var a = { employee_id: id, name_key: key, full_name: full };
-    ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage',
-     'permit_number', 'permit_granted', 'permit_expires', 'permit_status'].forEach(function (k) {
+    attrFields_().forEach(function (k) {
       var v = String(r[k] == null ? '' : r[k]).trim();
       if (k === 'birthday') v = normBirthday_(v);
       if (k === 'shirt_size') v = normShirt_(v) || (was[k] || '');
@@ -2716,6 +2745,57 @@ function propsInspect_() {
 }
 
 /** What GX Core actually holds now — aggregate only, so this never leaks a roster. */
+/**
+ * Which stored name_keys disagree with what nameToKey_ would produce from the full_name on record?
+ *
+ * WHY THIS EXISTS: nameToKey_ used to replace whitespace with underscores BEFORE trimming, so a
+ * padded cell ("  Sky Pinnick ") produced "_sky_pinnick_" instead of "sky_pinnick". Trailing spaces
+ * in spreadsheet cells are routine, and name_key is what the suite joins a person on — the failure
+ * is not an error, it is a person detached from their own record. The function is fixed; any key
+ * WRITTEN by the old path is still wrong and will not match the corrected one.
+ *
+ * READ-ONLY, deliberately. It reports; repairing is a separate, deliberate act (see identity_repair
+ * for the same split). Secret-gated like identity_health.
+ *
+ * Output is minimal: employee_id plus the stored and expected keys. That is what you need to fix a
+ * row. It does not dump the roster.
+ */
+function nameKeyHealth_() {
+  var attrs = readAttrs_();
+  var ids = Object.keys(attrs);
+  var mismatched = [], padded = [], blank = [], byKey = {}, dupes = [];
+
+  ids.forEach(function (id) {
+    var r = attrs[id] || {};
+    var stored = String(r.name_key || '');
+    var full   = String(r.full_name || '');
+    var expect = full ? nameToKey_(full) : '';
+
+    if (!stored) { blank.push({ employee_id: id }); return; }
+    // The specific fingerprint of the old bug: a leading or trailing underscore, which nameToKey_
+    // can no longer produce from any input.
+    if (/^_|_$/.test(stored)) padded.push({ employee_id: id, stored: stored, expected: expect });
+    else if (expect && stored !== expect) mismatched.push({ employee_id: id, stored: stored, expected: expect });
+
+    if (!byKey[stored]) byKey[stored] = [];
+    byKey[stored].push(id);
+  });
+
+  Object.keys(byKey).forEach(function (k) {
+    if (byKey[k].length > 1) dupes.push({ name_key: k, employee_ids: byKey[k] });
+  });
+
+  return {
+    ok: true,
+    checked: ids.length,
+    padded_underscore: padded,      // written by the pre-fix nameToKey_
+    mismatched: mismatched,         // disagree with the name on record for some other reason
+    blank_name_key: blank,
+    duplicate_name_key: dupes,      // two people sharing a join key is its own hazard
+    clean: padded.length === 0 && mismatched.length === 0 && blank.length === 0 && dupes.length === 0,
+  };
+}
+
 function identityHealth_() {
   var rows = [];
   try { rows = GXCore.getEmployees() || []; }
