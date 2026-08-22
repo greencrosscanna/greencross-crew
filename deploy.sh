@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # ─── SHARED deploy recorder (source of truth: gx-theme) ──────────────────────────────────────────
 # Record a release in the GX Core shared version log. Synced into every spoke by gx-sync.sh, which
-# fills __APP__ from the repo's .gx_app. Run AFTER you ship (git push to Pages / clasp deploy engine).
+# fills the app-key placeholder from the repo's .gx_app. Run AFTER you ship (git push to Pages /
+# clasp deploy engine). Do NOT write that placeholder literally in prose here: gx-sync substitutes
+# every occurrence, so an explanatory mention becomes 'fills inventory from the repo's .gx_app'.
 #   Usage:  GX_NOTES="what changed this release" ./deploy.sh
 # Version comes from the ?v=NN cache-buster on the JS <script>, falling back to an APP_VERSION /
 # GC.VERSION constant for monolith apps that have no external JS. To change this script, edit it
