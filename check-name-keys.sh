@@ -76,7 +76,15 @@ def show(key, title, note):
 bad  = show("padded_underscore", "leading/trailing underscore", "written by the pre-fix nameToKey_ — these will not match the corrected key")
 bad += show("mismatched",        "disagree with full_name",     "the stored key is not what the name on record produces")
 bad += show("blank_name_key",    "blank name_key",              "no join key at all")
-bad += show("duplicate_name_key","duplicate name_key",          "two people sharing one join key")
+bad += show("duplicate_name_key","duplicate name_key",          "two LIVE rows sharing one join key")
+
+sup = d.get("superseded_name_key") or []
+if sup:
+    print()
+    print("  note: %d key(s) also held by a merged/retired predecessor — this is EXPECTED." % len(sup))
+    print("        A merge leaves the old row keyed the same on purpose, so the history stays traceable.")
+    for r in sup:
+        print("        %-24s live=%s superseded=%s" % (r.get("name_key",""), ", ".join(r.get("live") or []), ", ".join(r.get("superseded_by_status") or [])))
 
 print()
 if bad == 0:

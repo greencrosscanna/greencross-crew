@@ -2763,7 +2763,12 @@ function propsInspect_() {
 function nameKeyHealth_() {
   var attrs = readAttrs_();
   var ids = Object.keys(attrs);
-  var mismatched = [], padded = [], blank = [], byKey = {}, dupes = [];
+  var mismatched = [], padded = [], blank = [], byKey = {}, dupes = [], superseded = [];
+
+  var identityById = {};
+  try { (GXCore.getEmployees() || []).forEach(function (r) {
+    identityById[String(r.employee_id || '').trim()] = r;
+  }); } catch (e) {}
 
   ids.forEach(function (id) {
     var r = attrs[id] || {};
@@ -2784,13 +2789,22 @@ function nameKeyHealth_() {
   // For a duplicate, report enough to DECIDE which row is canonical without dumping the roster.
   // A shared join key is not automatically a merge: one row may be a retired predecessor, and
   // merging a live person into a retired shell is not recoverable by re-running anything.
-  var identityById = {};
-  try { (GXCore.getEmployees() || []).forEach(function (r) {
-    identityById[String(r.employee_id || '').trim()] = r;
-  }); } catch (e) {}
+  // A MERGED or RETIRED predecessor keeps the same name_key on purpose — that is what makes the
+  // merge traceable afterwards. Flagging it as a duplicate is a false positive, and a check that
+  // cries wolf on a correct state is one people learn to ignore. Only a collision between rows that
+  // are still LIVE is a real join hazard.
+  function liveRow_(id) {
+    var st = String((identityById[id] || {}).status || 'active').toLowerCase();
+    return st !== 'merged' && st !== 'retired' && st !== 'inactive' && st !== 'terminated';
+  }
 
   Object.keys(byKey).forEach(function (k) {
     if (byKey[k].length < 2) return;
+    var live = byKey[k].filter(liveRow_);
+    if (live.length < 2) {
+      superseded.push({ name_key: k, live: live, superseded_by_status: byKey[k].filter(function (id) { return !liveRow_(id); }) });
+      return;
+    }
     dupes.push({
       name_key: k,
       rows: byKey[k].map(function (id) {
@@ -2816,7 +2830,8 @@ function nameKeyHealth_() {
     padded_underscore: padded,      // written by the pre-fix nameToKey_
     mismatched: mismatched,         // disagree with the name on record for some other reason
     blank_name_key: blank,
-    duplicate_name_key: dupes,      // two people sharing a join key is its own hazard
+    duplicate_name_key: dupes,      // two LIVE rows sharing a join key — a real attribution hazard
+    superseded_name_key: superseded, // a merged/retired predecessor keeping its key — EXPECTED, informational
     clean: padded.length === 0 && mismatched.length === 0 && blank.length === 0 && dupes.length === 0,
   };
 }
