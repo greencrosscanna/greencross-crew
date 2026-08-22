@@ -84,12 +84,18 @@ if [ ! -f "$SECRET_FILE" ]; then
 fi
 # Ask the app what it now runs. Warm instances can serve the old snapshot briefly, so poll rather than
 # trust the first answer -- sales took ~2 minutes on 2026-08-22.
-EXEC_URL="$(curl -sL --max-time 12 "$GXCORE?action=config&key=cfg.${APP}ExecUrl" 2>/dev/null | python3 -c "
+# Try BOTH conventions. Crew already published cfg.crewEngineUrl long before this script invented
+# cfg.<app>ExecUrl, and inventing a second name for a key that exists is how pricecards/pricetags
+# broke the auth gate and the dev-server port on the same day. Check the established name first.
+for _k in "cfg.${APP}EngineUrl" "cfg.${APP}ExecUrl"; do
+EXEC_URL="$(curl -sL --max-time 12 "$GXCORE?action=config&key=$_k" 2>/dev/null | python3 -c "
 import json,sys
 try:
     d=json.load(sys.stdin); v=d.get('value') or ''
     print(v if d.get('ok') and str(v).startswith('https://') else '')
 except Exception: print('')" 2>/dev/null)"
+  [ -n "$EXEC_URL" ] && break
+done
 LV=""
 if [ -n "$EXEC_URL" ]; then
   for _ in $(seq 1 12); do
