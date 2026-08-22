@@ -512,7 +512,12 @@ function isTruthyFlag_(v) {
  * drift here shows up as staff silently missing from the board rather than as an error.
  */
 function nameToKey_(name) {
-  return String(name || '').toLowerCase().replace(/["'`]/g, '').replace(/\./g, '').replace(/\s+/g, '_').trim();
+  // trim() must come BEFORE whitespace becomes underscores. It used to run last, so a padded cell
+  // produced a DIFFERENT key: "  Sky Pinnick " -> "_sky_pinnick_" rather than "sky_pinnick", and
+  // trim() then had no whitespace left to remove. Trailing spaces in spreadsheet cells are routine,
+  // and this is the key the whole suite joins a person on — the failure is not an error, it is a
+  // person silently detached from their own record.
+  return String(name || '').toLowerCase().replace(/["'`]/g, '').replace(/\./g, '').trim().replace(/\s+/g, '_');
 }
 
 /**
