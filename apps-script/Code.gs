@@ -291,6 +291,11 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(identityHealth_(), p.callback);
 
+      // Stored name_keys vs what nameToKey_ would produce now. Read-only; see nameKeyHealth_.
+      case 'namekey_health':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(nameKeyHealth_(), p.callback);
+
       // Puts a blanked identity row back together. Preview by default; writing takes confirm=yes.
       // See identityRepair_ for what a "blanked row" is and why one appears.
       case 'identity_repair':
@@ -2740,6 +2745,57 @@ function propsInspect_() {
 }
 
 /** What GX Core actually holds now — aggregate only, so this never leaks a roster. */
+/**
+ * Which stored name_keys disagree with what nameToKey_ would produce from the full_name on record?
+ *
+ * WHY THIS EXISTS: nameToKey_ used to replace whitespace with underscores BEFORE trimming, so a
+ * padded cell ("  Sky Pinnick ") produced "_sky_pinnick_" instead of "sky_pinnick". Trailing spaces
+ * in spreadsheet cells are routine, and name_key is what the suite joins a person on — the failure
+ * is not an error, it is a person detached from their own record. The function is fixed; any key
+ * WRITTEN by the old path is still wrong and will not match the corrected one.
+ *
+ * READ-ONLY, deliberately. It reports; repairing is a separate, deliberate act (see identity_repair
+ * for the same split). Secret-gated like identity_health.
+ *
+ * Output is minimal: employee_id plus the stored and expected keys. That is what you need to fix a
+ * row. It does not dump the roster.
+ */
+function nameKeyHealth_() {
+  var attrs = readAttrs_();
+  var ids = Object.keys(attrs);
+  var mismatched = [], padded = [], blank = [], byKey = {}, dupes = [];
+
+  ids.forEach(function (id) {
+    var r = attrs[id] || {};
+    var stored = String(r.name_key || '');
+    var full   = String(r.full_name || '');
+    var expect = full ? nameToKey_(full) : '';
+
+    if (!stored) { blank.push({ employee_id: id }); return; }
+    // The specific fingerprint of the old bug: a leading or trailing underscore, which nameToKey_
+    // can no longer produce from any input.
+    if (/^_|_$/.test(stored)) padded.push({ employee_id: id, stored: stored, expected: expect });
+    else if (expect && stored !== expect) mismatched.push({ employee_id: id, stored: stored, expected: expect });
+
+    if (!byKey[stored]) byKey[stored] = [];
+    byKey[stored].push(id);
+  });
+
+  Object.keys(byKey).forEach(function (k) {
+    if (byKey[k].length > 1) dupes.push({ name_key: k, employee_ids: byKey[k] });
+  });
+
+  return {
+    ok: true,
+    checked: ids.length,
+    padded_underscore: padded,      // written by the pre-fix nameToKey_
+    mismatched: mismatched,         // disagree with the name on record for some other reason
+    blank_name_key: blank,
+    duplicate_name_key: dupes,      // two people sharing a join key is its own hazard
+    clean: padded.length === 0 && mismatched.length === 0 && blank.length === 0 && dupes.length === 0,
+  };
+}
+
 function identityHealth_() {
   var rows = [];
   try { rows = GXCore.getEmployees() || []; }
