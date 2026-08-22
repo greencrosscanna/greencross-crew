@@ -51,6 +51,10 @@ the current Leaderboard incentive output for a full pay period.
   still runs the old snapshot).
   Deploy the engine with clasp (`clasp create --type webapp --rootDir apps-script` on first setup, then
   `clasp push` / `clasp deploy`).
+- **Local loop:** `python3 serve.py` → <http://localhost:8755>. No build step — the working tree IS the
+  app, so edit + reload is the whole loop. The backend it talks to is **live**; `gx-dev.js` blocks writes
+  until you arm them, and `gx-preflight.sh` runs as a **pre-push hook** refusing dev leftovers. No automated
+  test suite yet — for anything touching pay, the check that counts is the **penny-match** described above.
 - **Shared dev files** (`deploy.sh`, `.claude/` SessionStart hook + settings) come from gx-theme via
   `gx-sync.sh`, filled from `.gx_app` (= `crew`). Re-run `./gx-sync.sh` to refresh them. This CLAUDE.md is
   intentionally **not** synced — keep it app-specific.
