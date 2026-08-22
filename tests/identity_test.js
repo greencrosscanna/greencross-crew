@@ -40,7 +40,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, normBirthday_, storeToken_, mapPermissionLocation_ };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, normBirthday_, storeToken_, mapPermissionLocation_, attrFields_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -123,6 +123,38 @@ console.log('\n5. mapPermissionLocation_ — the real Dutchie label shape');
      'an unknown store returns empty rather than guessing a store_id');
   eq(C.mapPermissionLocation_('', STORES), '', 'empty label returns empty');
   eq(C.mapPermissionLocation_(null, STORES), '', 'null does not throw');
+}
+
+// ── attrFields_ — the carry-forward list ─────────────────────────────────────
+console.log('\n6. attrFields_ — derived from the schema, so no writer can drop a column');
+{
+  const ok2 = (c, l) => { if (c) { pass++; console.log('  PASS  ' + l); } else { fail++; console.log('  FAIL  ' + l); } };
+  const f = C.attrFields_();
+
+  ok2(f.indexOf('celebrations_opt_out') >= 0,
+      'celebrations_opt_out IS carried — omitting it re-exposed people in the kiosk feed');
+  ok2(f.indexOf('employee_id') === -1, 'identity keys are excluded');
+  ok2(f.indexOf('name_key') === -1,    'name_key excluded');
+  ok2(f.indexOf('full_name') === -1,   'full_name excluded');
+  ok2(f.indexOf('updated_at') === -1,  'audit stamps excluded');
+  ok2(f.indexOf('updated_by') === -1,  'updated_by excluded');
+
+  // THE regression guard: every non-identity, non-audit header must be carried. This is what makes
+  // adding a column safe — writeAttrs_ writes the FULL row, so anything missing here is blanked.
+  const identity = ['employee_id','name_key','full_name','updated_at','updated_by'];
+  const missing = C.ATTR_HEADERS.filter(h => identity.indexOf(h) === -1 && f.indexOf(h) === -1);
+  ok2(missing.length === 0,
+      'EVERY attribute column is carried' + (missing.length ? ' — MISSING: ' + missing.join(', ') : ''));
+
+  // And prove it is derived rather than a second hand-written list that happens to agree today.
+  C.ATTR_HEADERS.push('zz_future_column');
+  const after = C.attrFields_();
+  ok2(after.indexOf('zz_future_column') >= 0,
+      'a NEW column appears automatically — derived, not a copy that drifts');
+  C.ATTR_HEADERS.pop();
+
+  ok2(C.EDITABLE_ATTRS.indexOf('celebrations_opt_out') === -1,
+      'EDITABLE_ATTRS stays a deliberate SUBSET — carried is not the same as user-editable');
 }
 
 console.log('\n──────────────────────────────');
