@@ -56,7 +56,7 @@ if not d.get("ok"):
     if "unknown action" in err.lower():
         print("  The engine is running an older deployment. Redeploy it:  ./gxengine.sh --deploy")
     elif "secret" in err.lower():
-        print("  The local .gx_deploy_secret does not match the engine's GX_DEPLOY_SECRET.")
+        print("  The local .gx_deploy_secret does not match GX_DEPLOY_SECRET on the engine.")
     raise SystemExit(1)
 
 print("checked %d roster rows\n" % d.get("checked", 0))
