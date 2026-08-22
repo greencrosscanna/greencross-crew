@@ -2781,8 +2781,33 @@ function nameKeyHealth_() {
     byKey[stored].push(id);
   });
 
+  // For a duplicate, report enough to DECIDE which row is canonical without dumping the roster.
+  // A shared join key is not automatically a merge: one row may be a retired predecessor, and
+  // merging a live person into a retired shell is not recoverable by re-running anything.
+  var identityById = {};
+  try { (GXCore.getEmployees() || []).forEach(function (r) {
+    identityById[String(r.employee_id || '').trim()] = r;
+  }); } catch (e) {}
+
   Object.keys(byKey).forEach(function (k) {
-    if (byKey[k].length > 1) dupes.push({ name_key: k, employee_ids: byKey[k] });
+    if (byKey[k].length < 2) return;
+    dupes.push({
+      name_key: k,
+      rows: byKey[k].map(function (id) {
+        var a = attrs[id] || {}, i = identityById[id] || {};
+        return {
+          employee_id: id,
+          full_name: String(a.full_name || i.full_name || ''),
+          preferred_name: String(i.preferred_name || ''),
+          employee_number: String(a.employee_number || i.employee_number || ''),
+          status: String(i.status || '(not in GX Core)'),
+          home_store: String(i.home_store || ''),
+          dutchie_employee_id: String(i.dutchie_employee_id || ''),
+          user_id: String(i.user_id || ''),
+          attrs_updated_at: String(a.updated_at || ''),
+        };
+      }),
+    });
   });
 
   return {
