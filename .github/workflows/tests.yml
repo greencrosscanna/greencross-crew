@@ -1,0 +1,40 @@
+# ─── greencross-crew — tests on every push and PR ───────────────────────────────────────
+#
+# Runs THE SAME gx-preflight.sh the pre-push hook runs. Not a reimplementation: a second copy of the
+# gate drifts from the real one and starts disagreeing with local results, which is how people learn
+# to distrust CI.
+#
+# WHY CI AND NOT JUST THE HOOK. A hook protects pushes from one machine and `git push --no-verify`
+# walks past it leaving no trace. On 2026-08-22 the hub's gate turned out to carry a portability bug
+# its author's Mac could not express — macOS /bin/sh is bash in POSIX mode, Ubuntu's is dash. CI
+# surfaced it on the first foreign run.
+#
+# `sh` is correct here: gx-preflight.sh is #!/bin/sh and uses no bashisms. Verified by running it
+# under dash before writing this file, not assumed.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out greencross-crew
+        uses: actions/checkout@v4
+        with:
+          path: greencross-crew
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run the gate
+        working-directory: greencross-crew
+        run: sh ./gx-preflight.sh
