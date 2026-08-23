@@ -19,7 +19,7 @@
  *                          rather than erroring — and because home_store is written through
  *                          writeAttrs_/gxWrite_, which replaces the whole row, "dropped" means
  *                          BLANKED on the next seed.
- *   storeToken_            folds Dutchie's `status` string, which decides whether a person is on
+ *   statusToken_            folds Dutchie's `status` string, which decides whether a person is on
  *                          the roster at all.
  *
  * Loads the real apps-script/Code.gs with Apps Script globals stubbed, so it tests shipped source.
@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, normBirthday_, storeToken_, mapPermissionLocation_, attrFields_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -110,8 +110,8 @@ eq(C.normBirthday_(null), '', 'null does not throw');
   else { fail++; console.log('  FAIL  a year survived: ' + out); }
 }
 
-// ── storeToken_ ──────────────────────────────────────────────────────────────
-console.log('\n4. storeToken_ — folds the status string Dutchie actually emits');
+// ── statusToken_ ──────────────────────────────────────────────────────────────
+console.log('\n4. statusToken_ — folds the status string Dutchie actually emits');
 /*
  * This function WAS the store matcher, and Core's gxStoreToken_ is the byte-for-byte copy that
  * was lifted from it. Store matching now lives in GXCore.resolveStore; what is left here is the
@@ -119,11 +119,11 @@ console.log('\n4. storeToken_ — folds the status string Dutchie actually emits
  * The Rd/Road fold is still in the function and still a no-op on these two values — the cases below
  * pin the values the roster depends on, not the folding nothing calls any more.
  */
-eq(C.storeToken_('Active'),     'active',     'the value that puts someone on the roster');
-eq(C.storeToken_('In-Active'),  'in active',  'and the one that does not — punctuation collapses, and it is NOT "active"');
-eq(C.storeToken_('  ACTIVE  '), 'active',     'case and padding collapse');
-eq(C.storeToken_(''),           '',           'empty stays empty');
-eq(C.storeToken_(null),         '',           'null does not throw');
+eq(C.statusToken_('Active'),     'active',     'the value that puts someone on the roster');
+eq(C.statusToken_('In-Active'),  'in active',  'and the one that does not — punctuation collapses, and it is NOT "active"');
+eq(C.statusToken_('  ACTIVE  '), 'active',     'case and padding collapse');
+eq(C.statusToken_(''),           '',           'empty stays empty');
+eq(C.statusToken_(null),         '',           'null does not throw');
 
 console.log('\n5. mapPermissionLocation_ — split here, match in GX Core');
 {

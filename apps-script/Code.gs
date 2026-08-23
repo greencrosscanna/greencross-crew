@@ -2467,16 +2467,22 @@ var GROUP_RANK = [
 var NON_PERSON_LOGINS = ['authorize override pin', 'test user', 'training', 'admin'];
 
 /**
- * Fold a Dutchie string to a comparable token. This WAS the store matcher — the byte-for-byte
- * original of Core's gxStoreToken_, which was lifted from here — and store matching has moved to
- * GXCore.resolveStore(). Its only remaining callers normalise `status` ("Active" / "In-Active").
+ * Fold Dutchie's `status` string to a comparable token: "Active" → active, "In-Active" → in active.
  *
- * Kept rather than replaced with a plain lowercase-trim because the fold is a no-op on those two
- * values, and swapping it would be an unforced behaviour change in the check that decides whether
- * a person is on the roster at all. Do not reach for it to match a store name: that answer lives
- * in Core now, and a second copy here is what this change just removed.
+ * This was the local store matcher — and the byte-for-byte original of Core's gxStoreToken_, which
+ * was lifted from it. Store matching moved to GXCore.resolveStore(), which left this function named
+ * after a job it no longer does: a trap for the next person who greps for the store matcher and
+ * finds a live function with the right name and the wrong purpose. Renamed for that reason alone.
+ *
+ * The BODY is deliberately untouched, including the Rd/Road and trailing-suffix folding that is
+ * vestigial here. It is a no-op on the only two values that reach it, and simplifying it would be
+ * an unforced change to the check that decides whether a person is on the roster at all — a
+ * cleanup with nothing to gain and a live roster to lose.
+ *
+ * Do not reach for this to match a store name. That answer lives in Core now, and a second copy
+ * here is exactly what was just removed.
  */
-function storeToken_(s) {
+function statusToken_(s) {
   return String(s || '').toLowerCase()
     .replace(/\broad\b/g, 'rd').replace(/\bstreet\b/g, 'st')
     .replace(/[^a-z0-9]+/g, ' ').trim()
@@ -2570,7 +2576,7 @@ function buildIdentityRows_() {
 
     // Active at ANY location counts as active — a transfer leaves an In-Active row behind at
     // the old store, and dropping the person on that basis would delete a current employee.
-    if (storeToken_(pick_(r, ['status'])) === 'active') rec.active = true;
+    if (statusToken_(pick_(r, ['status'])) === 'active') rec.active = true;
 
     String(pick_(r, ['groups']) || '').split(',').forEach(function (g) {
       g = g.trim(); if (g && g !== '[Individual Permissions]') rec.groups[g] = 1;
@@ -2718,7 +2724,7 @@ function permitCoverage_() {
 
   list.forEach(function (r) {
     seen++;
-    if (storeToken_(pick_(r, ['status'])) !== 'active') return;
+    if (statusToken_(pick_(r, ['status'])) !== 'active') return;
     active++;
 
     if (pick_(r, ['stateId'])) withId++;
