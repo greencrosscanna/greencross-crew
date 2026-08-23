@@ -23,10 +23,14 @@
   var TOKEN_KEY = 'gx_crew_token';
   var USER_KEY  = 'gx_crew_user';
   var AVATAR_KEY = 'gx_crew_avatar';
-  // Single-sourced from the ?v=N cache-buster on this script tag -- the same value deploy.sh records,
-  // so the version in the user menu can never drift from the version that shipped.
+  /* Single-sourced from the ?v=N cache-buster on this script tag -- the same value deploy.sh records,
+     so the version in the user menu can never drift from the version that shipped.
+     Accepts a bare integer (v26) AND the MAJOR.MINOR form (v1.27) the suite is moving to, so this
+     parser is not the thing standing in the way of the switch. The optional group matters: a plain
+     \d+ against "1.27" matches "1" and reports v1 -- a version that looks plausible, sorts wrong,
+     and collides with a real one. Failing loudly would have been kinder, so do not narrow it back. */
   var APP_VERSION = (function () {
-    var m = /[?&]v=(\d+)/.exec((document.currentScript && document.currentScript.src) || '');
+    var m = /[?&]v=(\d+(?:\.\d+)?)/.exec((document.currentScript && document.currentScript.src) || '');
     return m ? 'v' + m[1] : 'dev';
   })();
 
@@ -34,7 +38,8 @@
   var GXCore = window.GXClient(GXCORE_URL);
   var Engine = null;           // built once we know the engine URL
   var state  = { rows: [], canEdit: false, shirtSizes: [], roleTitles: [], user: '', role: '', identity: null,
-                 stores: {}, showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
+                 stores: {}, storeOrder: {}, storeFilter: {},
+                 showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
                  sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false,
                  view: 'roster', review: null, reviewCounts: {},
                  /* The roster is READ-ONLY until you ask for edit mode. Most visits are to look
@@ -114,7 +119,13 @@
   async function loadStores() {
     try {
       var r = await GXCore.jsonp('stores', {}, { retries: 1, timeoutMs: 6000 });
-      (r && r.stores || []).forEach(function (s) { state.stores[s.store_id] = s.display_name || s.store_id; });
+      /* sort_order comes along because the filter pills below render in registry order. Falling
+         back to the array index rather than 0 keeps a registry that ever stops sending the column
+         in ITS OWN order instead of collapsing every store to a tie. */
+      (r && r.stores || []).forEach(function (s, i) {
+        state.stores[s.store_id] = s.display_name || s.store_id;
+        state.storeOrder[s.store_id] = (s.sort_order != null && s.sort_order !== '') ? Number(s.sort_order) : i;
+      });
     } catch (e) { /* fall back to the raw slug */ }
   }
   /* `corporate` is not a shop and so is deliberately absent from GX Core's store registry —
@@ -122,6 +133,103 @@
   var PSEUDO_STORES = { corporate: 'Corporate' };
   function storeName(id) {
     return id ? (state.stores[id] || PSEUDO_STORES[id] || id) : '—';
+  }
+
+  /* ── Store filter pills ──────────────────────────────────────────────────────────
+   * Multi-select. With nothing chosen every store shows; each pill toggles its own store in and
+   * out. "All" is the RESET, not a seventh choice — it lights up exactly when the filter is empty,
+   * so the row always shows a live state instead of an ambiguous nothing-selected.
+   *
+   * The pill SET comes from the loaded roster, not from the store registry. Two reasons, and both
+   * would be bugs the other way round: a store with nobody in it is not a filter anyone needs, and
+   * `corporate` is deliberately ABSENT from the registry (it is not a shop), so a registry-driven
+   * row would silently make the admin team unreachable.
+   *
+   * The COUNT beside each is computed after the search and flagged filters but BEFORE this one, so
+   * the numbers stay truthful while you type and do not shift depending on which pill you last
+   * pressed. A zero-count pill dims rather than disappearing — a row that reflows under the cursor
+   * is how you click the wrong store.
+   */
+  function storesInRoster(rows) {
+    var seen = {}, ids = [];
+    (rows || []).forEach(function (r) {
+      var id = String(r.store || '');
+      if (!(id in seen)) { seen[id] = true; ids.push(id); }
+    });
+    ids.sort(function (a, b) {
+      if (!a) return 1;                       // "no store" is a defect bucket — keep it last
+      if (!b) return -1;
+      var oa = state.storeOrder[a], ob = state.storeOrder[b];
+      if (oa == null && ob == null) return storeName(a).localeCompare(storeName(b));
+      if (oa == null) return 1;               // pseudo-stores (corporate) sit after the real shops
+      if (ob == null) return -1;
+      return oa - ob;
+    });
+    return ids;
+  }
+
+  /* Colours come from GXStores, which paints them from the same registry every other app reads —
+     so Center is the same blue here as on the kiosk. Guarded and optional: the shared script loads
+     from Pages behind a cache, and a pill row is not worth throwing over a missing swatch. */
+  function storeColor(id) {
+    try { return (window.GXStores && GXStores.color && GXStores.color(id)) || ''; }
+    catch (e) { return ''; }
+  }
+
+  function filterByStore(rows) {
+    if (!Object.keys(state.storeFilter).length) return rows;
+    return rows.filter(function (r) { return !!state.storeFilter[String(r.store || '')]; });
+  }
+
+  /* Rebuilding the row drops focus, which for a keyboard user means the pill they just pressed
+     stops existing mid-press. Put it back by key rather than by index — the set can reorder. */
+  function refocusPill(key) {
+    var list = document.querySelectorAll('.crew-pill');
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].getAttribute('data-store') === key) { list[i].focus(); return; }
+    }
+  }
+
+  function storePills(matched) {
+    var ids = storesInRoster(state.rows);
+    if (ids.length < 2) return null;      // one bucket: a filter with a single option is just noise
+    var counts = {};
+    (matched || []).forEach(function (r) {
+      var id = String(r.store || '');
+      counts[id] = (counts[id] || 0) + 1;
+    });
+    var wrap = el('div', 'crew-pills');
+    var anyPicked = !!Object.keys(state.storeFilter).length;
+
+    var all = el('button', 'crew-pill' + (anyPicked ? '' : ' is-on'),
+      'All <span class="crew-pill-n">' + (matched || []).length + '</span>');
+    all.type = 'button';
+    all.setAttribute('data-store', '*');
+    all.setAttribute('aria-pressed', anyPicked ? 'false' : 'true');
+    all.addEventListener('click', function () {
+      state.storeFilter = {}; renderRoster(); refocusPill('*');
+    });
+    wrap.appendChild(all);
+
+    ids.forEach(function (id) {
+      var n  = counts[id] || 0;
+      var on = !!state.storeFilter[id];
+      var b = el('button', 'crew-pill' + (on ? ' is-on' : '') + (n ? '' : ' is-empty'),
+        '<span class="crew-pill-dot"></span>' + esc(id ? storeName(id) : 'No store') +
+        ' <span class="crew-pill-n">' + n + '</span>');
+      b.type = 'button';
+      b.setAttribute('data-store', id);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      var c = storeColor(id);
+      if (c) b.style.setProperty('--crew-pill-color', c);
+      b.addEventListener('click', function () {
+        if (state.storeFilter[id]) delete state.storeFilter[id];
+        else state.storeFilter[id] = true;
+        renderRoster(); refocusPill(id);
+      });
+      wrap.appendChild(b);
+    });
+    return wrap;
   }
 
 
@@ -761,13 +869,13 @@
     var bar = el('div', 'crew-bar');
     bar.innerHTML = '<span>Signed in as <b>' + esc(state.user) + '</b> · ' + esc(state.role) +
       (state.canEdit ? '' : ' <em>(read-only)</em>') + '</span>';
-    var right = el('span', 'crew-bar-right');
-    /* The HR spreadsheet link is gone deliberately: Crew is the system of record now, and a
-       one-click path back to the superseded source is an invitation to edit the wrong thing. */
-    var out = el('button', 'crew-link', 'Sign out');
-    out.addEventListener('click', function () { setSession('', ''); boot(); });
-    right.appendChild(out);
-    bar.appendChild(right);
+    /* Nothing on the right any more, and both absences are deliberate.
+       The HR spreadsheet link is gone because Crew is the system of record now, and a one-click
+       path back to the superseded source is an invitation to edit the wrong thing.
+       Sign out is gone because it already lives in the user-chip menu in the header — the one
+       place every app in the suite puts it. Two sign-outs on one screen is not redundancy that
+       helps; it is a second control to keep working, and it only ever appeared on the roster,
+       so Review and EoM already relied on the header. The header is the survivor. */
     nodes.push(bar);
 
     if (state.identity && state.identity.note) nodes.push(banner('warn', esc(state.identity.note)));
@@ -821,12 +929,30 @@
     var q = state.q.trim().toLowerCase();
     var base = state.onlyFlagged
       ? state.rows.filter(function (r) { return (r.flags || []).length; }) : state.rows;
-    var rows = !q ? base : base.filter(function (r) {
+    var matched = !q ? base : base.filter(function (r) {
       return (r.name + ' ' + storeName(r.store) + ' ' + r.role + ' ' + r.employee_number).toLowerCase().indexOf(q) >= 0;
     });
 
+    // Pills are built from `matched` and applied after it, so each one can show how many it WOULD
+    // reveal. Counting the other way round would make every unselected pill read 0.
+    var pillRow = storePills(matched);
+    if (pillRow) nodes.push(pillRow);
+    var rows = filterByStore(matched);
+
     if (!rows.length) {
-      nodes.push(el('p', 'gx-muted', q ? 'No one matches “' + esc(state.q) + '”.' : 'No employees to show yet.'));
+      /* Name the filter that is hiding people. "No employees to show yet" in front of a 75-person
+         roster sent someone looking for a data problem that was a pressed pill. */
+      var why = [];
+      if (q) why.push('matching “' + esc(state.q) + '”');
+      var picked = Object.keys(state.storeFilter);
+      if (picked.length) {
+        why.push('at ' + picked.map(function (id) {
+          return esc(id ? storeName(id) : 'No store'); }).join(' or '));
+      }
+      if (state.onlyFlagged) why.push('needing attention');
+      nodes.push(el('p', 'gx-muted', why.length
+        ? 'No one ' + why.join(' ') + '.'
+        : 'No employees to show yet.'));
       mount.appendChild(card('Roster', nodes));
       return;
     }

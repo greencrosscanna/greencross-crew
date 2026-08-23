@@ -137,7 +137,6 @@
 
     /* ── Roster v3: tools, permits, retire ───────────────────────────────── */
     .gx-main { max-width: 1240px; }
-    .crew-bar-right { display: inline-flex; align-items: center; gap: 16px; }
     .crew-tools { display: flex; align-items: center; gap: 16px; margin: 0 0 14px; flex-wrap: wrap; }
     .crew-search {
       flex: 1 1 260px; min-width: 200px; background: var(--gx-surface-3);
@@ -148,6 +147,30 @@
     .crew-toggle { display: inline-flex; align-items: center; gap: 7px;
       font-size: 12px; color: var(--gx-text-dim); cursor: pointer; white-space: nowrap; }
     .crew-toggle input { accent-color: var(--gx-green); }
+
+    /* Store filter pills. App-local on purpose: gx-theme's .gx-pill is a static status badge
+       (uppercase, letterspaced, not clickable) and this is an interactive filter control, so this
+       is a NEW class rather than a local override of a shared one — overriding is how the suite
+       ends up with six different versions of the same component. --crew-pill-color is set inline
+       per pill from the GX Core store registry via GXStores, with a neutral fallback for stores
+       that carry no colour (corporate). */
+    .crew-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
+    .crew-pill {
+      display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px;
+      border: 1px solid var(--gx-border-strong); border-radius: var(--gx-radius-pill);
+      background: var(--gx-surface-2); color: var(--gx-text-dim);
+      font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4;
+      cursor: pointer; white-space: nowrap;
+    }
+    .crew-pill:hover { color: var(--gx-text); }
+    .crew-pill:focus-visible { outline: 2px solid var(--gx-green); outline-offset: 2px; }
+    .crew-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex: none;
+      background: var(--crew-pill-color, var(--gx-text-mute)); }
+    .crew-pill.is-on { color: var(--gx-text); border-color: var(--crew-pill-color, var(--gx-green));
+      box-shadow: inset 0 0 0 1px var(--crew-pill-color, var(--gx-green)); }
+    .crew-pill.is-empty { opacity: .45; }
+    .crew-pill-n { font-size: 11px; color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
+    .crew-pill.is-on .crew-pill-n { color: var(--gx-text-dim); }
 
     /* Wide table scrolls inside its own box — the page itself must never scroll sideways. */
     .crew-table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
@@ -352,6 +375,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=26"></script>
+  <script src="crew.js?v=27"></script>
 </body>
 </html>
