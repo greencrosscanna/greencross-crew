@@ -309,12 +309,6 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(propsInspect_(), p.callback);
 
-      // @devonly TEMPORARY — dry run for the resolveStore() cutover. Read-only. Delete with
-      // storeMatchDiff_ once the diff is confirmed clean.
-      case 'store_match_diff':
-        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
-        return json_(storeMatchDiff_(), p.callback);
-
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
@@ -2472,7 +2466,16 @@ var GROUP_RANK = [
  */
 var NON_PERSON_LOGINS = ['authorize override pin', 'test user', 'training', 'admin'];
 
-/** Normalise a location label for matching. Handles Rd/Road and St/Street drift. */
+/**
+ * Fold a Dutchie string to a comparable token. This WAS the store matcher — the byte-for-byte
+ * original of Core's gxStoreToken_, which was lifted from here — and store matching has moved to
+ * GXCore.resolveStore(). Its only remaining callers normalise `status` ("Active" / "In-Active").
+ *
+ * Kept rather than replaced with a plain lowercase-trim because the fold is a no-op on those two
+ * values, and swapping it would be an unforced behaviour change in the check that decides whether
+ * a person is on the roster at all. Do not reach for it to match a store name: that answer lives
+ * in Core now, and a second copy here is what this change just removed.
+ */
 function storeToken_(s) {
   return String(s || '').toLowerCase()
     .replace(/\broad\b/g, 'rd').replace(/\bstreet\b/g, 'st')
@@ -2480,105 +2483,34 @@ function storeToken_(s) {
     .replace(/\s+(rd|st)$/, '');
 }
 
-/** "TLC Cannabis Emporium - River Rd - Green Cross…" → the GX store_id, or '' if unmatched. */
+/**
+ * "TLC Cannabis Emporium - River Rd - Green Cross…" → the GX store_id, or '' if unmatched.
+ *
+ * The LABEL SPLIT is Crew's, because the three-part sandwich is a Dutchie-payload shape and
+ * nothing outside this import has to know about it. The MATCH is GX Core's, because "what store
+ * is this name" is a suite-wide question and Crew was answering it with a private copy that had
+ * drifted from the registry in two ways:
+ *
+ *   • it compared dutchie_name / store_id / display_name and skipped the `aliases` column, so
+ *     "South", "Baseline" and "Century Dr" — names Core resolves and staff actually use — landed
+ *     as unmatched here. A new alias added to the stores sheet reached every caller except this one.
+ *   • it returned the FIRST match. resolveStore refuses an ambiguous fold and returns null, which
+ *     is the right answer when folding has genuinely collapsed two stores together: home_store goes
+ *     out through writeAttrs_/gxWrite_, and a confident wrong store is worse than a blank one.
+ *
+ * `stores` is still taken (callers pass it, and it is what dutchieEmployeeList_ needs) but the
+ * match no longer reads it — Core memoises the registry per execution (gxStoresCached_, added in
+ * v201 for exactly this caller), so resolving one store per (employee × permission location)
+ * across the roster is still a single sheet read.
+ *
+ * Verified against the live roster before the switch, 2026-08-22: all 6 distinct labels resolve
+ * identically, nothing lost, nothing moved to a different store.
+ */
 function mapPermissionLocation_(label, stores) {
   var parts = String(label || '').split(' - ');
   var mid = parts.length >= 2 ? parts[1] : label;
-  var tok = storeToken_(mid);
-  if (!tok) return '';
-  for (var i = 0; i < stores.length; i++) {
-    var s = stores[i];
-    if (storeToken_(s.dutchie_name) === tok || storeToken_(s.store_id) === tok
-        || storeToken_(s.display_name) === tok) {
-      return String(s.store_id || '').trim();
-    }
-  }
-  return '';
-}
-
-/**
- * @devonly TEMPORARY — dry run for the resolveStore() cutover. DELETE once the diff is clean.
- *
- * Reads the real Dutchie roster, takes every DISTINCT permissionsLocation label, and runs both
- * matchers over the SAME `mid` slice the live code feeds its own matcher — only the matching step
- * differs, the label splitting is identical. Writes nothing.
- *
- * The result that matters is not "did anything change" but WHICH direction it changed:
- *   '' -> store_id      an alias Core knows and Crew's matcher never did. The improvement.
- *   store_id -> ''      a label that resolves today would stop resolving. home_store goes through
- *                       writeAttrs_/gxWrite_, which replaces the whole row, so that would BLANK
- *                       home_store for those people on the next seed. A stop-and-report.
- *   storeA -> storeB    people filed onto a different store. Data corruption. A stop-and-report.
- *
- * Also folds every store_id / display_name / dutchie_name / alias across the registry and reports
- * any token shared by two different stores, because that is the only way the shared resolver can
- * refuse a label that resolves here today (it returns null on an ambiguous fold rather than
- * guessing). Checking the claim against the live registry is cheaper than trusting it.
- */
-function storeMatchDiff_() {
-  var t0 = new Date().getTime();
-  var stores = GXCore.getStores() || [];
-  var errors = [];
-  var list = dutchieEmployeeList_(stores, errors);
-  if (!list) return { ok: false, error: 'could not read Dutchie employees', store_errors: errors };
-  var tRoster = new Date().getTime();
-
-  // ── Collision audit over the live registry ────────────────────────────────
-  // getStores() hands back RAW rows, so `aliases` is still an unparsed pipe/comma cell here.
-  var byToken = {};
-  stores.forEach(function (s) {
-    var sid = String(s.store_id || '').trim();
-    var names = [s.store_id, s.display_name, s.dutchie_name];
-    String(s.aliases || '').split(/[|,]/).forEach(function (a) { names.push(a); });
-    names.forEach(function (n) {
-      var tok = storeToken_(n);
-      if (!tok) return;
-      (byToken[tok] = byToken[tok] || {})[sid] = 1;
-    });
-  });
-  var collisions = Object.keys(byToken).filter(function (t) { return Object.keys(byToken[t]).length > 1; })
-    .map(function (t) { return { token: t, stores: Object.keys(byToken[t]).sort() }; });
-
-  // ── Label-by-label diff ───────────────────────────────────────────────────
-  var seen = {}, order = [];
-  list.forEach(function (r) {
-    var label = String(pick_(r, ['permissionsLocation']) || '');
-    if (!seen[label]) { seen[label] = 0; order.push(label); }
-    seen[label]++;
-  });
-
-  var rows = [], counts = { same: 0, gained: 0, lost: 0, moved: 0 };
-  order.forEach(function (label) {
-    var parts = String(label || '').split(' - ');
-    var mid = parts.length >= 2 ? parts[1] : label;
-
-    var oldId = mapPermissionLocation_(label, stores);
-    var row   = GXCore.resolveStore(mid);
-    var newId = String((row && row.store_id) || '');
-
-    var verdict;
-    if (oldId === newId)      { verdict = 'same';   counts.same++; }
-    else if (!oldId && newId) { verdict = 'GAINED'; counts.gained++; }
-    else if (oldId && !newId) { verdict = 'LOST';   counts.lost++; }
-    else                      { verdict = 'MOVED';  counts.moved++; }
-
-    rows.push({ label: label, mid: mid, n: seen[label], token: storeToken_(mid),
-                old: oldId, 'new': newId, verdict: verdict });
-  });
-
-  var t1 = new Date().getTime();
-  var bad = rows.filter(function (r) { return r.verdict === 'LOST' || r.verdict === 'MOVED'; });
-  return {
-    ok: true, mode: 'dry-run', safe_to_switch: bad.length === 0,
-    distinct_labels: rows.length, dutchie_rows_seen: list.length,
-    counts: counts, rows: rows,
-    would_blank_or_move: bad,
-    registry_stores: stores.length,
-    registry_distinct_tokens: Object.keys(byToken).length,
-    cross_store_token_collisions: collisions,
-    ms_roster_fetch: tRoster - t0, ms_matching: t1 - tRoster, ms_total: t1 - t0,
-    store_errors: errors
-  };
+  var row = GXCore.resolveStore(mid);
+  return String((row && row.store_id) || '').trim();
 }
 
 /**

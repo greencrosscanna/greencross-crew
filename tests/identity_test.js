@@ -14,8 +14,13 @@
  *   normBirthday_          must DISCARD the year. Crew publishes a celebrations feed to the kiosk
  *                          and raw DOB must never leave this app. A regression here is a PII leak
  *                          that looks like a working feature.
- *   storeToken_ /          matches Dutchie permission labels onto stores. An unmatched label
- *   mapPermissionLocation_ silently drops a person's store rather than erroring.
+ *   mapPermissionLocation_ splits a Dutchie permission label and hands the middle segment to
+ *                          GXCore.resolveStore. An unmatched label silently drops a person's store
+ *                          rather than erroring — and because home_store is written through
+ *                          writeAttrs_/gxWrite_, which replaces the whole row, "dropped" means
+ *                          BLANKED on the next seed.
+ *   storeToken_            folds Dutchie's `status` string, which decides whether a person is on
+ *                          the roster at all.
  *
  * Loads the real apps-script/Code.gs with Apps Script globals stubbed, so it tests shipped source.
  * Cannot reach Apps Script: .clasp.json rootDir is apps-script, so tests/ is out of clasp's scope.
@@ -23,10 +28,21 @@
 'use strict';
 const fs = require('fs');
 
+let RESOLVE = {}, RESOLVE_CALLS = [];
+
 const stubs = {
   SpreadsheetApp:{}, DriveApp:{}, UrlFetchApp:{}, HtmlService:{}, ContentService:{},
   CacheService:{ getScriptCache: () => ({ get: () => null, put(){} }) },
-  MailApp:{}, GmailApp:{}, ScriptApp:{}, Session:{}, Logger:{log(){}}, GXCore:{},
+  MailApp:{}, GmailApp:{}, ScriptApp:{}, Session:{}, Logger:{log(){}},
+  /*
+   * GXCore.resolveStore is a LOOKUP TABLE here, deliberately not a reimplementation of Core's
+   * matching. Crew stopped owning that logic on purpose; re-deriving it in the test would put a
+   * third copy of the fold in the repo and let this file keep passing while the real resolver
+   * changed underneath it. What is Crew's to get right is the half above the call — which slice
+   * of the label gets handed over, and that a null comes back as '' — so the stub records its
+   * argument and answers from a fixture, and the tests assert both.
+   */
+  GXCore:{ resolveStore(arg) { RESOLVE_CALLS.push(arg); return RESOLVE[String(arg == null ? '' : arg).trim()] || null; } },
   LockService:{ getScriptLock: () => ({ waitLock(){}, releaseLock(){} }) },
   PropertiesService:{ getScriptProperties: () => ({ getProperty: () => '', setProperty(){} }) },
   // formatDate must behave, not just exist: normDate_ falls through to it for anything that is not
@@ -94,35 +110,59 @@ eq(C.normBirthday_(null), '', 'null does not throw');
   else { fail++; console.log('  FAIL  a year survived: ' + out); }
 }
 
-// ── storeToken_ / mapPermissionLocation_ ─────────────────────────────────────
-console.log('\n4. storeToken_ — folds the spellings Dutchie actually emits');
-eq(C.storeToken_('River Rd'),   'river', '"River Rd" → river');
-eq(C.storeToken_('River Road'), 'river', '"River Road" → river (road/rd folded)');
-eq(C.storeToken_('Center St'),  'center','"Center St" → center');
-eq(C.storeToken_('Center Street'),'center','street/st folded');
-eq(C.storeToken_('  RIVER   RD  '),'river','case and padding collapse');
-eq(C.storeToken_('Commercial'), 'commercial','a plain name is unchanged');
-eq(C.storeToken_(''),   '', 'empty stays empty');
-eq(C.storeToken_(null), '', 'null does not throw');
+// ── storeToken_ ──────────────────────────────────────────────────────────────
+console.log('\n4. storeToken_ — folds the status string Dutchie actually emits');
+/*
+ * This function WAS the store matcher, and Core's gxStoreToken_ is the byte-for-byte copy that
+ * was lifted from it. Store matching now lives in GXCore.resolveStore; what is left here is the
+ * `status` check that decides whether a person is on the roster at all, so that is what is tested.
+ * The Rd/Road fold is still in the function and still a no-op on these two values — the cases below
+ * pin the values the roster depends on, not the folding nothing calls any more.
+ */
+eq(C.storeToken_('Active'),     'active',     'the value that puts someone on the roster');
+eq(C.storeToken_('In-Active'),  'in active',  'and the one that does not — punctuation collapses, and it is NOT "active"');
+eq(C.storeToken_('  ACTIVE  '), 'active',     'case and padding collapse');
+eq(C.storeToken_(''),           '',           'empty stays empty');
+eq(C.storeToken_(null),         '',           'null does not throw');
 
-console.log('\n5. mapPermissionLocation_ — the real Dutchie label shape');
+console.log('\n5. mapPermissionLocation_ — split here, match in GX Core');
 {
-  const STORES = [
-    { store_id:'river-rd',    display_name:'River',   dutchie_name:'River Rd' },
-    { store_id:'commercial',  display_name:'Commercial', dutchie_name:'Commercial' },
-    { store_id:'bend',        display_name:'Century', dutchie_name:'Bend' },
-  ];
-  eq(C.mapPermissionLocation_('TLC Cannabis Emporium - River Rd - Green Cross', STORES), 'river-rd',
+  const RIVER = { store_id:'river-rd', display_name:'River', dutchie_name:'River Rd' };
+  RESOLVE = { 'River Rd': RIVER, 'Century Dr': { store_id:'bend' } };
+
+  RESOLVE_CALLS = [];
+  eq(C.mapPermissionLocation_('TLC Cannabis Emporium - River Rd - Green Cross'), 'river-rd',
      'the middle segment of a vendor label is what matches');
-  eq(C.mapPermissionLocation_('TLC - River Road - GC', STORES), 'river-rd',
-     'and Road/Rd still folds inside the label');
-  eq(C.mapPermissionLocation_('Bend', STORES), 'bend', 'a bare dutchie_name matches');
-  eq(C.mapPermissionLocation_('Century', STORES), 'bend',
-     'the DISPLAY name matches too — Century IS the Bend store');
-  eq(C.mapPermissionLocation_('TLC - Nowhere - GC', STORES), '',
+  eq(RESOLVE_CALLS[0], 'River Rd',
+     'and the MIDDLE SEGMENT is what Core is asked about — not the whole label');
+
+  RESOLVE_CALLS = [];
+  eq(C.mapPermissionLocation_('River Rd'), 'river-rd', 'a bare name is passed through whole');
+  eq(RESOLVE_CALLS[0], 'River Rd', 'a label with no " - " sandwich is handed over unsplit');
+
+  // The reason for the switch: Core knows the registry's `aliases` column and Crew's own matcher
+  // never did, so names staff actually use resolved everywhere in the suite except here.
+  eq(C.mapPermissionLocation_('TLC - Century Dr - GC'), 'bend',
+     'an ALIAS resolves — Century Dr IS the Bend store, which the old local matcher could not see');
+
+  // The '' contract. Callers branch on it (`if (loc)`), and home_store goes out through a
+  // whole-row write, so a null from Core must arrive as '' and never as 'null' or undefined.
+  eq(C.mapPermissionLocation_('TLC - Nowhere - GC'), '',
      'an unknown store returns empty rather than guessing a store_id');
-  eq(C.mapPermissionLocation_('', STORES), '', 'empty label returns empty');
-  eq(C.mapPermissionLocation_(null, STORES), '', 'null does not throw');
+  eq(C.mapPermissionLocation_(''), '', 'empty label returns empty');
+  eq(C.mapPermissionLocation_(null), '', 'null does not throw');
+  eq(typeof C.mapPermissionLocation_('TLC - Nowhere - GC'), 'string',
+     'the miss is a STRING — callers write it into a row, and undefined would blank it differently');
+
+  // Core returns null rather than picking one when a name folds onto two stores. Crew must carry
+  // that through as a miss: a confident wrong home_store is worse than a blank one.
+  RESOLVE = {};
+  eq(C.mapPermissionLocation_('TLC - Center - GC'), '',
+     'an AMBIGUOUS name comes back null from Core and stays a miss here');
+
+  // A row that resolves is read for store_id only, so a fuller Core row cannot leak extra fields.
+  RESOLVE = { 'River Rd': RIVER };
+  eq(C.mapPermissionLocation_('TLC - River Rd - GC'), 'river-rd', 'only store_id is taken off the row');
 }
 
 // ── attrFields_ — the carry-forward list ─────────────────────────────────────
