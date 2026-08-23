@@ -43,7 +43,7 @@ the current Leaderboard incentive output for a full pay period.
   never `create-deployment`, which mints a *new* /exec URL and orphans `cfg.crewEngineUrl`.
   Note `clasp create` clones the remote manifest over the local one, wiping the GXCore binding;
   restore `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.)
-- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v203** —
+- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v204** —
   v139 is where `gxUpsertEmployee` began read-merge-writing instead of rebuilding a row from the payload,
   and v150 made that unconditional plus refused to blank a live `full_name`, so anything below v150 can
   still blank the columns a partial write omits. **v201** is the floor for the store matcher:
@@ -119,7 +119,7 @@ Core. Coordination is the **central brain-notes inbox** in GX Core: `/gxbrain` r
 SessionStart hook surfaces the same inbox.
 
 App-specific facts for the sync check: app key **`crew`** in GX Core; `appsscript.json` pins `GXCore`
-**v203** (this line said **v179**, then **v194**, before 2026-08-22 — check `health`, not prose);
+**v204** (this line has said **v179**, **v194** and **v203** — check `health`, not prose);
 version recorded on deploy via the shared `deploy_version` endpoint (`deploy.sh`, reading `crew.js?v=N`)
 using the shared untracked `.gx_deploy_secret`.
 
