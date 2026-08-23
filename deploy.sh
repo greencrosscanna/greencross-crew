@@ -21,7 +21,13 @@ SECRET="$(cat .gx_deploy_secret)"
 # `set -euo pipefail` a no-match grep aborts the whole script, which is why releases for those two
 # apps were never recorded at all. Both greps are `|| true` so a miss falls through to the next
 # source instead of killing the run.
-_ver="$(grep -oE '[A-Za-z0-9_.-]+\.js\?v=[0-9]+' index.html 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+# MAJOR.MINOR is allowed here, and extracting it needs BOTH halves changed. The old second stage was
+# `grep -oE '[0-9]+'`, which stopped at the dot and filed spiff.js?v=1.28 as "v1" — silently, with a
+# success line. Widening only that class to `[0-9.]+` is worse, not better: it matches the dot in
+# ".js" first and yields "." for EVERY app, including the integer ones that work today. So the second
+# stage is a sed that strips up to `?v=` instead of a grep that hunts for digits anywhere in the tag.
+# Verified both ways: 1.28 -> 1.28, 2.10 -> 2.10, 26 -> 26, 40 -> 40. No spoke regresses.
+_ver="$(grep -oE '[A-Za-z0-9_.-]+\.js\?v=[0-9]+(\.[0-9]+)?' index.html 2>/dev/null | sed -E 's/.*\?v=//' | head -1 || true)"
 if [ -n "$_ver" ]; then
   APP_VERSION="v$_ver"
 else

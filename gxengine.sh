@@ -113,8 +113,17 @@ for k in ('gxcore','lib','lib_version'):
 fi
 ROWS="[{\"app\":\"$APP\",\"deployed_sha\":\"$HEAD_SHA\"$([ -n "$LV" ] && echo ",\"lib_version\":$LV")}]"
 if [ -z "$LV" ]; then
-  echo "! could not read this app's live GXCore version (no cfg.${APP}ExecUrl, or route unreachable)."
-  echo "  Recording the sha without it; run ./gxpins.sh --record once it answers."
+  # Name BOTH keys. This message used to blame only cfg.<app>ExecUrl even though the loop above tries
+  # cfg.<app>EngineUrl FIRST — so a sales deploy whose EngineUrl was present and correct produced
+  # "no cfg.salesExecUrl", and the session reading it concluded a config key was missing and asked
+  # core-admin to add one. Nothing was missing. The likely cause is the one documented above: a warm
+  # Apps Script instance serves the old snapshot for a minute or two after a redeploy, so the poll
+  # right after deploying can come back empty. An error that names the wrong cause costs somebody a
+  # real investigation.
+  echo "! could not read this app's live GXCore version."
+  echo "  Tried cfg.${APP}EngineUrl then cfg.${APP}ExecUrl. Either neither key is set, or the route"
+  echo "  did not answer — most often a warm instance still serving the pre-deploy snapshot."
+  echo "  Recording the sha without it; run ./gxpins.sh --record in a minute or two."
 fi
 RESP="$(curl -sL --max-time 20 -G "$GXCORE" \
   --data-urlencode action=record_pins \
