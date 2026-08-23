@@ -1,7 +1,25 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "sh .claude/gx-brain-notes.sh" } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh .claude/gx-brain-notes.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh .claude/gx-posttool-tests.sh"
+          }
+        ]
+      }
     ]
   }
 }
