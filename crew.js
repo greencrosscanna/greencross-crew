@@ -550,6 +550,9 @@
     // window where this app has shipped and the shared layer it calls has not arrived yet. An
     // unguarded call throws inside boot() and takes the WHOLE app down over a header detail.
     if (!window.GXTopNav || !GXTopNav.renderUser) { slot.innerHTML = ''; return; }
+    if (window.GXChangelog) {
+      GXChangelog.init({ app: 'crew', title: 'GX Crew', version: APP_VERSION });
+    }
     GXTopNav.renderUser(slot, {
       name: name,
       role: 'Crew',
@@ -901,9 +904,10 @@
       var slot = document.getElementById('userSlot'); if (slot) slot.innerHTML = '';
       var tabs = document.getElementById('navTabs');  if (tabs) tabs.innerHTML = '';
       renderLogin();
-    } else if (a === 'version') {
-      renderStatus('GX Crew ' + APP_VERSION);
     }
+    // No 'version' branch: GXTopNav opens the shared release-history popup by default
+    // (gx-changelog.js). It used to paint the number into the status line — which replaced whatever
+    // the roster was telling you, to say something already printed on the row you clicked.
   });
 
   function renderRoster() {
