@@ -48,6 +48,47 @@ if [ -z "$APP_VERSION" ] || [ "$APP_VERSION" = "v" ]; then
   echo "  Refusing to record a versionless release." >&2
   exit 1
 fi
+# ── The suite version format: vMAJOR.BBB, a 3-digit zero-padded build ──────────────────────────
+# Checked HERE so you find out before you ship, not after. GX Core's gxRecordVersion enforces the
+# same rule server-side — that one is the real gate (any curl can skip this script), this one is the
+# one that saves you a redeploy. Keep the two in step; the rule is documented in gx_core.gs.
+#
+# Six repos each deciding independently what a version looks like is how this drifted: measured
+# 2026-08-23 the suite held v1.583, v3.02, '2.5', v42, v1.28 and v1.28 — three build widths, one app
+# with no MAJOR at all, one missing its `v`, and two apps colliding on the same number.
+#
+# Widths that disagree do not sort: 'v1.28' is ABOVE 'v1.280' as a string and BELOW it as a number,
+# so What's New ordering and every "is this newer than what I've seen" check disagree the moment a
+# counter crosses a digit boundary. A fixed width is what makes one comparison rule work everywhere.
+#
+# The pad is to the RIGHT. The build is the fractional half of a decimal that has been counting up,
+# so v1.28 is the 280s — left-padding to v1.028 would send the app backwards past everything it has
+# already shipped.
+_bad_version() {
+  echo "deploy.sh: version '$APP_VERSION' does not match the suite format vMAJOR.BBB." >&2
+  [ -n "${1:-}" ] && echo "  Did you mean ${1}?" >&2
+  echo "  Fix it in index.html — the version IS the cache-buster, so it has to be right in the file," >&2
+  echo "  not patched on the way to the log. Then re-run ./deploy.sh." >&2
+  exit 1
+}
+_pad3() { printf '%s' "$(printf '%s000' "$1" | cut -c1-3)"; }   # right-pad: 28 -> 280, 5 -> 500
+case "$APP_VERSION" in
+  v*.*)
+    _maj="${APP_VERSION#v}"; _maj="${_maj%%.*}"
+    _bld="${APP_VERSION##*.}"
+    # Exactly one dot, both halves all-digits, build exactly 3 wide.
+    case "$APP_VERSION" in *.*.*) _bad_version "" ;; esac
+    case "$_maj$_bld" in *[!0-9]*) _bad_version "" ;; esac
+    [ "${#_bld}" -eq 3 ] || _bad_version "v${_maj}.$(_pad3 "$_bld")"
+    ;;
+  v*)
+    # No dot at all — the price-cards shape (v42). Everything after the v is the build.
+    _bld="${APP_VERSION#v}"
+    case "$_bld" in *[!0-9]*) _bad_version "" ;; esac
+    _bad_version "v1.$(_pad3 "$_bld")"
+    ;;
+  *) _bad_version "" ;;
+esac
 SHA="$(git rev-parse --short HEAD)"
 GX_NOTES="${GX_NOTES:-}"
 

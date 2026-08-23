@@ -60,7 +60,8 @@ fi
 # only (see gx-dev-boot.html). Nothing to commit per repo, so production never requests it and the
 # 'referenced a file I never tracked' failure cannot recur.
 echo "Syncing shared GX spoke files for app=$APP …"
-fetch gx-brain-notes.sh .claude/gx-brain-notes.sh || true
+fetch gx-brain-notes.sh    .claude/gx-brain-notes.sh    || true
+fetch gx-posttool-tests.sh .claude/gx-posttool-tests.sh || true
 fetch deploy.sh          deploy.sh                 || true
 fetch serve.py           serve.py                  || true
 fetch gx-preflight.sh    gx-preflight.sh           || true
@@ -84,7 +85,7 @@ fetch gxengine.sh        gxengine.sh               || true
 # `sh` for exactly this reason -- gx-preflight, theme-preflight and run-tests alike. Keep it that way:
 # a hook that depends on a mode bit is a hook this filesystem can switch off without telling you.
 _notexec=""
-for f in .claude/gx-brain-notes.sh deploy.sh serve.py gx-preflight.sh gxengine.sh; do
+for f in .claude/gx-brain-notes.sh .claude/gx-posttool-tests.sh deploy.sh serve.py gx-preflight.sh gxengine.sh; do
   [ -f "$f" ] || continue
   chmod 755 "$f" 2>/dev/null || true
   [ -x "$f" ] || _notexec="$_notexec $f"
@@ -105,7 +106,7 @@ done
 # So `update-index` alone does NOT make it stick — 4f01457 proves that; the very next commit undid it.
 # The habit is the fix, which is why the message below leads with the habit.
 _badmode=""
-for f in .claude/gx-brain-notes.sh deploy.sh serve.py gx-preflight.sh gxengine.sh; do
+for f in .claude/gx-brain-notes.sh .claude/gx-posttool-tests.sh deploy.sh serve.py gx-preflight.sh gxengine.sh; do
   [ -f "$f" ] || continue
   case "$(git ls-files -s "$f" 2>/dev/null | awk '{print $1}')" in
     100644) [ -x "$f" ] && _badmode="$_badmode $f" ;;
@@ -153,12 +154,17 @@ if [ ! -f .claude/settings.json ]; then
   "hooks": {
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "sh .claude/gx-brain-notes.sh" } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write",
+        "hooks": [ { "type": "command", "command": "sh .claude/gx-posttool-tests.sh" } ] }
     ]
   }
 }
 JSON
   echo "  ✓ .claude/settings.json (created)"
 else
-  echo "  • .claude/settings.json exists — leave it; ensure it runs 'sh .claude/gx-brain-notes.sh' on SessionStart"
+  echo "  • .claude/settings.json exists — leave it; ensure SessionStart runs 'sh .claude/gx-brain-notes.sh'"
+  echo "    and PostToolUse (matcher Edit|Write) runs 'sh .claude/gx-posttool-tests.sh'"
 fi
 echo "Done. (gx-sync.sh keeps itself up to date from here on.)"
