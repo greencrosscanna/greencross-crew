@@ -262,6 +262,11 @@ function route_(e) {
       // it is the only way anything reaches this record that Crew did not observe for itself.
       case 'eom_backfill':   return json_(eomBackfill_(p, body), p.callback);
 
+      // ── Bug reporter (gx-theme's shared button/modal posts here) ───────────
+      // 'bugreport' is inventory's and leaderboard's spelling. Sales says 'reportbug' and Price Cards
+      // 'reportBug'; picking the majority spelling keeps Crew from adding a fourth to the zoo.
+      case 'bugreport':      return json_(reportBug_(p), p.callback);
+
       case 'review':         return json_(getReview_(p), p.callback);
       case 'review_resolve': return json_(resolveReview_(p), p.callback);
       case 'review_report':  return json_(reportConflicts_(p, body), p.callback);
@@ -1540,6 +1545,50 @@ function reviewItems_() {
     return (rank[x.severity] - rank[y.severity]) || x.name.localeCompare(y.name);
   });
   return items;
+}
+
+/**
+ * File a bug into GX Core's shared bug_reports log. The shared reporter (gx-theme/gx-bugreport.js)
+ * owns the button, the modal and the state snapshot; this is only the transport and the auth.
+ *
+ * SIGNED IN, BUT NOT EDIT-GATED. A viewer who cannot change a wage is still the person most likely
+ * to notice the roster is wrong, and a reporter they are refused is a reporter that produces
+ * silence — which reads as "no problems" rather than "no reporter".
+ *
+ * DO NOT SWALLOW A FAILURE HERE. Inventory wraps its gxIngestBug call in a bare catch because it
+ * has an email fallback to fall back TO. Crew has none, so a swallowed throw would return ok:true
+ * and the user would read "✓ Reported — thank you!" over a report that does not exist. That exact
+ * silent-success is the failure gx-bugreport.js checks res.ok to avoid, and the one gxIngestBug's
+ * own title fallback was written for. Let the error travel.
+ *
+ * NOTE THE PIN. `context` only reaches the sheet from GXCore v211, where gxIngestBug began
+ * self-installing the bug_reports.context header — gxWrite_ maps onto the sheet's REAL header row,
+ * so on an older pin the snapshot is dropped silently and the report still returns ok.
+ */
+function reportBug_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  var title = String(p.title || '').trim();
+  var desc  = String(p.desc  || '').trim();
+  if (!title && !desc) return { ok: false, error: 'Say what went wrong.' };
+
+  var res;
+  try {
+    res = GXCore.gxIngestBug('crew', auth.user, {
+      title:    title,
+      desc:     desc,
+      priority: String(p.priority || 'normal'),
+      tab:      String(p.tab || ''),
+      appVer:   String(p.appVer || ''),
+      context:  String(p.context || '')
+    });
+  } catch (e) {
+    return { ok: false, error: 'Could not reach the central bug log: ' +
+                              String((e && e.message) || e) };
+  }
+  if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'GX Core refused the report' };
+  return { ok: true, id: res.id };
 }
 
 function getReview_(p) {

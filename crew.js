@@ -561,6 +561,52 @@
     });
   }
 
+  /* ── Bug reporter ────────────────────────────────────────────────────────────────
+   * gx-theme's shared reporter owns the button, the modal and the state snapshot. Crew supplies
+   * only the three things it cannot know: how this app talks to its own engine, who is signed in,
+   * and what the user was looking at.
+   *
+   * Guarded and idempotent like renderUserChip, and for the same reason: the shared scripts come
+   * from Pages behind a ~10-minute cache, so there is always a window where this app has shipped
+   * and the layer it calls has not arrived. Called from both boot and render so a late arrival
+   * still gets wired instead of being missed forever by a single early attempt.
+   *
+   * WHAT DELIBERATELY DOES NOT GO IN THE SNAPSHOT: the search box contents. `bug_reports` is a
+   * SHARED table rendered in the Command Center cockpit, and Crew is the app that holds the PII —
+   * a report reading "searched: Rebeka Perez" moves an employee's name into a log that exists for
+   * every app. `searchActive` carries the only part that helps reproduce a bug (a filter was on)
+   * and none of the part that should not leave here.
+   */
+  var bugWired = false;
+  function initBugReport() {
+    if (bugWired || !window.GXBugReport || !GXBugReport.init || !Engine) return;
+    GXBugReport.init({
+      app:    'crew',
+      action: 'bugreport',      // must match the engine's route_ case
+      version:  function () { return APP_VERSION; },
+      reporter: function () { return state.user || currentUser(); },
+      context:  function () {
+        var picked = Object.keys(state.storeFilter);
+        return {
+          view:         state.view,
+          stores:       picked.length ? picked.join(',') : 'all',
+          showRetired:  state.showRetired ? 'yes' : '',
+          onlyFlagged:  state.onlyFlagged ? 'yes' : '',
+          editMode:     state.editMode ? 'yes' : '',
+          searchActive: state.q ? 'yes' : ''
+        };
+      },
+      submit: function (payload) {
+        // Crew's own authenticated path, which is the point of `submit` being a function: the shared
+        // script never handles a token, so there is no second auth path to keep correct.
+        var params = { token: token(), tab: state.view };
+        Object.keys(payload).forEach(function (k) { if (k !== 'action') params[k] = payload[k]; });
+        return Engine.jsonp(payload.action, params, { timeoutMs: 20000, retries: 1 });
+      }
+    });
+    bugWired = true;
+  }
+
   async function loadReview() {
     renderStatus('Checking for misalignments…');
     try {
@@ -839,6 +885,7 @@
   }
 
   function render() {
+    initBugReport();          // no-op once wired; here so a late gx-bugreport.js still gets picked up
     if (state.view === 'review') renderReview();
     else if (state.view === 'eom') renderEom();
     else renderRoster();
@@ -1371,6 +1418,7 @@
       state.retiredTotal = r.retired_total || 0;
       state.hrSheetUrl = r.hr_sheet_url || '';
       renderRoster();
+      initBugReport();
       // Pull the review count in the background so the tab badge is right without making the
       // roster wait on a second slow read.
       if (!state.review) {

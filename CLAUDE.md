@@ -43,17 +43,29 @@ the current Leaderboard incentive output for a full pay period.
   never `create-deployment`, which mints a *new* /exec URL and orphans `cfg.crewEngineUrl`.
   Note `clasp create` clones the remote manifest over the local one, wiping the GXCore binding;
   restore `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.)
-- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v204** —
+- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v211** —
   v139 is where `gxUpsertEmployee` began read-merge-writing instead of rebuilding a row from the payload,
   and v150 made that unconditional plus refused to blank a live `full_name`, so anything below v150 can
   still blank the columns a partial write omits. **v201** is the floor for the store matcher:
   `GXCore.resolveStore()` exists from v194, but v201 is where it learned the Rd/Road fold and got the
   per-execution registry memo (`gxStoresCached_`) that keeps `mapPermissionLocation_` — one lookup per
-  employee × permission location — from turning one sheet read into hundreds. The engine's `health` route
+  employee × permission location — from turning one sheet read into hundreds. **v211** is the floor for the bug reporter:
+  that is where `gxIngestBug` began self-installing the `bug_reports.context` header, and `gxWrite_`
+  maps records onto the sheet's REAL header row — so on an older pin the state snapshot is dropped
+  **silently** and the report still saves and still returns ok. The engine's `health` route
   reports the version the LIVE DEPLOYMENT runs (`lib`), which is the only pin that matters — a manifest
   bump that was never deployed still runs the old snapshot).
   Deploy the engine with clasp (`clasp create --type webapp --rootDir apps-script` on first setup, then
   `clasp push` / `clasp deploy`).
+- **Bug reporter:** gx-theme's shared `gx-bugreport.js` — the button, modal and state snapshot are
+  **not in this repo**. Crew supplies only `initBugReport()` in `crew.js` (transport + who is signed in
+  + what they were looking at) and the `bugreport` route in `Code.gs`, which forwards to
+  `GXCore.gxIngestBug`. The action name is **`bugreport`**, matching Inventory and Leaderboard; Sales
+  spells it `reportbug` and Price Cards `reportBug`, so do not copy a route from those two.
+  **The snapshot deliberately omits the search box contents** — `bug_reports` is a shared table
+  rendered in the Command Center cockpit, and Crew is the app holding the PII, so a report must not
+  carry an employee's name out of here. `searchActive` says a filter was on; that is the reproducible
+  part.
 - **Local loop:** `python3 serve.py` → <http://localhost:8755>. No build step — the working tree IS the
   app, so edit + reload is the whole loop. The backend it talks to is **live**; `gx-dev.js` blocks writes
   until you arm them, and `gx-preflight.sh` runs as a **pre-push hook** refusing dev leftovers — including
@@ -160,7 +172,7 @@ Core. Coordination is the **central brain-notes inbox** in GX Core: `/gxbrain` r
 SessionStart hook surfaces the same inbox.
 
 App-specific facts for the sync check: app key **`crew`** in GX Core; `appsscript.json` pins `GXCore`
-**v204** (this line has said **v179**, **v194** and **v203** — check `health`, not prose);
+**v211** (this line has said **v179**, **v194**, **v203** and **v204** — check `health`, not prose);
 version recorded on deploy via the shared `deploy_version` endpoint (`deploy.sh`, reading `crew.js?v=N`)
 using the shared untracked `.gx_deploy_secret`.
 
