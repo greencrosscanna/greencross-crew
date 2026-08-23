@@ -1447,6 +1447,32 @@ function decisionKey_(kind, employeeId, field, proposed) {
   return [kind, employeeId, field, String(proposed || '').toLowerCase()].join('|');
 }
 
+/* Whitespace-normalised comparison, matching what saveIdentity_ does on the way IN — it collapses
+   runs of whitespace before writing, so "Michael  Kettler" and "Michael Kettler" are the same value
+   and an item must not stay open over the difference. Deliberately CASE-SENSITIVE: "michael" vs
+   "Michael" is a real spelling disagreement and is exactly what this queue exists to surface. */
+function normSpace_(v) {
+  return String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+}
+
+/* The live value of the field a reported item is talking about, or null for "cannot tell".
+   The joined roster row renames Core's columns (full_name -> name, role_title -> role), so this is
+   the one place that mapping is stated; adding a new reportable field means adding it here too. */
+function liveValueFor_(row, field) {
+  if (!row) return null;
+  if (field === 'full_name')  return String(row.name || '');
+  if (field === 'role_title') return String(row.role || '');
+  return null;
+}
+
+/* Has the record already caught up with what the report proposed?
+   null (unknown field, or a person no longer on the roster) is NOT satisfied — an item we cannot
+   judge stays visible for a human, rather than disappearing on a guess. */
+function reportedItemSatisfied_(liveValue, proposedValue) {
+  if (liveValue == null) return false;
+  return normSpace_(liveValue) === normSpace_(proposedValue);
+}
+
 function reviewItems_() {
   var joined = rosterJoin_();
   var rows = joined.rows;
@@ -1529,13 +1555,35 @@ function reviewItems_() {
 
   // ── 4. Anything an import reported that the engine cannot see for itself (HR sheet, METRC
   //       exports — neither is reachable from Apps Script, so imports post their findings here).
+  //
+  // READ THE LIVE RECORD, DO NOT ECHO THE REPORT. A reported row is a snapshot of what some other
+  // system saw at the moment it was filed, and the roster keeps moving afterwards. Two things
+  // follow, and both were bugs here (filed as bug_mt67on71_calt, 2026-08-23):
+  //
+  //   • An item whose proposal has ALREADY BEEN APPLIED must drop out. resolveReview_ records a
+  //     decision, so accepting one clears it — but the identity panel is the other, equally valid
+  //     way to fix a name, and it writes no decision. Fix Michael Kettler there and the item
+  //     survived forever, still proposing a change that had already been made. Accepting it would
+  //     have been a no-op write, which is how a queue teaches people to ignore it.
+  //
+  //   • current_value must come from the RECORD, not from the report. Echoing rep.current_value
+  //     showed "Mike Kettler" as the current name minutes after it became Michael Kettler — a
+  //     stale fact rendered as a measured one, next to a proposal to change it.
+  //
+  // Unknown field -> liveValueFor_ returns null -> the item is KEPT. Failing safe means a stale
+  // item somebody can dismiss, never a real disagreement silently swallowed.
   readTab_(REVIEW_TAB, REVIEW_HEADERS).forEach(function (rep) {
-    var row = byId[rep.employee_id] || { employee_id: rep.employee_id, name: rep.name, retired: false };
-    var key = decisionKey_(rep.kind, rep.employee_id, rep.field, rep.proposed_value);
+    var live = byId[rep.employee_id] || null;
+    var row  = live || { employee_id: rep.employee_id, name: rep.name, retired: false };
+    var key  = decisionKey_(rep.kind, rep.employee_id, rep.field, rep.proposed_value);
     if (decided[key]) return;
+    var current = liveValueFor_(live, rep.field);
+    if (reportedItemSatisfied_(current, rep.proposed_value)) return;
     items.push({
-      id: key, kind: rep.kind, employee_id: rep.employee_id, name: rep.name || row.name,
-      field: rep.field, current_value: rep.current_value, proposed_value: rep.proposed_value,
+      id: key, kind: rep.kind, employee_id: rep.employee_id, name: row.name || rep.name,
+      field: rep.field,
+      current_value: current == null ? rep.current_value : current,
+      proposed_value: rep.proposed_value,
       source: rep.source, detail: rep.detail, severity: 'warn', reported: true
     });
   });
