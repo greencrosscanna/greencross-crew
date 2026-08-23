@@ -108,6 +108,47 @@ Related invariants worth keeping:
 - **Leading zeros need plain-text columns.** Sheets coerces `"00"` to `0`; `employee_number`,
   `birthday` and `permit_number` are pinned to `@` format, and number comparisons are numeric.
 
+## METRC is the source of truth — once we have API access (decided 2026-08-22)
+The METRC connector (`metrc_*` routes) is written but **not connected**: `METRC_BASE` still points at
+the sandbox and `METRC_USER_KEY` is unset, so `metrc_health` reports "Missing keys" and nothing real
+has ever come through it. Today its only consumer is `metrcAccessAudit_`, which answers "are retired
+staff still active in METRC?" — **names only, no writes**.
+
+When production credentials land, METRC becomes the authority for:
+
+| Field | Notes |
+|---|---|
+| `hire_date` | |
+| `permit_number` | OLCC permit |
+| `permit_granted` | OLCC Granted |
+| `permit_expires` | OLCC Expires |
+| **legal first + last name** | the spelling `full_name` should carry |
+
+**Why METRC and not Dutchie, which is where the roster's names actually came from.** Dutchie is
+*supposed* to mirror METRC, so it looks like an equivalent source — but a Dutchie admin (Mike) can
+edit a person's name in Dutchie, and a nickname typed there flows straight into `full_name` via the
+identity seed. That is exactly how employee #22 reached the roster as "Mike Kettler" while METRC has
+him as Michael. **Dutchie is not trustworthy for legal spelling; METRC is.** Any future reconciliation
+should treat a Dutchie/METRC name disagreement as "METRC wins", which is what the open review item on
+Rebeka Perez already says in prose.
+
+**The consequence for whoever builds the ingest — do not route it through `hr_import`.** That path
+defaults to fill-only and `full_name` is in its guarded list, so a correct legal name is *silently
+skipped* whenever the field already holds something, which it always will. Worse, the matching works
+perfectly first — `NICKNAMES` maps mike→michael, so `samePerson_('Michael Kettler','Mike Kettler')` is
+true — meaning the import identifies the person, keeps the right `employee_id`, reports the drift under
+`matched_despite_name_drift`, and then declines to apply the improvement. Nothing errors.
+
+So a METRC sync must either post `review_report` items (the `name_spelling` kind, which `resolveReview_`
+applies through `saveIdentity_` — that also records the rename alias, so the old `employee_id` keeps
+resolving for Leaderboard/SPIFF joins) or write its owned fields explicitly. Note `review_report`
+**replaces the whole `crew_reviews` tab wholesale** — a sync that posts only its own findings deletes
+every hand-filed item, so it must re-post what it did not author.
+
+Note also that accepting a `name_spelling` item writes `full_name` **only**. Setting the nickname
+(`preferred_name`) so the roster reads *Michael Kettler "Mike"* like the other 18 people is a separate
+edit in the identity panel.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
