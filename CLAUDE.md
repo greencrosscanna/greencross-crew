@@ -180,11 +180,36 @@ When production credentials land, METRC becomes the authority for:
 
 | Field | Notes |
 |---|---|
-| `hire_date` | |
-| `permit_number` | OLCC permit |
+| `permit_number` | OLCC permit — the export's **License Number** |
 | `permit_granted` | OLCC Granted |
 | `permit_expires` | OLCC Expires |
-| **legal first + last name** | the spelling `full_name` should carry |
+| `permit_status` | Active / Valid |
+| **legal first + last name** | the spelling `full_name` should carry, but see the casing note below |
+
+***`hire_date` is NOT on that list, corrected 2026-08-25.*** This line used to claim it was, and
+six real METRC employee exports disprove it: the **Hired** column is *the date that person was
+added to that licence*, not their company start date. In 72 rows across six licences, **30 land
+on 2025-04-29 and 11 more on 2025-04-30** — facility-setup days, not thirty people starting work
+together — and Michael Kettler reads `2025-04-29` in five exports and `2025-07-23` in the sixth.
+Writing it into `hire_date` would have reported ~1yr of tenure for people who have been here
+seven. It is only plausible for somebody on **one** licence with a non-bulk date, which is a
+new hire whose facility-add really is close to their start; even then it is a proposal for a
+human, not a value to write. A METRC sync must leave `hire_date` alone.
+
+Two more things the real exports show that the connector's field list does not:
+
+- **METRC's own casing is unreliable** — the same file carries `ellison, jayden`,
+  `PINKERTON, NOAH` and `Mcarthur, Ayla`. METRC wins on *spelling*, not on capitalisation, so a
+  sync must not copy the case through.
+- **`Employee Role` is empty for everyone, and `Home` is a METRC landing page** (`Sales`,
+  `Packages`, `Reports`), not a store. Neither maps to `role_title` or `home_store`.
+
+**Reconciled once by hand, 2026-08-25.** Six exports → 42 unique people → `hr_import` fill-only
+(permit fields only, no `hire_date`). 41 matched existing records; Andrew Roberts was created.
+Fill-only is the right mode for this even though CLAUDE.md warns against routing METRC through
+`hr_import` — that warning is about **`full_name`**, which is guarded and always populated, so a
+spelling correction is silently skipped. Permit columns are usually *empty*, which is exactly
+what fill-only exists to complete.
 
 **Why METRC and not Dutchie, which is where the roster's names actually came from.** Dutchie is
 *supposed* to mirror METRC, so it looks like an equivalent source — but a Dutchie admin (Mike) can
