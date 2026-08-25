@@ -378,6 +378,11 @@ function route_(e) {
         }
         return json_(installNightlyScan_(p), p.callback);
 
+      // Who is this deployment running as, and can it send? Diagnostic for the mail-scope dance.
+      case 'mail_check':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(mailCheck_(), p.callback);
+
       // The Monday recap. Previews by default; send=yes actually mails it, to= overrides who.
       case 'digest':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
@@ -2630,6 +2635,26 @@ function displayNameOf_(r) {
   if (!nick) return full;
   var sp = full.indexOf(' ');
   return sp < 0 ? nick : nick + full.slice(sp);
+}
+
+/* WHICH ACCOUNT is the web app actually running as, and can it send mail?
+ *
+ * The deployment runs executeAs USER_DEPLOYING, so the mail scope has to be granted by the user
+ * the DEPLOYMENT belongs to — which is not necessarily the account sitting in the editor. Running
+ * a function in the IDE authorises the editor session; it does not re-authorise a deployment that
+ * a different account created. Guessing between those two costs a round trip each time, so ask. */
+function mailCheck_() {
+  var who = '(unknown — userinfo.email not granted)';
+  try { who = Session.getEffectiveUser().getEmail() || who; } catch (e) {}
+  var quota = null, mailErr = '';
+  try { quota = MailApp.getRemainingDailyQuota(); }
+  catch (e) { mailErr = String((e && e.message) || e); }
+  return { ok: true, effective_user: who, can_send_mail: quota !== null,
+           remaining_daily_quota: quota, mail_error: mailErr,
+           note: quota === null
+             ? 'The account above is the one that must grant the mail scope — open the script ' +
+               'signed in AS THAT ACCOUNT, run sendDigestNow(), accept the prompt.'
+             : 'Mail is authorised for this deployment.' };
 }
 
 function sendDigest_(p) {
