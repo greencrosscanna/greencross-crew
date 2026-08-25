@@ -2513,11 +2513,9 @@ function saveRosterAttrs_(p) {
  * It reads. It writes nothing, and it is deliberately not the place any of this gets actioned —
  * every line links back to the roster, because that is where the decisions are recorded.
  */
-/* SKY ONLY until Crew launches (Sky, 2026-08-25). Mike is the other intended recipient and goes
-   back in the moment there are staff behind this — but a digest is a standing weekly mail, and
-   starting one to somebody before the thing it describes is live trains them to ignore it.
-   ADD MIKE AT LAUNCH: 'mike@greencrosscanna.com'. */
-var DIGEST_TO = ['sky@greencrosscanna.com'];
+/* Sky and Mike (Sky, 2026-08-25 — Mike added back once the digest was verified rendering
+   correctly, having been held off while it was still being fixed). */
+var DIGEST_TO = ['sky@greencrosscanna.com', 'mike@greencrosscanna.com'];
 var LAST_DIGEST_PROP = 'CREW_LAST_DIGEST';
 var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';
 
@@ -2679,8 +2677,18 @@ function mailCheck_() {
     var raw = PropertiesService.getScriptProperties().getProperty(LAST_DIGEST_PROP);
     if (raw) last = JSON.parse(raw);
   } catch (e) {}
+  /* What is actually SCHEDULED. Every previous answer to "is the digest set up?" was inferred
+     from the return value of the call that set it up, which says what was attempted rather than
+     what survives — and the two came apart once, when the mail guard skipped creating the digest
+     trigger and nothing said so afterwards. */
+  var triggers = [];
+  try {
+    ScriptApp.getProjectTriggers().forEach(function (t) {
+      triggers.push(t.getHandlerFunction() + ' (' + String(t.getEventType()) + ')');
+    });
+  } catch (e) { triggers = ['(unreadable: ' + String((e && e.message) || e) + ')']; }
   return { ok: true, effective_user: who, can_send_mail: quota !== null,
-           remaining_daily_quota: quota, mail_error: mailErr,
+           remaining_daily_quota: quota, mail_error: mailErr, triggers: triggers,
            /* What the LAST attempt did, from wherever it was run. This is the only window into an
               editor execution from out here. */
            last_attempt: last, configured_recipients: DIGEST_TO,

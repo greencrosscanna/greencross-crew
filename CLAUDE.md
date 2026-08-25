@@ -289,6 +289,33 @@ against the GX Core registry and parks anyone it cannot match in **`crew_pending
   previously use, so the first install may need the owner to run `installNightlyScan()` once from
   the editor and grant it.
 
+## Monday digest — and the Apps Script auth trap it walked into
+The nightly scan's findings, plus the permit and gap counts, mailed **Mondays 07:00 store time**
+to **Sky and Mike** (`DIGEST_TO` in `Code.gs`). Same content as the roster's overview minus
+Employee of the Month. `?action=digest` previews, `&send=yes` sends, `&to=` overrides. Every
+attempt records its outcome and its **source** (`editor` / `webapp` / `trigger`) to a script
+property, readable via `?action=mail_check`, which also lists the live triggers.
+
+**Adding a new OAuth scope does not re-prompt, and costs a day if you do not know that.** Adding
+`MailApp` meant the project needed `script.send_mail`; Google decided the authorisation was
+already settled and never showed a consent dialog. Every symptom pointed elsewhere:
+
+- Running the function from the editor **grants your account, not the deployment.** The web app
+  is `executeAs: USER_DEPLOYING` and carries its own stored authorisation.
+- **`clasp update-deployment` never raises a consent prompt.** Redeploying does not help.
+- The editor logged the run as **Completed** because `sendDigest_` catches the auth error and
+  returns it. A refused send looked exactly like a successful one. `sendDigestNow` now rethrows.
+
+**What actually works:** revoke the project at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions) → *Remove access*,
+then run `sendDigestNow()` from the editor. With no stored grant Apps Script re-derives every
+scope and prompts for the full set. **The engine is down between those two steps** — the web app
+runs on that same authorisation — so it is a minute of outage, not a free action.
+
+Deliberately NOT fixed by pinning `oauthScopes` in `appsscript.json`: an explicit list replaces
+auto-detection and would have to enumerate everything **GXCore** needs as well as this script's.
+A scope missed there breaks the roster and the review queue, not just email.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
