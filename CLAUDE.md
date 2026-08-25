@@ -62,6 +62,12 @@ Three things a future session will otherwise get wrong:
   and `roster_identity` both treat an absent parameter as "leave alone" and an empty one as
   "clear", and both read-merge-write. Post a whole record instead and `gxWrite_` blanks whatever
   you omitted — `dutchie_employee_id` and `user_id`, neither of which this screen shows.
+- **Nothing in the sub nav says how many open questions there are.** The attention chip that
+  used to sit there was removed 2026-08-25; the overview opens on its own and states the count
+  in its title and its stat tiles, so the chip was a second scoreboard to keep in agreement with
+  the first. It was also the way BACK from a person to the overview, so three replacements
+  carry that: **Escape**, **clicking the open person again**, and the **Roster tab**. Escape is
+  ignored while focus is in an input or select, where it already means "revert this field".
 - **The store pill row has no "All" pill any more.** Deselecting is clicking the lit pill again.
   `tests/roster_filter_test.js` pins the set, the order, the counts-before-the-store-filter rule
   and the dim-don't-disappear rule; it also now covers the three stacked filters

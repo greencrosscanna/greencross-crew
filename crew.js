@@ -600,7 +600,7 @@
       state.review = state.review || [];
       state.reviewErr = (e && e.message) || 'could not load the review queue';
     }
-    if (mount.classList.contains('is-ws')) { paintSubnav(); paintPane(); }
+    if (mount.classList.contains('is-ws')) { paintPane(); }
   }
 
   /* Every open question, minus the ones resolved in this session. Optimistic removal: a resolved
@@ -867,15 +867,13 @@
     subnav.appendChild(el('span', 'crew-div'));
 
     var pillsSlot = el('div', 'crew-pills-slot');
-    pillsSlot.style.display = 'contents';
     subnav.appendChild(pillsSlot);
 
-    var attn = el('button', 'crew-attn');
-    attn.type = 'button';
-    attn.addEventListener('click', function () {
-      state.selected = null; paintRail(); paintPane(); paintAttn();
-    });
-    subnav.appendChild(attn);
+    /* The attention chip is gone from here — the overview already opens on its own and states
+       the same count in its title and stat tiles, so the chip was a second scoreboard to keep
+       agreeing with the first. What it ALSO was, though, is the way back from a person to the
+       overview, and that had to survive it: Escape, clicking the open person again, and the
+       Roster tab all deselect now. */
 
     var body = el('div', 'crew-body');
     var rail = el('div', 'crew-rail');
@@ -885,11 +883,21 @@
     mount.appendChild(subnav);
     mount.appendChild(body);
 
-    ui = { search: search, seg: seg, pills: pillsSlot, attn: attn, rail: rail, pane: pane };
+    ui = { search: search, seg: seg, pills: pillsSlot, rail: rail, pane: pane };
     paintSubnav(); paintRail(); paintPane();
   }
 
-  function paintSubnav() { paintScope(); paintPills(); paintAttn(); }
+  /* Escape returns to the overview. It is the keyboard half of "click the open person again",
+     and with the chip gone one of the two needed to not be a mouse. Ignored while you are inside
+     a control, where Escape means "revert this field" to the browser and to everyone's fingers. */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || !state.selected || !ui) return;
+    var t = e.target && e.target.tagName;
+    if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+    state.selected = null; paintRail(); paintPane();
+  });
+
+  function paintSubnav() { paintScope(); paintPills(); }
 
   function paintScope() {
     if (!ui) return;
@@ -920,20 +928,6 @@
     ui.pills.innerHTML = '';
     var row = storePills(searchRows(scopedRows()));
     if (row) ui.pills.appendChild(row);
-  }
-
-  function paintAttn() {
-    if (!ui) return;
-    var open = openItems();
-    var high = open.filter(function (it) { return it.severity === 'high'; }).length;
-    ui.attn.className = 'crew-attn' + (state.selected ? '' : ' is-on');
-    ui.attn.setAttribute('aria-pressed', state.selected ? 'false' : 'true');
-    ui.attn.innerHTML = '';
-    var dot = el('span', 'crew-attn-dot');
-    dot.style.background = high ? 'var(--gx-red)' : open.length ? 'var(--gx-gold)' : 'var(--gx-green)';
-    ui.attn.appendChild(dot);
-    ui.attn.appendChild(el('span', null,
-      state.review === null ? 'Checking…' : open.length ? open.length + ' to look at' : 'All clear'));
   }
 
 
@@ -1024,8 +1018,10 @@
     }
 
     b.addEventListener('click', function () {
-      state.selected = r.employee_id;
-      paintRail(); paintPane(); paintAttn();
+      /* Clicking whoever is already open closes them, which is now one of the two ways back to
+         the overview. Toggling the thing you pressed is also what the pressed state promises. */
+      state.selected = sel ? null : r.employee_id;
+      paintRail(); paintPane();
     });
     return b;
   }
@@ -1132,7 +1128,7 @@
       var b = el('button', 'crew-btn is-gold', 'Open record');
       b.type = 'button';
       b.addEventListener('click', function () {
-        state.selected = holder.employee_id; paintRail(); paintPane(); paintAttn();
+        state.selected = holder.employee_id; paintRail(); paintPane();
       });
       card.appendChild(b);
     }
@@ -1157,7 +1153,7 @@
     txt.appendChild(el('span', 'crew-q-kind', esc(KIND_LABEL[it.kind] || it.kind)));
     who.appendChild(txt);
     who.addEventListener('click', function () {
-      state.selected = it.employee_id; paintRail(); paintPane(); paintAttn();
+      state.selected = it.employee_id; paintRail(); paintPane();
     });
     box.appendChild(who);
 

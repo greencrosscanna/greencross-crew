@@ -122,6 +122,7 @@
        per pill from the GX Core store registry via GXStores, with a neutral fallback for stores
        that carry no colour (corporate). */
     .crew-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .crew-pills-slot { display: contents; }
     .crew-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
       border: 1px solid var(--gx-border); border-radius: var(--gx-radius-pill);
       background: var(--gx-surface-2); color: var(--gx-text-dim);
@@ -136,15 +137,6 @@
        wrong store. */
     .crew-pill.is-empty { opacity: .45; }
     .crew-pill-n { color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
-
-    .crew-attn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
-      background: transparent; border: 1px solid var(--gx-border); color: var(--gx-text-dim);
-      border-radius: var(--gx-radius-pill); padding: 6px 13px;
-      font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
-    .crew-attn:hover { color: var(--gx-text); }
-    .crew-attn.is-on { background: var(--gx-gold-soft); border-color: var(--gx-gold-line);
-      color: var(--gx-gold); }
-    .crew-attn-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 
     /* ── Two panes ────────────────────────────────────────────────────────────
        Each scrolls on its own; the page never does, and nothing scrolls sideways. */
@@ -475,7 +467,6 @@
     /* Desktop only, per the brief. Below ~1100px the sub nav wraps; the rail stays 340px so
        the two panes never fight over the same space. */
     @media (max-width: 1100px) {
-      .crew-attn { margin-left: 0; }
       .crew-ov, .crew-pbody, .crew-phead-in { max-width: none; }
     }
   </style>
@@ -496,6 +487,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.312"></script>
+  <script src="crew.js?v=1.313"></script>
 </body>
 </html>
