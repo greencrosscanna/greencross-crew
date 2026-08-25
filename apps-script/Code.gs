@@ -2513,7 +2513,12 @@ function saveRosterAttrs_(p) {
  * It reads. It writes nothing, and it is deliberately not the place any of this gets actioned —
  * every line links back to the roster, because that is where the decisions are recorded.
  */
-var DIGEST_TO = ['sky@greencrosscanna.com', 'mike@greencrosscanna.com'];
+/* SKY ONLY until Crew launches (Sky, 2026-08-25). Mike is the other intended recipient and goes
+   back in the moment there are staff behind this — but a digest is a standing weekly mail, and
+   starting one to somebody before the thing it describes is live trains them to ignore it.
+   ADD MIKE AT LAUNCH: 'mike@greencrosscanna.com'. */
+var DIGEST_TO = ['sky@greencrosscanna.com'];
+var LAST_DIGEST_PROP = 'CREW_LAST_DIGEST';
 var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';
 
 function digestData_() {
@@ -2649,8 +2654,16 @@ function mailCheck_() {
   var quota = null, mailErr = '';
   try { quota = MailApp.getRemainingDailyQuota(); }
   catch (e) { mailErr = String((e && e.message) || e); }
+  var last = null;
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty(LAST_DIGEST_PROP);
+    if (raw) last = JSON.parse(raw);
+  } catch (e) {}
   return { ok: true, effective_user: who, can_send_mail: quota !== null,
            remaining_daily_quota: quota, mail_error: mailErr,
+           /* What the LAST attempt did, from wherever it was run. This is the only window into an
+              editor execution from out here. */
+           last_attempt: last, configured_recipients: DIGEST_TO,
            note: quota === null
              ? 'The account above is the one that must grant the mail scope — open the script ' +
                'signed in AS THAT ACCOUNT, run sendDigestNow(), accept the prompt.'
@@ -2672,16 +2685,31 @@ function sendDigest_(p) {
              gaps: d.gaps, new_here: d.fresh.length,
              note: 'Nothing sent. Repeat with send=yes.' };
   }
+  /* EVERY attempt is recorded, successful or not. An editor run returns its result to a window
+     nobody is looking at and leaves no trace anywhere reachable, which is exactly why "I ran it
+     and never got the email" was undiagnosable: no way to tell a refused scope from a delivered
+     message that landed in spam, or from a wrong address. Now there is. */
+  function note(res) {
+    try {
+      PropertiesService.getScriptProperties().setProperty(LAST_DIGEST_PROP, JSON.stringify(res));
+    } catch (e) { /* the record is a nicety; never fail the send over it */ }
+    return res;
+  }
+  var at = new Date().toISOString();
   try {
     MailApp.sendEmail({ to: recipients.join(','), subject: subject, htmlBody: html,
                         name: 'GX Crew' });
   } catch (e) {
-    return { ok: false, needs_authorization: true, error: String((e && e.message) || e),
-             fix: 'MailApp needs the script.send_mail scope. Run sendDigestNow() once from the ' +
-                  'Apps Script editor and grant it when prompted.' };
+    return note({ ok: false, at: at, to: recipients, needs_authorization: true,
+                  error: String((e && e.message) || e),
+                  fix: 'MailApp needs the script.send_mail scope, granted by whoever this context ' +
+                       'runs as. From the editor that is you; from the web app it is the deployment.' });
   }
-  return { ok: true, mode: 'sent', to: recipients, subject: subject,
-           open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length };
+  var quota = null;
+  try { quota = MailApp.getRemainingDailyQuota(); } catch (e) {}
+  return note({ ok: true, at: at, mode: 'sent', to: recipients, subject: subject,
+                remaining_daily_quota: quota,
+                open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length });
 }
 
 /* Trigger entry point, and the editor-runnable twin for the one-time mail authorisation. */
