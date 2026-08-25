@@ -2103,10 +2103,12 @@
       bClear.style.display = '';
       paintControls(); paintPreview(); push();
     });
-    /* Works as of GXCore v174: the engine NAMES avatar_config in a clear= list, because an empty
-       value on its own means "leave alone" in Core's patch path. This button spent a release
-       disabled rather than deleted — it used to clear the preview, report success and let the
-       face come back on reload. */
+    /* Clearing works because the write NAMES avatar_config rather than sending it empty — an
+       empty value on its own means "leave alone" in Core's patch path. Since GXCore v225 the
+       naming AND the check that the blank actually landed live in GXCore.setAvatar, which
+       roster_identity hands avatar-only saves to. This button spent a release disabled rather
+       than deleted — it used to clear the preview, report success and let the face come back on
+       reload, which is why the engine verifies instead of assuming. */
     bClear.addEventListener('click', function () {
       working = null;
       bStart.textContent = 'Give them an avatar';

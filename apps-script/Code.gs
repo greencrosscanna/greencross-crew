@@ -291,15 +291,18 @@ function route_(e) {
       case 'set_number':     return json_(setNumber_(p), p.callback);
       case 'email_proposals': return json_(emailProposals_(p), p.callback);
 
-      // Leaderboard's avatar service — its backend calls these so staff keep self-service
-      // without a Crew login. See avatarSave_ for why it is not a public write.
+      // ── METRC connector (worker permits) ───────────────────────────────────
       case 'metrc_health': return json_(metrcHealth_(p), p.callback);
       case 'metrc_setup':  return json_(metrcSandboxSetup_(p), p.callback);
       case 'metrc_probe':  return json_(metrcAuthProbe_(p), p.callback);
       case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
 
-      case 'avatars':      return json_(avatarsForKiosk_(p), p.callback);
-      case 'avatar_save':  return json_(avatarSave_(p, body), p.callback);
+      /* REMOVED 2026-08-25: `avatars` and `avatar_save`. They were Crew's half of a
+         Leaderboard hand-off that was never wired — nothing outside this repo ever called
+         either one, verified across the whole tree. The write they offered now lives in
+         GX Core as GXCore.setAvatar (v225), built from this app's logic, so BOTH apps write
+         avatars through one function instead of two hand-rolled merges. Dead code that reads
+         like a live contract is what the spiff_payouts cleanup was about; deleted, not parked. */
       case 'create_accounts': return json_(createAccounts_(p, body), p.callback);
 
       // ── Review queue: catch cross-source disagreements, ask a human ─────────
@@ -991,78 +994,25 @@ function createAccounts_(p, body) {
 }
 
 
-// ─── Avatar service for Leaderboard (server-to-server) ──────────────────────────
+// ─── Avatar seed + clear-verification helpers ───────────────────────────────────
 /*
- * Staff change their own avatar by clicking their puck on the kiosk — no login, no Crew
- * access. That flow must keep working exactly as it does today; only the destination moves.
+ * WHERE THE AVATAR WRITE WENT (2026-08-25): to GX Core. `GXCore.setAvatar(ref, config, by)`
+ * (v225) is the ONE place avatar_config is written, and it was built from THIS app's version of
+ * the logic — seed pinned to employee_number, lock contention retried, a clear NAMED in clear=
+ * and then verified to have landed. Leaderboard's own writer did none of that, so which
+ * behaviour a staff member got depended on which app they were standing in front of.
  *
- * WHY LEADERBOARD DOES NOT WRITE CORE DIRECTLY:
- *   • core-admin's model is that Crew is the SOLE writer to the employees registry. Two writers
- *     is how rows get silently clobbered, which we have already lived through once.
- *   • gxWrite_ replaces whole rows, so every writer needs the read-merge-write discipline. Better
- *     to keep that in one place than to reimplement it correctly in a second app.
- *   • Leaderboard binds an older GXCore; avatar_config only exists from v127. Going through here
- *     means no re-pin, and no risk of taking Leaderboard down for a cosmetic feature.
+ * Deleted with it: `avatarsForKiosk_` (route `avatars`), `avatarSave_` (route `avatar_save`) and
+ * `resolveEmployee_`, which only avatarSave_ used. They were Crew's half of a Leaderboard
+ * hand-off that never got wired — no caller anywhere in the suite, verified across the tree.
+ * setAvatar does its own resolution (employee_id, employee_number, dutchie id, name).
  *
- * WHY IT IS SECRET-GATED AND NOT PUBLIC:
- *   The kiosk page is public JS and cannot hold a secret. So the browser calls LEADERBOARD's
- *   backend (which already knows who is logged in), and that backend calls this with the shared
- *   secret. Staff never authenticate to Crew, and there is no open write surface on the internet.
+ * What stays here is what the READ paths need. `rosterJoin_` and `migrateLeaderboard_` re-derive
+ * the seed at read time (that is why the stored seed could drift for a release without a single
+ * face rendering wrong), and `saveIdentity_` still stamps it on the one path that does NOT
+ * delegate — an avatar arriving alongside other identity fields, which stays a single atomic
+ * row write rather than being split in two just to route the avatar separately.
  */
-function resolveEmployee_(rows, ref) {
-  var want = String(ref || '').trim();
-  if (!want) return null;
-  var lower = want.toLowerCase();
-  var byNum = null, byId = null;
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    if (String(r.employee_id || '').trim().toLowerCase() === lower) byId = r;
-    var n = String(r.employee_number || '').trim();
-    if (n && (n === want || parseInt(n, 10) === parseInt(want, 10))) byNum = byNum || r;
-  }
-  if (byId) return byId;
-  if (byNum && /^\d+$/.test(want)) return byNum;
-  // A merge or rename may have retired this key — follow the alias before giving up.
-  var alias = readAliases_()[nameToKey_(want.replace(/_/g, ' '))] || readAliases_()[lower];
-  if (alias) {
-    for (var j = 0; j < rows.length; j++) {
-      if (String(rows[j].employee_id || '').trim() === alias) return rows[j];
-    }
-  }
-  for (var k = 0; k < rows.length; k++) {
-    if (samePerson_(want.replace(/_/g, ' '), rows[k].full_name)) return rows[k];
-  }
-  return null;
-}
-
-/** Everything Leaderboard needs to render faces, keyed both ways so either join works. */
-function avatarsForKiosk_(p) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
-  var rows = GXCore.getEmployees() || [];
-  var attrs = readAttrs_();
-  var byKey = Object.create(null), byNumber = Object.create(null), names = Object.create(null);
-  rows.forEach(function (r) {
-    var st = String(r.status || 'active').toLowerCase();
-    if (st === 'merged') return;
-    var id  = String(r.employee_id || '').trim();
-    var num = String((attrs[id] || {}).employee_number || r.employee_number || '').trim();
-    var cfg = String(r.avatar_config || '').trim();
-    if (cfg) {
-      var parsed = null;
-      try { parsed = JSON.parse(cfg); } catch (e) { parsed = null; }
-      if (parsed) {
-        // Seed travels WITH the config so Leaderboard never has to derive it from a name.
-        parsed.seed = avatarSeedFrom_(attrs[id], r, id);
-        byKey[id] = parsed;
-        if (num) byNumber[num] = parsed;
-      }
-    }
-    var nick = String(r.preferred_name || '').trim();
-    if (nick) names[id] = nick;
-  });
-  return { ok: true, avatarConfigs: byKey, byEmployeeNumber: byNumber, nicknames: names,
-           note: 'seed is inside each config — do not regenerate it from a name key' };
-}
 
 /**
  * THE avatar seed for one person — the single definition, because there is more than one door.
@@ -1072,12 +1022,19 @@ function avatarsForKiosk_(p) {
  * different face. employee_id is only a fallback for someone not yet numbered; they get a stable
  * face the moment a number is assigned.
  *
- * It lives in a function because avatar_config can be written through TWO routes — avatar_save
- * (Leaderboard's self-service path) and roster_identity (Crew's own picker) — and for a while
- * only the first one stamped. Nothing broke, because avatarsForKiosk_ re-derives the seed at READ
- * time, so a config stored without one still rendered correctly. That is exactly what made it
- * hard to notice: the stored record quietly drifted from the invariant while every rendered face
- * stayed right. One function, called by both doors, is what keeps that from happening again.
+ * It lives in a function because avatar_config used to be written through TWO doors in this app
+ * — the old avatar_save route and roster_identity — and for a while only one of them stamped.
+ * Nothing broke, because every reader re-derives the seed at READ time, so a config stored
+ * without one still rendered correctly. That is exactly what made it hard to notice: the stored
+ * record quietly drifted from the invariant while every rendered face stayed right. The write
+ * itself is GXCore.setAvatar's job now (it pins the same way); this remains the READ-side
+ * definition, and the one write path that stays local uses it so both agree.
+ *
+ * ONE DIFFERENCE FROM setAvatar, deliberate: this prefers Crew's attribute sheet over the Core
+ * row, because a number can be recorded here first. In practice the two agree — assignNumbers_,
+ * setNumber_ and hrImport_ all write employee_number to BOTH — and readers re-derive anyway, so
+ * a stored seed can only ever be advisory. Do not "fix" it by dropping the attrs lookup: it is
+ * the reader's answer, and the reader is what a face is actually generated from.
  */
 function avatarSeedFrom_(attrRow, coreRow, employeeId) {
   var num = String((attrRow && attrRow.employee_number) ||
@@ -1086,9 +1043,10 @@ function avatarSeedFrom_(attrRow, coreRow, employeeId) {
 }
 
 /*
- * Convenience for the SINGLE-record write paths, which hold no attrs map. The bulk paths
- * (avatarsForKiosk_, migrateLeaderboard_, rosterJoin_) have already read attrs for their whole
- * loop and call avatarSeedFrom_ directly rather than re-reading the sheet per person.
+ * Convenience for the single-record path that still stamps locally (saveIdentity_'s mixed
+ * write), which holds no attrs map. The bulk paths (migrateLeaderboard_, rosterJoin_) have
+ * already read attrs for their whole loop and call avatarSeedFrom_ directly rather than
+ * re-reading the sheet per person.
  */
 function avatarSeed_(employeeId, priorRow) {
   return avatarSeedFrom_(readAttrs_()[employeeId], priorRow, employeeId);
@@ -1120,67 +1078,6 @@ function unclearedFields_(prior, changes, res) {
   });
 }
 
-/** Write one person's avatar. Called by Leaderboard's backend on behalf of a signed-in user. */
-function avatarSave_(p, body) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
-  var ref = String(p.employee || p.nameKey || p.employee_id || '').trim();
-  var raw = (body && body.config) || p.config || '';
-  var rows = GXCore.getEmployees() || [];
-  var emp = resolveEmployee_(rows, ref);
-  if (!emp) return { ok: false, error: 'could not resolve "' + ref + '" to anyone on the roster' };
-
-  var cfg = null;
-  if (String(raw).trim()) {
-    try {
-      cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('not an object');
-    } catch (e) { return { ok: false, error: 'config must be a JSON object of DiceBear params' }; }
-  }
-
-  var id = String(emp.employee_id).trim();
-  var seed = avatarSeed_(id, emp);
-  if (cfg) cfg.seed = seed;        // pin the seed; a rename must never change the face
-
-  var merged = {};
-  Object.keys(emp).forEach(function (k) { merged[k] = emp[k]; });   // read-merge-write
-  merged.employee_id = id;
-  merged.avatar_config = cfg ? JSON.stringify(cfg) : '';
-  /* Removing an avatar has to NAME the field. An empty value alone means "leave alone" in Core's
-     patch path — the guard that stops a partial write blanking a record — so clearing is opt-in
-     by naming, never by omitting (GXCore v174, added at Crew's request). */
-  if (!cfg) merged.clear = 'avatar_config';
-
-  /*
-   * gxWrite_ serialises on the script lock and gives up after 30s. Under any concurrent write
-   * that surfaces as "Lock timeout", which a staff member would see as their avatar failing to
-   * save for no reason they can act on. Observed on the very first live call, so it is not
-   * theoretical. Retry a couple of times before admitting defeat.
-   */
-  var lastErr = null, res = null;
-  for (var attempt = 0; attempt < 3; attempt++) {
-    try { res = GXCore.gxUpsertEmployee(merged); lastErr = null; break; }
-    catch (e) {
-      lastErr = e;
-      if (!/lock/i.test(String((e && e.message) || e))) break;   // only lock contention is retryable
-      Utilities.sleep(1500 * (attempt + 1));
-    }
-  }
-  if (lastErr) {
-    return { ok: false, retryable: /lock/i.test(String(lastErr.message || lastErr)),
-             error: String(lastErr.message || lastErr) };
-  }
-  bustRosterCache_();
-  var uncleared = unclearedFields_(emp, { avatar_config: merged.avatar_config }, res);
-  if (uncleared.length) {
-    // Fail LOUD. The caller asked to remove this avatar and it is still there. With clear= wired
-    // up this should no longer happen — which is exactly why it must still be reported if it does.
-    return { ok: false, employee_id: id, name: emp.full_name, cleared: false,
-             error: 'asked GX Core to clear avatar_config and it is still set',
-             not_cleared: uncleared, resolved_from: ref };
-  }
-  return { ok: true, employee_id: id, name: emp.full_name, seed: seed,
-           cleared: !cfg, resolved_from: ref };
-}
 
 
 // ─── METRC connector (Oregon) ───────────────────────────────────────────────────
@@ -2319,20 +2216,18 @@ function saveIdentity_(p) {
     }
     changes.role_title = rt ? (normRole_(rt) || rt) : '';
   }
+  /* Parsed here, written further down — an avatar-only edit does not go through the merge at
+     all. Validate before touching anything either way: a half-applied identity edit is worse
+     than a refusal, and this is the one field that can arrive as malformed JSON. */
+  var avatarCfg;                                  // undefined = untouched, null = clear
   if (p.avatar_config != null) {
     var av = String(p.avatar_config).trim();
+    avatarCfg = null;
     if (av) {
       // Store the config, never a rendered image — Core keeps DiceBear params only.
       try {
-        var parsed = JSON.parse(av);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
-        /* Stamp the seed here too, not just in avatar_save. The picker builds a config from
-           DEFAULT_AVATAR, which carries no seed, so a brand-new avatar created in Crew used to be
-           stored without one — and it RENDERED fine, because the seed is re-derived at read time.
-           The invariant regressed silently while every face stayed correct. Unconditional, like
-           the other door: it also repairs a config that arrives carrying a stale seed. */
-        parsed.seed = avatarSeed_(id, prior);
-        av = JSON.stringify(parsed);
+        avatarCfg = JSON.parse(av);
+        if (!avatarCfg || typeof avatarCfg !== 'object' || Array.isArray(avatarCfg)) throw new Error('not an object');
       } catch (e) {
         return { ok: false, error: 'avatar_config must be a JSON object of DiceBear params' };
       }
@@ -2345,6 +2240,29 @@ function saveIdentity_(p) {
     changes.hire_date = hd ? normDate_(hd) : '';
   }
   if (!Object.keys(changes).length) return { ok: false, error: 'nothing to change' };
+
+  /* AN AVATAR-ONLY EDIT IS NOT AN IDENTITY WRITE — it is THE avatar write, and GX Core owns that
+     now. GXCore.setAvatar (v225) pins the seed, retries lock contention, NAMES avatar_config in
+     clear= and then verifies the clear actually landed. It is this app's own logic, promoted, so
+     that Leaderboard's copy could be deleted rather than left disagreeing with ours. Every write
+     the picker makes lands here: it saves one field at a time.
+
+     The MIXED case deliberately does not delegate. An avatar arriving with a name or a store
+     change is one atomic row write, and splitting it into two calls to route the avatar
+     separately would give a half-applied identity edit a way to exist — the exact failure the
+     validation above is arranged to prevent. It stamps the seed locally instead (same
+     definition, avatarSeed_), which is why that helper is still here. */
+  var avatarOnly = Object.keys(changes).length === 1 && changes.avatar_config != null;
+  if (avatarOnly) return saveAvatarOnly_(id, prior, avatarCfg, changes.avatar_config, auth.user);
+
+  if (avatarCfg) {
+    /* The picker builds a config from DEFAULT_AVATAR, which carries no seed, so a brand-new
+       avatar created in Crew used to be stored without one — and it RENDERED fine, because the
+       seed is re-derived at read time. The invariant regressed silently while every face stayed
+       correct. Unconditional: it also repairs a config that arrives carrying a stale seed. */
+    avatarCfg.seed = avatarSeed_(id, prior);
+    changes.avatar_config = JSON.stringify(avatarCfg);
+  }
 
   var merged = {};
   Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });   // <- every column survives
@@ -2386,6 +2304,62 @@ function saveIdentity_(p) {
              : '',
            preserved: ['dutchie_employee_id', 'user_id', 'employee_number', 'avatar_config']
              .filter(function (k) { return String(prior[k] || '').trim(); }) };
+}
+
+/**
+ * The avatar-only branch of saveIdentity_: hand the write to GX Core and translate its answer
+ * back into the shape roster_identity's caller already reads.
+ *
+ * There is no read-merge-write here and that is the point — GXCore.setAvatar sends a PATCH of
+ * { employee_id, avatar_config } (plus clear= when removing), and Core's own upsert merges it
+ * onto the live row. Crew is not omitting columns; it is not sending a row at all, so there is
+ * nothing for gxWrite_ to blank. dutchie_employee_id and user_id are untouched by construction
+ * rather than by remembering to carry them, which is the whole reason the primitive exists.
+ */
+function saveAvatarOnly_(id, prior, cfg, requested, by) {
+  var res;
+  try {
+    res = GXCore.setAvatar(id, cfg || '', String(by || 'crew') + ' (crew roster)');
+  } catch (e) {
+    /* No setAvatar means the LIVE DEPLOYMENT binds a library below v225 — the manifest at HEAD
+       says nothing about what the deployed snapshot runs, so name the fix (re-pin AND redeploy)
+       instead of surfacing "setAvatar is not a function" to somebody picking a hat. */
+    return { ok: false, employee_id: id,
+             error: 'GX Core could not save the avatar: ' + String((e && e.message) || e) +
+                    ' — setAvatar needs GXCore v225; check ?action=health for the live pin' };
+  }
+  if (!res || res.ok === false) {
+    return { ok: false, employee_id: id, retryable: !!(res && res.retryable),
+             error: (res && res.error) || 'GX Core returned nothing for setAvatar' };
+  }
+  bustRosterCache_();
+  /* setAvatar VERIFIES a clear actually landed and fails loud if it did not, so not_cleared is
+     empty by construction on this path. It stays in the response because the caller treats a
+     warning as a failed save, and the two branches of roster_identity must not answer in
+     different shapes. */
+  return { ok: true, employee_id: id,
+           changed: avatarCfgSame_(prior.avatar_config, requested) ? [] : ['avatar_config'],
+           not_cleared: [], warning: '', seed: res.seed, cleared: !!res.cleared,
+           preserved: ['dutchie_employee_id', 'user_id', 'employee_number', 'full_name']
+             .filter(function (k) { return String(prior[k] || '').trim(); }) };
+}
+
+/*
+ * Same avatar, ignoring the seed. `changed` reports what a HUMAN altered, and the seed is
+ * stamped by the writer, not chosen by the caller — the picker posts a config with no seed at
+ * all, so a raw string compare against the stored value would call every re-save a change.
+ */
+function avatarCfgSame_(a, b) {
+  function norm(v) {
+    var raw = String(v == null ? '' : v).trim();
+    if (!raw) return '';
+    var o = null;
+    try { o = JSON.parse(raw); } catch (e) { return raw; }
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return raw;
+    delete o.seed;
+    return Object.keys(o).sort().map(function (k) { return k + '=' + o[k]; }).join('&');
+  }
+  return norm(a) === norm(b);
 }
 
 /**
@@ -3614,7 +3588,7 @@ function identityHealth_() {
  * The mechanism is the one hr_import already guards against, arriving from another app:
  * gxWrite_ REPLACES the whole row, rebuilding every column from the record it is handed, so an
  * upsert of { employee_id, avatar_config } writes '' over everything it did not mention. Crew's
- * own writers (saveIdentity_, avatarSave_, hrImport_) all read-merge-write and cannot do this;
+ * own writers (saveIdentity_, hrImport_) all read-merge-write and cannot do this;
  * a partial upsert from outside Crew can, and did.
  *
  * Two sources still hold the truth, neither of which the wipe touched:

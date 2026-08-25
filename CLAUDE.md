@@ -115,7 +115,7 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   never `create-deployment`, which mints a *new* /exec URL and orphans `cfg.crewEngineUrl`.
   Note `clasp create` clones the remote manifest over the local one, wiping the GXCore binding;
   restore `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.)
-- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v220** —
+- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v225** —
   v139 is where `gxUpsertEmployee` began read-merge-writing instead of rebuilding a row from the payload,
   and v150 made that unconditional plus refused to blank a live `full_name`, so anything below v150 can
   still blank the columns a partial write omits. **v201** is the floor for the store matcher:
@@ -124,10 +124,11 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   employee × permission location — from turning one sheet read into hundreds. **v211** is the floor for the bug reporter:
   that is where `gxIngestBug` began self-installing the `bug_reports.context` header, and `gxWrite_`
   maps records onto the sheet's REAL header row — so on an older pin the state snapshot is dropped
-  **silently** and the report still saves and still returns ok. **v220** is the current pin
-  (2026-08-25): v219 fixed `getPeriodGoals` (which Crew does not call), added the `blocked` status to
-  `brain_notes`, and made deploy-secret errors say *missing* vs *bad*; v220 fixed a regression in that
-  blocked-status write path. The engine's `health` route
+  **silently** and the report still saves and still returns ok. **v225** is the current pin
+  (2026-08-25) and the floor for the avatar write: `GXCore.setAvatar` does not exist below it, and
+  `roster_identity` calls it for an avatar-only save. (v219 fixed `getPeriodGoals`, which Crew does
+  not call, added the `blocked` status to `brain_notes` and made deploy-secret errors say *missing*
+  vs *bad*; v220 fixed a regression in that blocked-status write path.) The engine's `health` route
   reports the version the LIVE DEPLOYMENT runs (`lib`), which is the only pin that matters — a manifest
   bump that was never deployed still runs the old snapshot).
   Deploy the engine with clasp (`clasp create --type webapp --rootDir apps-script` on first setup, then
@@ -332,6 +333,28 @@ Deliberately NOT fixed by pinning `oauthScopes` in `appsscript.json`: an explici
 auto-detection and would have to enumerate everything **GXCore** needs as well as this script's.
 A scope missed there breaks the roster and the review queue, not just email.
 
+## Avatars are written by GX Core now (2026-08-25)
+`GXCore.setAvatar(ref, config, by)` — **v225** — is the single avatar write in the suite, and it is
+**Crew's own logic, promoted**: seed pinned to `employee_number`, lock contention retried, a clear
+NAMED in `clear=` and then verified to have landed. Leaderboard had a second implementation that did
+none of that, so which behaviour a staff member got depended on which app they stood in front of.
+
+Two consequences for this repo:
+
+- **`roster_identity` delegates when the avatar is the ONLY change** — which is every write the
+  picker makes, since the roster saves one field at a time. It sends a patch of
+  `{ employee_id, avatar_config }`, so there is no row for `gxWrite_` to blank; `dutchie_employee_id`
+  and `user_id` survive by construction rather than by remembering to carry them. An avatar arriving
+  **alongside** other identity fields stays one atomic row write and stamps the seed locally
+  (`avatarSeed_`) — splitting it in two just to route the avatar would let a half-applied identity
+  edit exist.
+- **The `avatars` and `avatar_save` routes are gone**, with `avatarSave_`, `avatarsForKiosk_` and
+  `resolveEmployee_`. They were Crew's half of a Leaderboard hand-off that was never wired — no
+  caller anywhere in the suite. `avatarSeedFrom_` **stays**, because `rosterJoin_` and
+  `migrateLeaderboard_` re-derive the seed at READ time; that is why a stored seed could drift for a
+  release without a single face rendering wrong. `tests/avatar_write_test.js` pins all of it,
+  including that the dead routes do not come back.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
@@ -343,7 +366,7 @@ Core. Coordination is the **central brain-notes inbox** in GX Core: `/gxbrain` r
 SessionStart hook surfaces the same inbox.
 
 App-specific facts for the sync check: app key **`crew`** in GX Core; `appsscript.json` pins `GXCore`
-**v220** (this line has said **v179**, **v194**, **v203**, **v204** and **v211** — check `health`, not prose);
+**v225** (this line has said **v179**, **v194**, **v203**, **v204**, **v211** and **v220** — check `health`, not prose);
 version recorded on deploy via the shared `deploy_version` endpoint (`deploy.sh`, reading `crew.js?v=N`)
 using the shared untracked `.gx_deploy_secret`.
 
