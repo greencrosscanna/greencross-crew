@@ -290,15 +290,15 @@
     .crew-phead-in { display: flex; align-items: flex-start; gap: 16px; max-width: 900px; }
     .crew-phead-txt { flex: 1 1 auto; min-width: 0; }
     .crew-pnamerow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    /* The name edits in place. Borderless until you reach for it — a 24px input with a box
-       around it reads as a form, and this is a heading that happens to be correctable. */
-    .crew-pname { background: transparent; border: 1px solid transparent;
-      border-radius: var(--gx-radius); color: var(--gx-text); font: inherit; font-size: 24px;
-      font-weight: 700; letter-spacing: -.4px; padding: 2px 6px; margin-left: -6px;
-      outline: none; min-width: 200px; }
-    .crew-pname:hover { border-color: var(--gx-border); }
-    .crew-pname:focus { border-color: var(--gx-green-dim); background: var(--gx-surface-3); }
+    /* A heading, not an input. It renders NICKNAME + SURNAME — two stored fields joined — so
+       there is nothing here that could be saved back; the legal name and the nickname are edited
+       as their own cards in the grid below. See displayName() in crew.js. */
+    .crew-pname { color: var(--gx-text); font-size: 24px; font-weight: 700; letter-spacing: -.4px; }
+    .crew-pname.is-blank { color: var(--gx-red); }
+    /* The legal first name, in green quotes beside it — the spelling METRC and payroll use, kept
+       visible so the roster can lead with the name people actually say without hiding the other. */
     .crew-pnick { color: var(--gx-green); font-size: 14px; }
+    .crew-pnick:empty { display: none; }
     .crew-pmeta { display: flex; align-items: center; gap: 9px; margin-top: 6px;
       flex-wrap: wrap; font-size: 12.5px; color: var(--gx-text-dim); }
     .crew-pmeta-sep { color: var(--gx-border-strong); }
@@ -496,6 +496,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.311"></script>
+  <script src="crew.js?v=1.312"></script>
 </body>
 </html>

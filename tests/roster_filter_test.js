@@ -28,6 +28,13 @@
  *                    retired staff as current employees; getting `retired` wrong shows nobody at
  *                    all on a scope whose whole job is to find somebody who left.
  *
+ *   displayName      the roster LEADS with the name people use -- nickname joined to the legal
+ *                    surname -- and it is a RENDERING, never a stored value. If this ever leaked
+ *                    into a write it would put "Mike" in the column METRC and payroll match on,
+ *                    which is the exact corruption employee #22 already arrived with once. The
+ *                    header that shows it is deliberately not an input; these tests pin the
+ *                    assembly so a future edit cannot quietly turn it back into one.
+ *
  *   searchRows       matches nickname, employee number and permit number as well as the obvious
  *                    three. "Who is #22" and "whose permit is OLCC-151903" are both questions the
  *                    roster gets asked, and a search that silently ignores them answers "nobody".
@@ -43,7 +50,8 @@ const TAIL = '})();';
 const cut = src.lastIndexOf(TAIL);
 if (cut < 0) throw new Error('crew.js: IIFE tail not found — has the file been restructured?');
 src = src.slice(0, cut) +
-      '\n; return { storesInRoster, filterByStore, storePills, scopedRows, searchRows, byName, state, storeName };\n' +
+      '\n; return { storesInRoster, filterByStore, storePills, scopedRows, searchRows, byName,\n' +
+      '           displayName, legalFirst, state, storeName };\n' +
       src.slice(cut);
 src = src.replace('(function () {', 'return (function () {');
 
@@ -160,8 +168,32 @@ eq('store LABEL, not the slug', found('century'), ['11', '25']);
 eq('role', found('store manager'), ['4']);
 eq('employee number', found('31'), ['31']);
 eq('permit number', found('OLCC-100004'), ['4']);
+/* The list prints "Mari Vega"; neither stored field contains that string, so typing what is on
+   the screen has to be a hit or the search is lying about the row it is printed on. */
+eq('the DISPLAYED name, which is in neither stored field', found('mari vega'), ['31']);
 eq('an empty search passes everything through', found(''), ['11', '25', '31', '4']);
 M.state.q = '';
+
+// ── how a person's name is written ──────────────────────────────────────────────────────────────
+const N = (name, nick) => ({ name, preferred_name: nick });
+eq('no nickname is just the legal name', M.displayName(N('Michael Kettler', '')), 'Michael Kettler');
+eq('a nickname replaces the FIRST name', M.displayName(N('Michael Kettler', 'Mike')), 'Mike Kettler');
+/* First TOKEN only. Replacing "everything before the last word" would eat a middle name, and
+   replacing the last word would rename the family. */
+eq('a middle name survives', M.displayName(N('Michael J. Kettler', 'Mike')), 'Mike J. Kettler');
+eq('a compound surname survives', M.displayName(N('Mary Van Der Berg', 'Molly')), 'Molly Van Der Berg');
+eq('a one-word legal name with a nickname is just the nickname', M.displayName(N('Cher', 'Cheryl')), 'Cheryl');
+eq('a blanked record renders empty, so callers can say so themselves', M.displayName(N('', 'Mike')), '');
+eq('surrounding whitespace does not become part of the surname',
+   M.displayName(N('  Michael   Kettler  ', 'Mike')), 'Mike   Kettler');
+
+eq('the green quote holds the LEGAL first name', M.legalFirst(N('Michael Kettler', 'Mike')), 'Michael');
+eq('no nickname, nothing to contrast', M.legalFirst(N('Michael Kettler', '')), '');
+/* A nickname identical to the first name would render as a green echo of the word beside it —
+   punctuation carrying no fact. */
+eq('a nickname that IS the first name is not worth printing',
+   M.legalFirst(N('Michael Kettler', 'Michael')), '');
+eq('and case alone is not a difference', M.legalFirst(N('Michael Kettler', 'michael')), '');
 
 // ── ordering inside a group ─────────────────────────────────────────────────────────────────────
 /* Blanks sink, in every comparison, always. A record with no name is the ABSENCE of a value, not
@@ -170,6 +202,13 @@ M.state.q = '';
 eq('alphabetical, blanks last',
    [{ name: 'Zoe' }, { name: '' }, { name: 'Ada' }].sort(M.byName).map(r => r.name),
    ['Ada', 'Zoe', '']);
+/* Sorted on what the row SHOWS. Rebeka "Bekah" Perez reads "Bekah Perez", so she files under B —
+   sorting on the legal name would put her under R, and an alphabetical list you cannot scan
+   alphabetically is worse than an unsorted one. */
+eq('sorted by the displayed name, not the stored one',
+   [N('Rebeka Perez', 'Bekah'), N('Ada Fennimore', ''), N('Michael Kettler', 'Mike')]
+     .sort(M.byName).map(M.displayName),
+   ['Ada Fennimore', 'Bekah Perez', 'Mike Kettler']);
 
 /* storePills takes the pill SET from state.rows and the COUNTS from its argument — that asymmetry
    is the whole design, so set both. Passing only the argument here would test nothing. */

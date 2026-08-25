@@ -322,6 +322,39 @@
     return String(name || '').trim().split(/\s+/).slice(0, 2)
       .map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?';
   }
+  /* ── How Crew writes a person's name, everywhere it writes one ──────────────────
+   * The board, the roster and the till receipt all call employee #22 "Mike". METRC calls him
+   * Michael, and METRC is right — it is the legal spelling payroll and the OLCC permit are
+   * matched against. Both facts are true at once, so the roster leads with the name people use
+   * and keeps the legal one visible beside it rather than choosing.
+   *
+   * The nickname replaces the FIRST TOKEN only, so middle names and compound surnames survive:
+   * "Michael J. Kettler" + Mike -> "Mike J. Kettler", "Mary Van Der Berg" + Molly ->
+   * "Molly Van Der Berg". Slicing from the first space keeps the original spacing too.
+   *
+   * NOTHING HERE IS EVER WRITTEN BACK. displayName is a rendering, assembled from two stored
+   * fields; `full_name` and `preferred_name` are edited separately in the field grid, and the
+   * header that shows this is deliberately not an input. Saving a display name would put "Mike"
+   * into the legal-name column, which is the precise mistake the Dutchie->identity seed already
+   * made once. */
+  function displayName(row) {
+    var full = String(row.name || '').trim();
+    if (!full) return '';
+    var nick = String(row.preferred_name || '').trim();
+    if (!nick) return full;
+    var sp = full.indexOf(' ');
+    return sp < 0 ? nick : nick + full.slice(sp);
+  }
+  /* The legal first name, and only when it is telling you something. A nickname that IS the
+     first name ("Michael" preferring "Michael") would render as a green echo of the word beside
+     it — visible punctuation carrying no fact. */
+  function legalFirst(row) {
+    var full = String(row.name || '').trim(), nick = String(row.preferred_name || '').trim();
+    if (!full || !nick) return '';
+    var first = full.split(/\s+/)[0];
+    return first.toLowerCase() === nick.toLowerCase() ? '' : first;
+  }
+
   /* Puck: the rendered avatar, or initials when nobody has picked one. Faces come from an
      external service, so a failed load falls back to initials rather than a broken image. */
   function avatarPuck(row, size) {
@@ -427,11 +460,14 @@
     return 'Missing: ' + (row.flags || []).map(function (f) { return FLAG_LABEL[f] || f; }).join(', ');
   }
 
-  /* Alphabetical within a store group, with the blanks-always-sink rule the old sortRows applied
-     to every column: a record with no name is the absence of a value, not the smallest one, and
-     letting it ride the top buries the rows you actually came to compare. */
+  /* Alphabetical within a store group, on the name the list actually SHOWS. Sorting on the legal
+     name instead would file Rebeka Perez under R while the row in front of you reads "Bekah
+     Perez" — an alphabetical list you cannot scan alphabetically is worse than an unsorted one.
+     Blanks always sink, the rule the old sortRows applied to every column: a record with no name
+     is the absence of a value, not the smallest one, and letting it ride the top buries the rows
+     you actually came to compare. */
   function byName(a, b) {
-    var as = String(a.name || '').trim(), bs = String(b.name || '').trim();
+    var as = displayName(a), bs = displayName(b);
     if (!as && bs) return 1;
     if (as && !bs) return -1;
     return as.localeCompare(bs);
@@ -776,8 +812,12 @@
     var q = state.q.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter(function (r) {
-      return (r.name + ' ' + (r.preferred_name || '') + ' ' + storeName(r.store) + ' ' +
-              r.role + ' ' + r.employee_number + ' ' + (r.permit_number || ''))
+      /* displayName is in here as well as its two ingredients, because the list shows "Bekah
+         Perez" and neither stored field contains that string — typing what is on the screen has
+         to find the row it is printed on. */
+      return (r.name + ' ' + (r.preferred_name || '') + ' ' + displayName(r) + ' ' +
+              storeName(r.store) + ' ' + r.role + ' ' + r.employee_number + ' ' +
+              (r.permit_number || ''))
              .toLowerCase().indexOf(q) >= 0;
     });
   }
@@ -961,9 +1001,13 @@
     var txt = el('span', 'crew-person-txt');
     var named = !!String(r.name || '').trim();
     txt.appendChild(el('span', 'crew-person-name' + (named ? '' : ' is-blank'),
-      named ? esc(r.name) : '⚠ Record blanked'));
+      named ? esc(displayName(r)) : '⚠ Record blanked'));
+    /* The legal first name rides the sub-line, not the nickname: the nickname is now the name on
+       the line above, and repeating it there would spend the only other line on this row saying
+       nothing. This way both spellings are visible without opening anybody. */
+    var lf = legalFirst(r);
     txt.appendChild(el('span', 'crew-person-meta',
-      esc(r.role) + (r.preferred_name ? ' · “' + esc(r.preferred_name) + '”' : '')));
+      esc(r.role) + (lf ? ' · “' + esc(lf) + '”' : '')));
     b.appendChild(txt);
 
     if (state.eom && String(state.eom) === String(r.employee_id)) {
@@ -989,8 +1033,13 @@
 
   /* ── Right pane ───────────────────────────────────────────────────────────── */
   var lastPainted = null;
+  /* Set by personHeader while a record is on screen, so a nickname or legal-name save can redraw
+     that one heading. Cleared on every repaint: a stale closure would write the previous person's
+     name into the pane. */
+  var repaintName = null;
   function paintPane() {
     if (!ui) return;
+    repaintName = null;
     /* Panels belong to the person you opened them on. Carrying an open avatar picker or a
        half-typed merge search across a selection change would show one person's editor over
        another person's record. */
@@ -1072,7 +1121,7 @@
     card.appendChild(avatarPuck(holder || { name: '—' }, 'md'));
     var txt = el('div', 'crew-eomcard-txt');
     txt.appendChild(el('div', 'crew-eomcard-name',
-      state.eom === undefined ? 'Loading…' : holder ? esc(holder.name) : 'Nobody'));
+      state.eom === undefined ? 'Loading…' : holder ? esc(displayName(holder)) : 'Nobody'));
     var since = (state.eomHistory || []).filter(function (h) { return h.current && !h.nobody; })[0];
     txt.appendChild(el('div', 'crew-eomcard-sub', holder
       ? esc(holder.role) + ' · ' + esc(storeName(holder.store)) +
@@ -1100,7 +1149,11 @@
     var row = rowById(it.employee_id);
     who.appendChild(avatarPuck(row || { name: it.name, employee_id: it.employee_id }));
     var txt = el('span', 'crew-q-txt');
-    txt.appendChild(el('span', 'crew-q-name', esc(it.name || it.employee_id)));
+    /* The person label follows the roster's spelling like everywhere else. Where the LEGAL name
+       is the subject — a name_spelling item — the now/proposed chips on the record carry it
+       verbatim, so nothing is lost by labelling the card with the name people use. */
+    txt.appendChild(el('span', 'crew-q-name',
+      esc(row ? displayName(row) : (it.name || it.employee_id))));
     txt.appendChild(el('span', 'crew-q-kind', esc(KIND_LABEL[it.kind] || it.kind)));
     who.appendChild(txt);
     who.addEventListener('click', function () {
@@ -1271,7 +1324,7 @@
       var prev = last;
       if (o.confirm && String(prev).trim() &&
           !confirm('Change ' + o.label.toLowerCase() + ' from “' + prev + '” to “' +
-                   (v || '— nothing —') + '”?')) {
+                   (v || '— nothing —') + '”?' + (o.confirmNote ? '\n\n' + o.confirmNote : ''))) {
         input.value = prev;
         return;
       }
@@ -1282,6 +1335,9 @@
         if (err) { last = prev; input.value = prev; }
         else if (!o.options) input.value = (o.read ? o.read(row) : v);
         paintNote();
+        /* Redraw the heading, never the pane: a text field commits 600ms after you stop typing,
+           and repainting the pane there would take the input you are still in with it. */
+        if (o.renames && repaintName) repaintName();
       }).catch(function () {});
     }
 
@@ -1340,44 +1396,27 @@
     var txt = el('div', 'crew-phead-txt');
     var nameRow = el('div', 'crew-pnamerow');
 
-    /* The legal name edits in place. It is a heading that happens to be correctable, not a form
-       field — but it is also the single most damaging thing on this pane to change by accident,
-       so it is the one text input that confirms before overwriting. */
-    var nameIn = el('input', 'crew-pname');
-    nameIn.value = row.name || '';
-    nameIn.placeholder = 'Record blanked — put the name back';
-    nameIn.setAttribute('aria-label', 'Full name');
-    nameIn.disabled = !state.canEdit;
-    nameIn.style.width = Math.max(200, String(row.name || '').length * 14) + 'px';
-    if (!String(row.name || '').trim()) nameIn.classList.add('crew-noname');
-    var lastName = row.name || '', nameTimer = null;
-    function commitName() {
-      clearTimeout(nameTimer);
-      var v = nameIn.value.replace(/\s+/g, ' ').trim();
-      if (v === lastName) return;
-      var prev = lastName;
-      if (String(prev).trim() &&
-          !confirm('Change the legal name from “' + prev + '” to “' + v + '”?\n\n' +
-                   'GX Core records a rename alias, so Leaderboard and SPIFF keep resolving the ' +
-                   'old key — but this is the name payroll and METRC are matched against.')) {
-        nameIn.value = prev; return;
-      }
-      lastName = v;
-      nameIn.disabled = true;
-      saveField(row, 'identity', 'full_name', v, 'full name', prev, function (r, err) {
-        nameIn.disabled = false;
-        if (err) { lastName = prev; nameIn.value = prev; }
-        else { nameIn.classList.remove('crew-noname'); paintPane(); }
-      }).catch(function () {});
+    /* READ-ONLY, and that is the point. This line reads "Mike Kettler" — a nickname joined to a
+       legal surname — so it is a rendering of two fields, not either one of them. It used to be
+       an input bound to full_name; leaving it that way now would write "Mike" into the column
+       METRC and payroll match on, which is exactly how #22 reached the roster misspelled in the
+       first place. Legal name and nickname are edited as their own cards in the grid below. */
+    var nameEl = el('span', 'crew-pname');
+    var legal = el('span', 'crew-pnick');
+    function paintName() {
+      var named = !!String(row.name || '').trim();
+      nameEl.className = 'crew-pname' + (named ? '' : ' is-blank');
+      nameEl.textContent = named ? displayName(row) : '⚠ Record blanked';
+      var lf = legalFirst(row);
+      legal.textContent = lf ? '“' + lf + '”' : '';
+      legal.title = lf ? 'Legal first name — METRC and payroll match on this spelling' : '';
     }
-    if (state.canEdit) {
-      nameIn.addEventListener('input', function () {
-        clearTimeout(nameTimer); nameTimer = setTimeout(commitName, 600);
-      });
-      nameIn.addEventListener('change', commitName);
-    }
-    nameRow.appendChild(nameIn);
-    if (row.preferred_name) nameRow.appendChild(el('span', 'crew-pnick', '“' + esc(row.preferred_name) + '”'));
+    paintName();
+    /* Held for the two fields that change what this line says, so saving a nickname repaints the
+       heading without repainting the pane out from under the cursor that is still typing in it. */
+    repaintName = paintName;
+    nameRow.appendChild(nameEl);
+    nameRow.appendChild(legal);
     if (row.retired) nameRow.appendChild(el('span', 'crew-tag', 'retired'));
     txt.appendChild(nameRow);
 
@@ -1496,9 +1535,24 @@
       .concat(offList ? [[held, held + ' — not a standard role']] : []);
 
     [
+      /* Legal name lives HERE rather than in the header, because the header now shows a nickname
+         joined to a surname and an input over that would save the wrong string into the column
+         payroll and METRC match on. Its own card, next to the nickname, is also where you would
+         look to see the two together. */
+      { label: 'Legal name', route: 'identity', field: 'full_name', value: row.name,
+        placeholder: 'first and last', confirm: true, renames: true,
+        confirmNote: 'GX Core records a rename alias, so Leaderboard and SPIFF keep resolving ' +
+          'the old key — but this is the spelling payroll and the OLCC permit are matched against.',
+        note: function (r) {
+          return String(r.name || '').trim()
+            ? { text: 'METRC owns this spelling', kind: '' }
+            : { text: 'Blanked by a partial write — put it back', kind: 'bad' };
+        },
+        read: function (r) { return r.name || ''; } },
+
       { label: 'Nickname', route: 'identity', field: 'preferred_name', value: row.preferred_name,
-        placeholder: 'shown on the board',
-        note: function () { return { text: 'What the kiosk calls them', kind: '' }; },
+        placeholder: 'shown on the board', renames: true,
+        note: function () { return { text: 'What the kiosk and this roster call them', kind: '' }; },
         read: function (r) { return r.preferred_name || ''; } },
 
       { label: 'Store', route: 'identity', field: 'home_store', value: row.store,
@@ -1739,7 +1793,7 @@
         var b = el('button', 'crew-mergerow');
         b.type = 'button';
         b.appendChild(avatarPuck(c));
-        b.appendChild(el('span', null, esc(c.name || c.employee_id) +
+        b.appendChild(el('span', null, esc(displayName(c) || c.employee_id) +
           (c.retired ? ' <span class="crew-tag">retired</span>' : '')));
         b.appendChild(el('em', null, esc(storeName(c.store)) + ' · #' + esc(c.employee_number || '—')));
         b.addEventListener('click', async function () {
