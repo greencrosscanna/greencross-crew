@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, digestHtml_, displayNameOf_, digestRecipients_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, digestHtml_, displayNameOf_, digestRecipients_, accountEmail_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -194,14 +194,23 @@ console.log('\n2e. digestRecipients_ — a setting, not a list');
 {
   const R = (o) => Object.assign({ retired: false, digest_opt_in: false, user_id: '' }, o);
   const rows = [
-    R({ digest_opt_in: true,  user_id: 'sky@greencrosscanna.com' }),
-    R({ digest_opt_in: false, user_id: 'mike@greencrosscanna.com' }),
+    R({ digest_opt_in: true,  user_id: 'sky' }),
+    R({ digest_opt_in: false, user_id: 'mike' }),
     R({ digest_opt_in: true,  user_id: '' }),
-    R({ digest_opt_in: true,  user_id: 'gone@greencrosscanna.com', retired: true }),
-    R({ digest_opt_in: true,  user_id: 'not-an-email' })
+    R({ digest_opt_in: true,  user_id: 'gone', retired: true })
   ];
   eq(JSON.stringify(C.digestRecipients_(rows)), '["sky@greencrosscanna.com"]',
      'only the opted-in, contactable, still-employed person');
+  /* THE BUG THIS SHIPPED WITH. user_id is the MAILBOX NAME, not an address — createAccounts_
+     derives it as email.split('@')[0]. Filtering for an '@' matched nobody, so the first live run
+     silently unsubscribed everyone: the setting saved, read back true, and the list came out
+     empty. An address has to be REASSEMBLED from the id, not read out of it. */
+  eq(C.accountEmail_({ user_id: 'sky' }), 'sky@greencrosscanna.com',
+     'a mailbox name becomes an address — this is what came out empty');
+  eq(C.accountEmail_({ user_id: 'sky@greencrosscanna.com' }), 'sky@greencrosscanna.com',
+     'and one that is already an address is left alone');
+  eq(C.accountEmail_({ user_id: '' }), '', 'no account, no address');
+  eq(C.accountEmail_({}), '', 'a row without the field does not throw');
   eq(C.digestRecipients_(rows.filter((r) => !r.digest_opt_in)).length, 0,
      'nobody opted in means nobody gets it — no fallback list');
   eq(C.digestRecipients_([]).length, 0, 'an empty roster does not throw');

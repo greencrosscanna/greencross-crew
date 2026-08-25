@@ -1884,7 +1884,8 @@
     /* The Monday recap, as this person's own preference rather than a list in the engine.
        Needs a GX account, because that is where the address comes from — so when there is no
        account the control says why instead of storing a wish that can never be honoured. */
-    var hasAccount = String(row.user_id || '').indexOf('@') > 0;
+    /* user_id is the MAILBOX NAME (`sky`), not an address — the engine reassembles the rest. */
+    var hasAccount = !!String(row.user_id || '').trim();
     var dl = el('label', 'crew-celeb');
     var dcb = el('input');
     dcb.type = 'checkbox';

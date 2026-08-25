@@ -2527,10 +2527,22 @@ function saveRosterAttrs_(p) {
  * NO FALLBACK LIST. An "if nobody opted in, send to these people" default would mail somebody who
  * had just turned it off, which is the one thing a preference must never do. Nobody opted in means
  * nobody gets it, and the send records that it sent to nobody. */
+/* `user_id` is the MAILBOX NAME, not an address — createAccounts_ derives it as
+   email.split('@')[0], so Sky's account is `sky`, not `sky@greencrosscanna.com`. The first cut of
+   this filtered on user_id containing an '@', so it matched nobody and silently unsubscribed
+   everyone: the write succeeded, the setting read back true, and the recipient list came out
+   empty. GX Core holds the real address in its `users` tab, but the library exposes no reader for
+   it, so the address is reassembled from the convention that produced the id. */
+var ACCOUNT_DOMAIN = 'greencrosscanna.com';
+function accountEmail_(r) {
+  var uid = String((r && r.user_id) || '').trim().toLowerCase();
+  if (!uid) return '';
+  return uid.indexOf('@') > 0 ? uid : uid + '@' + ACCOUNT_DOMAIN;
+}
 function digestRecipients_(rows) {
-  return (rows || []).filter(function (r) {
-    return !r.retired && r.digest_opt_in && String(r.user_id || '').indexOf('@') > 0;
-  }).map(function (r) { return String(r.user_id).trim(); });
+  return (rows || []).filter(function (r) { return !r.retired && r.digest_opt_in && r.user_id; })
+                     .map(accountEmail_)
+                     .filter(function (e) { return /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(e); });
 }
 var LAST_DIGEST_PROP = 'CREW_LAST_DIGEST';
 var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';

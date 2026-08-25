@@ -296,7 +296,10 @@ Same content as the roster's overview minus Employee of the Month.
 **Who receives it is a per-person setting, not a list in the source** — `digest_opt_in`, ticked on
 their own record under *Links & visibility*. It needs a **GX account** too, because `user_id` is
 where the address comes from; with no account the control says so rather than storing a preference
-that could never be honoured. There is deliberately **no fallback list**: "if nobody opted in, send
+that could never be honoured. **`user_id` is the MAILBOX NAME, not an address** — `createAccounts_`
+derives it as `email.split('@')[0]`, so Sky's account is `sky`. The address is reassembled as
+`user_id@greencrosscanna.com` (`ACCOUNT_DOMAIN`); GX Core holds the real one in its `users` tab but
+the library exposes no reader for it. There is deliberately **no fallback list**: "if nobody opted in, send
 to these people" would mail somebody who had just switched it off, which is the one thing a
 preference must never do. Nobody opted in means the send reports that it went to nobody. `?action=digest` previews, `&send=yes` sends, `&to=` overrides. Every
 attempt records its outcome and its **source** (`editor` / `webapp` / `trigger`) to a script
