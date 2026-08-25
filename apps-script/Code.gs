@@ -2680,7 +2680,7 @@ function sendDigest_(p) {
                 (d.expiring.length ? ', ' + d.expiring.length + ' permit' +
                  (d.expiring.length === 1 ? '' : 's') + ' inside 90 days' : '');
   if (String(p.send || '') !== 'yes') {
-    return { ok: true, mode: 'preview', would_send_to: recipients, subject: subject,
+    return { ok: true, mode: 'preview', source: source, would_send_to: recipients, subject: subject,
              active: d.active, open_questions: open, expiring: d.expiring.length,
              gaps: d.gaps, new_here: d.fresh.length,
              note: 'Nothing sent. Repeat with send=yes.' };
@@ -2695,26 +2695,35 @@ function sendDigest_(p) {
     } catch (e) { /* the record is a nicety; never fail the send over it */ }
     return res;
   }
+  /* WHERE it ran, recorded because the two contexts fail identically and are fixed differently:
+     an editor run is authorised by the signed-in owner, a web-app run by the deployment. Passed
+     in rather than sniffed — there is no scope-free way to ask, and the caller always knows. */
   var at = new Date().toISOString();
+  var source = String(p.source || 'webapp');
   try {
     MailApp.sendEmail({ to: recipients.join(','), subject: subject, htmlBody: html,
                         name: 'GX Crew' });
   } catch (e) {
-    return note({ ok: false, at: at, to: recipients, needs_authorization: true,
+    return note({ ok: false, at: at, source: source, to: recipients, needs_authorization: true,
                   error: String((e && e.message) || e),
                   fix: 'MailApp needs the script.send_mail scope, granted by whoever this context ' +
                        'runs as. From the editor that is you; from the web app it is the deployment.' });
   }
   var quota = null;
   try { quota = MailApp.getRemainingDailyQuota(); } catch (e) {}
-  return note({ ok: true, at: at, mode: 'sent', to: recipients, subject: subject,
+  return note({ ok: true, at: at, source: source, mode: 'sent', to: recipients, subject: subject,
                 remaining_daily_quota: quota,
                 open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length });
 }
 
 /* Trigger entry point, and the editor-runnable twin for the one-time mail authorisation. */
-function weeklyDigest() { return sendDigest_({ send: 'yes' }); }
-function sendDigestNow() { return sendDigest_({ send: 'yes' }); }
+function weeklyDigest() { return sendDigest_({ send: 'yes', source: 'trigger' }); }
+
+/* RUN THIS ONE FROM THE EDITOR to authorise mail. The first run shows "Authorization required" ->
+   Review permissions -> choose your account -> "Google hasn't verified this app" -> **Advanced**
+   -> "Go to GX Crew (unsafe)" -> Allow. That last screen is where people stop, and closing it
+   fails the run in a way indistinguishable from never having tried. */
+function sendDigestNow() { return sendDigest_({ send: 'yes', source: 'editor' }); }
 
 // ─── Nightly: who does Dutchie say works here that Crew has never heard of? ─────
 /*
