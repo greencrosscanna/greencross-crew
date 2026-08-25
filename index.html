@@ -58,97 +58,62 @@
 </script>
   <style>
     /* Shell layout only. Every colour comes from gx-theme.css tokens — never hardcode one here,
-       or the app drifts out of the suite's look the next time the theme moves. */
+       or the app drifts out of the suite's look the next time the theme moves.
+
+       The three shades below are the ONLY exception, and each is a half-step the shared palette
+       does not carry: the people rail sits between --gx-bg and --gx-surface, the group count sits
+       between --gx-text-mute and --gx-border-strong, and the section rule is a quieter
+       --gx-border. They are declared ONCE here rather than inlined at every use, and they stay
+       app-local on purpose — a rail shade is Crew's own character, not something all six apps
+       should inherit. Everything else below resolves to a --gx-* token. */
+    .gx-app { --crew-rail: #0d1211; --crew-count: #3d4744; --crew-rule: #1c2320; }
+
     body { margin: 0; min-height: 100vh; font-size: 15px; }
     .gx-wordmark b { color: var(--gx-green); }
-    .gx-main { padding: 28px 20px; max-width: 980px; margin: 0 auto; }
+    .gx-main { padding: 28px 20px; max-width: 1240px; margin: 0 auto; }
     .gx-card { padding: 22px; }
     .gx-card h1 { margin: 0 0 6px; font-size: 20px; color: var(--gx-text); }
     .gx-muted { color: var(--gx-text-dim); }
     code { background: var(--gx-surface-3); border: 1px solid var(--gx-border);
       border-radius: var(--gx-radius-sm); padding: 1px 5px; font-size: .9em; }
 
-    /* ── Roster view ─────────────────────────────────────────────────────── */
-    .crew-bar { display: flex; align-items: center; justify-content: space-between;
-      gap: 12px; margin: 4px 0 16px; font-size: 13px; color: var(--gx-text-dim); }
-    .crew-bar b { color: var(--gx-text); }
-    .crew-link { background: none; border: 0; color: var(--gx-green); cursor: pointer;
-      font: inherit; padding: 0; }
-    .crew-link:hover { text-decoration: underline; }
-    .crew-count { font-weight: 400; font-size: 14px; }
+    /* ── Workspace shell ──────────────────────────────────────────────────────
+       The roster is the one view that owns the whole viewport: two panes that scroll
+       independently, and a page that never scrolls at all. Login and the status card still
+       render into the same #app, so the full-height rules are gated behind a class the roster
+       adds and every other view removes — otherwise the login card would be pinned inside a
+       flex column it was never designed for. */
+    body.crew-ws { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+    body.crew-ws .gx-topnav { flex: none; }
+    #app.is-ws { flex: 1 1 auto; min-height: 0; max-width: none; margin: 0; padding: 0;
+      display: flex; flex-direction: column; }
 
-    .crew-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .crew-table th, .crew-table td { text-align: left; padding: 9px 10px;
-      border-bottom: 1px solid var(--gx-border); vertical-align: middle; }
-    .crew-table th { font-size: 10px; text-transform: uppercase; letter-spacing: 1.1px;
-      color: var(--gx-text-mute); font-weight: 600; }
-    .crew-table th .gx-muted { text-transform: none; letter-spacing: 0; }
-    .crew-table tr:last-child td { border-bottom: 0; }
-    .crew-table td b { color: var(--gx-text); }
-    .crew-table input, .crew-table select {
-      background: var(--gx-surface-3); border: 1px solid var(--gx-border);
-      border-radius: var(--gx-radius); color: var(--gx-text);
-      padding: 5px 8px; font-size: 13px; font-family: inherit; outline: none;
-      transition: border-color .15s, box-shadow .15s;
-    }
-    .crew-table input:focus, .crew-table select:focus {
-      border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
-    .crew-table input:disabled, .crew-table select:disabled { opacity: .5; cursor: default; }
-    /* Dark-scheme form controls: without this the native date picker renders black-on-black. */
-    .crew-table input, .crew-table select, .crew-login input { color-scheme: dark; }
+    /* ── Sub nav: the roster's own controls ─────────────────────────────────── */
+    .crew-subnav { display: flex; flex-wrap: wrap; align-items: center; gap: 9px;
+      padding: 9px 18px; background: var(--gx-surface);
+      border-bottom: 1px solid var(--gx-border); flex: none; }
 
-    .crew-save {
-      background: transparent; color: var(--gx-text-dim);
-      border: 1px solid var(--gx-border-strong); border-radius: var(--gx-radius);
-      padding: 5px 12px; font-size: 12px; font-family: inherit; cursor: pointer;
-      transition: color .15s, border-color .15s;
-    }
-    .crew-save:hover:not(:disabled) { color: var(--gx-text); border-color: var(--gx-green); }
-    .crew-save:disabled { opacity: .45; cursor: default; }
-    .crew-save-status { margin-left: 8px; font-size: 11px; color: var(--gx-text-mute); }
-    .crew-save-status.ok  { color: var(--gx-green); }
-    .crew-save-status.err { color: var(--gx-red); }
-    .crew-hint { font-size: 11px; color: var(--gx-text-mute); }
-
-    .crew-banner { padding: 10px 12px; border-radius: var(--gx-radius-md);
-      font-size: 12px; margin: 0 0 14px; line-height: 1.5; }
-    .crew-banner-warn  { background: var(--gx-gold-soft); border: 1px solid var(--gx-gold-line);
-      color: var(--gx-gold); }
-    .crew-banner-error { background: var(--gx-red-soft); border: 1px solid var(--gx-red);
-      color: var(--gx-red); }
-
-    .crew-login { display: flex; flex-direction: column; gap: 12px; max-width: 320px; margin-top: 14px; }
-    .crew-login label { display: flex; flex-direction: column; gap: 5px;
-      font-size: 10px; letter-spacing: 1.1px; text-transform: uppercase;
-      color: var(--gx-text-mute); font-weight: 600; }
-    .crew-login input {
-      width: 100%; background: var(--gx-surface-3); border: 1px solid var(--gx-border);
-      border-radius: var(--gx-radius); color: var(--gx-text); padding: 9px 12px;
-      font-size: 14px; font-family: inherit; letter-spacing: normal; text-transform: none;
-      outline: none; transition: border-color .15s, box-shadow .15s;
-    }
-    .crew-login input:focus { border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
-    .crew-login button {
-      background: var(--gx-green); border: 1px solid var(--gx-green); color: var(--gx-green-ink);
-      font-weight: 700; font-family: inherit; font-size: 13px;
-      padding: 9px 14px; border-radius: var(--gx-radius); cursor: pointer; margin-top: 2px;
-    }
-    .crew-login button:hover:not(:disabled) { background: var(--gx-green-bright); border-color: var(--gx-green-bright); }
-    .crew-login button:disabled { opacity: .55; cursor: default; }
-    .crew-error { color: var(--gx-red); font-size: 12px; min-height: 1em; margin: 10px 0 0; }
-
-    /* ── Roster v3: tools, permits, retire ───────────────────────────────── */
-    .gx-main { max-width: 1240px; }
-    .crew-tools { display: flex; align-items: center; gap: 16px; margin: 0 0 14px; flex-wrap: wrap; }
-    .crew-search {
-      flex: 1 1 260px; min-width: 200px; background: var(--gx-surface-3);
-      border: 1px solid var(--gx-border); border-radius: var(--gx-radius);
-      color: var(--gx-text); padding: 7px 11px; font: inherit; font-size: 13px; outline: none;
-    }
+    .crew-searchwrap { position: relative; flex: 1 1 320px; max-width: 460px; }
+    .crew-search { width: 100%; box-sizing: border-box; background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius-md);
+      color: var(--gx-text); padding: 7px 12px 7px 32px; font: inherit; font-size: 13px;
+      outline: none; }
     .crew-search:focus { border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
-    .crew-toggle { display: inline-flex; align-items: center; gap: 7px;
-      font-size: 12px; color: var(--gx-text-dim); cursor: pointer; white-space: nowrap; }
-    .crew-toggle input { accent-color: var(--gx-green); }
+    .crew-searchico { position: absolute; left: 11px; top: 7px; color: var(--gx-text-mute);
+      font-size: 13px; pointer-events: none; }
+
+    /* Segmented scope. One control with three exclusive states, replacing three loose
+       checkboxes that could be combined into readings nobody meant (retired AND flagged). */
+    .crew-seg { display: flex; background: var(--gx-surface-2); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-md); padding: 2px; }
+    .crew-seg-btn { border: 0; border-radius: var(--gx-radius); padding: 6px 12px;
+      font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+      background: transparent; color: var(--gx-text-dim); }
+    .crew-seg-btn:hover:not(.is-on) { color: var(--gx-text); }
+    .crew-seg-btn.is-on { background: var(--gx-border); color: var(--gx-text); }
+    .crew-seg-btn:focus-visible { outline: 2px solid var(--gx-green); outline-offset: 1px; }
+
+    .crew-div { width: 1px; height: 22px; background: var(--gx-border); flex: none; }
 
     /* Store filter pills. App-local on purpose: gx-theme's .gx-pill is a static status badge
        (uppercase, letterspaced, not clickable) and this is an interactive filter control, so this
@@ -156,142 +121,341 @@
        ends up with six different versions of the same component. --crew-pill-color is set inline
        per pill from the GX Core store registry via GXStores, with a neutral fallback for stores
        that carry no colour (corporate). */
-    .crew-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 14px; }
-    .crew-pill {
-      display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px;
-      border: 1px solid var(--gx-border-strong); border-radius: var(--gx-radius-pill);
+    .crew-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .crew-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius-pill);
       background: var(--gx-surface-2); color: var(--gx-text-dim);
-      font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4;
-      cursor: pointer; white-space: nowrap;
-    }
+      font: inherit; font-size: 11.5px; font-weight: 600; line-height: 1.4;
+      cursor: pointer; white-space: nowrap; }
     .crew-pill:hover { color: var(--gx-text); }
     .crew-pill:focus-visible { outline: 2px solid var(--gx-green); outline-offset: 2px; }
-    .crew-pill-dot { width: 8px; height: 8px; border-radius: 50%; flex: none;
+    .crew-pill-dot { width: 6px; height: 6px; border-radius: 50%; flex: none;
       background: var(--crew-pill-color, var(--gx-text-mute)); }
-    .crew-pill.is-on { color: var(--gx-text); border-color: var(--crew-pill-color, var(--gx-green));
-      box-shadow: inset 0 0 0 1px var(--crew-pill-color, var(--gx-green)); }
+    .crew-pill.is-on { color: var(--gx-text); border-color: var(--crew-pill-color, var(--gx-green)); }
+    /* Dim, never disappear: a pill row that reflows under the cursor is how you click the
+       wrong store. */
     .crew-pill.is-empty { opacity: .45; }
-    .crew-pill-n { font-size: 11px; color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
-    .crew-pill.is-on .crew-pill-n { color: var(--gx-text-dim); }
+    .crew-pill-n { color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
 
-    /* Wide table scrolls inside its own box — the page itself must never scroll sideways. */
-    .crew-table-wrap { overflow-x: auto; margin: 0 -4px; padding: 0 4px; }
-    .crew-table { min-width: 1080px; }
-    .crew-num { width: 3.2em; text-align: center; }
-    .crew-actions { white-space: nowrap; }
-    .crew-retire { margin-left: 10px; font-size: 11px; }
-    .crew-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase;
-      color: var(--gx-text-mute); border: 1px solid var(--gx-border-strong);
-      border-radius: var(--gx-radius-sm); padding: 1px 5px; margin-left: 6px; }
-    /* The warn variant of a tag. Same shape as the neutral one so the row does not jump; only
-       the colour carries the difference, and it borrows --gx-red rather than defining a red. */
-    .crew-tag-warn { color: var(--gx-red); border-color: var(--gx-red); }
-    tr.is-retired td { opacity: .55; }
-    tr.is-retired td b { font-weight: 400; }
+    .crew-attn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px;
+      background: transparent; border: 1px solid var(--gx-border); color: var(--gx-text-dim);
+      border-radius: var(--gx-radius-pill); padding: 6px 13px;
+      font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .crew-attn:hover { color: var(--gx-text); }
+    .crew-attn.is-on { background: var(--gx-gold-soft); border-color: var(--gx-gold-line);
+      color: var(--gx-gold); }
+    .crew-attn-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 
-    .permit-ok   { color: var(--gx-text-dim); }
-    .permit-warn { color: var(--gx-gold); font-weight: 600; }
-    .permit-bad  { color: var(--gx-red); font-weight: 700; }
+    /* ── Two panes ────────────────────────────────────────────────────────────
+       Each scrolls on its own; the page never does, and nothing scrolls sideways. */
+    .crew-body { flex: 1 1 auto; display: flex; min-height: 0; }
+
+    .crew-rail { width: 340px; flex: none; border-right: 1px solid var(--gx-border);
+      background: var(--crew-rail); overflow-y: auto; min-height: 0; padding: 6px 0 40px; }
+    .crew-group-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px;
+      position: sticky; top: 0; background: var(--crew-rail); z-index: 1; }
+    .crew-group-dot { width: 6px; height: 6px; border-radius: 50%; flex: none;
+      background: var(--crew-group-color, var(--gx-text-mute)); }
+    .crew-group-label { font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
+      text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-group-n { margin-left: auto; font-size: 10.5px; color: var(--crew-count);
+      font-variant-numeric: tabular-nums; }
+
+    .crew-person { display: flex; align-items: center; gap: 10px; width: 100%;
+      box-sizing: border-box; text-align: left; border: 0; border-left: 2px solid transparent;
+      background: transparent; cursor: pointer; padding: 7px 14px 7px 12px; font: inherit; }
+    .crew-person:hover { background: var(--gx-surface-2); }
+    .crew-person.is-sel { border-left-color: var(--gx-green); background: var(--gx-surface-2); }
+    .crew-person.is-retired { opacity: .6; }
+    .crew-person:focus-visible { outline: 2px solid var(--gx-green); outline-offset: -2px; }
+    .crew-person-txt { min-width: 0; flex: 1 1 auto; }
+    .crew-person-name { display: block; font-size: 13px; font-weight: 600; color: var(--gx-text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .crew-person-name.is-blank { color: var(--gx-red); }
+    .crew-person-meta { display: block; font-size: 11px; color: var(--gx-text-mute);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .crew-person-star { flex: none; color: var(--gx-gold); font-size: 12px; }
+    .crew-person-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+    .crew-rail-empty { padding: 20px 14px; margin: 0; font-size: 12.5px; color: var(--gx-text-mute); }
+    /* A skeleton, not an empty pane: an empty roster reads as "nobody works here". */
+    .crew-skel { height: 42px; margin: 2px 12px; border-radius: var(--gx-radius-md);
+      background: var(--gx-surface-2); opacity: .5; animation: crew-pulse 1.4s ease-in-out infinite; }
+    @keyframes crew-pulse { 0%, 100% { opacity: .25; } 50% { opacity: .6; } }
+
+    .crew-pane { flex: 1 1 auto; overflow-y: auto; min-height: 0; background: var(--gx-bg); }
+
+    /* ── Shared small parts ───────────────────────────────────────────────── */
+    .crew-btn { background: transparent; color: var(--gx-text-dim);
+      border: 1px solid var(--gx-border-strong); border-radius: var(--gx-radius);
+      padding: 5px 11px; font: inherit; font-size: 11.5px; cursor: pointer;
+      transition: color .15s, border-color .15s; }
+    .crew-btn:hover:not(:disabled) { color: var(--gx-text); border-color: var(--gx-green); }
+    .crew-btn:disabled { opacity: .45; cursor: default; }
+    .crew-btn.is-primary { background: var(--gx-green); border-color: var(--gx-green);
+      color: var(--gx-green-ink); font-weight: 700; }
+    .crew-btn.is-primary:hover:not(:disabled) { background: var(--gx-green-bright);
+      border-color: var(--gx-green-bright); color: var(--gx-green-ink); }
+    .crew-btn.is-gold { color: var(--gx-gold); border-color: var(--gx-gold-line); }
+    .crew-btn.is-gold:hover:not(:disabled) { color: var(--gx-gold); border-color: var(--gx-gold); }
+    .crew-btn.is-danger { color: var(--gx-red); }
+    .crew-btn.is-danger:hover:not(:disabled) { color: var(--gx-red); border-color: var(--gx-red); }
+
+    .crew-sect { display: flex; align-items: baseline; gap: 10px; margin: 26px 0 10px; }
+    .crew-sect:first-child { margin-top: 0; }
+    .crew-sect h2 { margin: 0; font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+      color: var(--gx-text-dim); font-weight: 700; }
+    .crew-sect span { font-size: 11px; color: var(--gx-text-mute); }
+    .crew-hint { font-size: 11px; color: var(--gx-text-mute); }
+    .crew-save-status { margin-left: 8px; font-size: 11px; color: var(--gx-text-mute); }
+    .crew-save-status.ok  { color: var(--gx-green); }
+    .crew-save-status.err { color: var(--gx-red); }
+
+    .crew-banner { padding: 10px 12px; border-radius: var(--gx-radius-md);
+      font-size: 12px; margin: 0 0 14px; line-height: 1.5; }
+    .crew-banner-warn  { background: var(--gx-gold-soft); border: 1px solid var(--gx-gold-line);
+      color: var(--gx-gold); }
+    .crew-banner-error { background: var(--gx-red-soft); border: 1px solid var(--gx-red);
+      color: var(--gx-red); }
     .crew-banner b { color: inherit; }
 
-    /* ── v5: sortable headers, flagged cells, merge ──────────────────────── */
-    .crew-sort { cursor: pointer; user-select: none; white-space: nowrap; }
-    .crew-sort:hover { color: var(--gx-text); }
-    .crew-sort.is-sorted { color: var(--gx-green); }
-    .crew-caret { display: inline-block; width: 1em; font-size: 8px; vertical-align: middle; }
+    /* ── Overview pane ───────────────────────────────────────────────────────
+       Where the Review and EoM tabs went: everything that needs a decision, in one place,
+       shown whenever nobody is selected. */
+    .crew-ov { padding: 26px 30px 60px; max-width: 900px; }
+    .crew-ov-h1 { margin: 0; font-size: 23px; font-weight: 700; letter-spacing: -.3px;
+      color: var(--gx-text); }
+    .crew-ov-sub { margin: 5px 0 22px; font-size: 13px; color: var(--gx-text-mute); }
 
-    /* Red = missing or malformed, never merely unusual. Applied to the cell for read-only
-       values and to the control itself for editable ones, so the fix is where the eye lands. */
-    td.is-flagged { color: var(--gx-red); }
-    input.is-flagged, select.is-flagged { border-color: var(--gx-red); color: var(--gx-red); }
-    input.is-flagged::placeholder { color: var(--gx-red); opacity: .65; }
-    span.is-flagged { color: var(--gx-red); font-weight: 600; }
-    tr.is-retired td.is-flagged, tr.is-retired input.is-flagged { color: inherit; border-color: var(--gx-border); }
+    .crew-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 10px; margin: 0 0 26px; }
+    .crew-stat { background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-lg); padding: 14px 16px; }
+    .crew-stat-n { font-size: 23px; font-weight: 700; font-variant-numeric: tabular-nums;
+      letter-spacing: -.4px; color: var(--gx-text); }
+    .crew-stat-n.is-warn { color: var(--gx-gold); }
+    .crew-stat-n.is-bad  { color: var(--gx-red); }
+    .crew-stat-n.is-ok   { color: var(--gx-green); }
+    .crew-stat-l { font-size: 11px; color: var(--gx-text-mute); margin-top: 2px; letter-spacing: .3px; }
 
-    .crew-merge { margin-left: 10px; font-size: 11px; }
-    tr.is-merge-src { outline: 1px dashed var(--gx-gold); outline-offset: -1px; }
-    tr.is-merge-src td { background: var(--gx-gold-soft); }
-    .crew-table { min-width: 1320px; }
-    .permit-active { color: var(--gx-green); font-weight: 700; letter-spacing: .5px; }
+    /* One open question. Severity rides the left edge only — the card itself stays neutral so a
+       queue of ten does not read as ten alarms. */
+    .crew-q { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px;
+      background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-left: 3px solid var(--gx-border-strong);
+      border-radius: 9px; padding: 12px 14px; margin: 0 0 8px; }
+    .crew-q.sev-high { border-left-color: var(--gx-red); }
+    .crew-q.sev-warn { border-left-color: var(--gx-gold); }
+    .crew-q-who { display: flex; align-items: center; gap: 9px; background: none; border: 0;
+      padding: 0; cursor: pointer; flex: 0 1 190px; min-width: 150px; text-align: left; font: inherit; }
+    .crew-q-txt { min-width: 0; }
+    .crew-q-name { display: block; font-size: 13px; font-weight: 600; color: var(--gx-text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .crew-q-kind { display: block; font-size: 9.5px; font-weight: 700; letter-spacing: .9px;
+      text-transform: uppercase; color: var(--gx-border-strong); }
+    .crew-q.sev-high .crew-q-kind { color: var(--gx-red); }
+    .crew-q.sev-warn .crew-q-kind { color: var(--gx-gold); }
+    .crew-q-detail { flex: 1 1 240px; min-width: 180px; font-size: 12.5px;
+      color: var(--gx-text-dim); line-height: 1.45; }
+    .crew-q-acts { flex: 0 0 auto; margin-left: auto; display: flex; align-items: center;
+      gap: 7px; white-space: nowrap; }
+    .crew-q.is-done { opacity: .35; }
+    .crew-clear { background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-lg); padding: 26px; text-align: center;
+      font-size: 13.5px; color: var(--gx-green); }
+
+    .crew-eomcard { background: var(--gx-surface); border: 1px solid var(--gx-gold-line);
+      border-radius: var(--gx-radius-lg); padding: 16px 18px; display: flex;
+      align-items: center; gap: 16px; }
+    .crew-eomcard-txt { flex: 1 1 auto; min-width: 0; }
+    .crew-eomcard-name { font-size: 15px; font-weight: 700; color: var(--gx-text); }
+    .crew-eomcard-sub { font-size: 12px; color: var(--gx-text-dim); margin-top: 1px; }
+
+    /* The reign log. A list rather than a table: three facts per reign, and a table's rules
+       would carry more weight than the content does. */
+    .crew-eomlog { list-style: none; margin: 10px 0 0; padding: 0; }
+    .crew-eomlog-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px;
+      border-bottom: 1px solid var(--crew-rule); font-size: 12.5px; }
+    .crew-eomlog-row:last-child { border-bottom: 0; }
+    .crew-eomlog-name { color: var(--gx-text); white-space: nowrap; overflow: hidden;
+      text-overflow: ellipsis; min-width: 0; }
+    /* A deliberate "nobody" is part of the record, not a gap in it. */
+    .crew-eomlog-name.is-nobody { color: var(--gx-text-mute); font-style: italic; }
+    .crew-eomlog-when { margin-left: auto; color: var(--gx-text-dim); white-space: nowrap; }
+    .crew-eomlog-by { font-size: 10px; letter-spacing: .6px; text-transform: uppercase;
+      color: var(--gx-text-mute); width: 88px; text-align: right; white-space: nowrap; }
+
+    /* ── Person record ───────────────────────────────────────────────────── */
+    .crew-phead { padding: 24px 30px 18px; border-bottom: 1px solid var(--crew-rule);
+      background: var(--crew-rail); }
+    .crew-phead-in { display: flex; align-items: flex-start; gap: 16px; max-width: 900px; }
+    .crew-phead-txt { flex: 1 1 auto; min-width: 0; }
+    .crew-pnamerow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    /* The name edits in place. Borderless until you reach for it — a 24px input with a box
+       around it reads as a form, and this is a heading that happens to be correctable. */
+    .crew-pname { background: transparent; border: 1px solid transparent;
+      border-radius: var(--gx-radius); color: var(--gx-text); font: inherit; font-size: 24px;
+      font-weight: 700; letter-spacing: -.4px; padding: 2px 6px; margin-left: -6px;
+      outline: none; min-width: 200px; }
+    .crew-pname:hover { border-color: var(--gx-border); }
+    .crew-pname:focus { border-color: var(--gx-green-dim); background: var(--gx-surface-3); }
+    .crew-pnick { color: var(--gx-green); font-size: 14px; }
+    .crew-pmeta { display: flex; align-items: center; gap: 9px; margin-top: 6px;
+      flex-wrap: wrap; font-size: 12.5px; color: var(--gx-text-dim); }
+    .crew-pmeta-sep { color: var(--gx-border-strong); }
+    .crew-pmeta-store { display: inline-flex; align-items: center; gap: 6px; }
+    .crew-pmeta-dot { width: 7px; height: 7px; border-radius: 50%;
+      background: var(--crew-store-color, var(--gx-border-strong)); }
+    .crew-pmeta-num { font-variant-numeric: tabular-nums; }
+    .crew-pacts { flex: none; display: flex; align-items: center; gap: 8px; }
+    .crew-eomtog { border-radius: var(--gx-radius-pill); padding: 6px 12px; font-size: 11.5px;
+      font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
+      color: var(--gx-text-mute); border-color: var(--gx-border-strong); }
+    .crew-eomtog.is-on { background: var(--gx-gold-soft); border-color: var(--gx-gold);
+      color: var(--gx-gold); }
+    .crew-tag { font-size: 9.5px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+      color: var(--gx-text-mute); border: 1px solid var(--gx-border-strong);
+      border-radius: var(--gx-radius-sm); padding: 2px 6px; }
+
+    .crew-pbody { padding: 20px 30px 70px; max-width: 900px; }
+
+    /* This person's open questions, answered where the record is being read. */
+    .crew-pq { background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-left: 3px solid var(--gx-border-strong); border-radius: 9px;
+      padding: 13px 15px; margin: 0 0 8px; }
+    .crew-pq.sev-high { border-left-color: var(--gx-red); border-color: rgba(239, 68, 68, .35); }
+    .crew-pq.sev-warn { border-left-color: var(--gx-gold); border-color: var(--gx-gold-soft); }
+    .crew-pq-head { display: flex; align-items: baseline; gap: 10px; }
+    .crew-pq-kind { font-size: 9.5px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--gx-border-strong); }
+    .crew-pq.sev-high .crew-pq-kind { color: var(--gx-red); }
+    .crew-pq.sev-warn .crew-pq-kind { color: var(--gx-gold); }
+    .crew-pq-src { margin-left: auto; font-size: 10px; letter-spacing: .9px;
+      text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-pq-detail { margin: 6px 0 0; font-size: 12.5px; color: var(--gx-text-dim); line-height: 1.5; }
+    .crew-pq-cmp { display: flex; align-items: center; gap: 10px; margin: 10px 0 0; flex-wrap: wrap; }
+    .crew-pq-chip { font-size: 13px; color: var(--gx-text-dim); background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius); padding: 5px 10px; }
+    .crew-pq-chip.is-proposed { color: var(--gx-green); border-color: var(--gx-green-dim); }
+    .crew-pq-arrow { color: var(--gx-text-mute); }
+    .crew-pq-acts { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; }
+
+    /* One card per field. A missing value borders gold and says what is missing in its own
+       note — red is reserved for damage, and an unfilled shirt size is not damage. */
+    .crew-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 10px; margin: 0 0 22px; }
+    .crew-field { display: flex; flex-direction: column; gap: 5px; background: var(--gx-surface);
+      border: 1px solid var(--gx-border); border-radius: 9px; padding: 11px 13px; }
+    .crew-field.is-gap { border-color: var(--gx-gold-line); }
+    .crew-field-label { font-size: 9.5px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-field input, .crew-field select { background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius); color: var(--gx-text);
+      padding: 7px 9px; font: inherit; font-size: 13.5px; outline: none; width: 100%;
+      box-sizing: border-box; color-scheme: dark; }
+    .crew-field input:focus, .crew-field select:focus { border-color: var(--gx-green-dim);
+      box-shadow: 0 0 0 3px var(--gx-green-soft); }
+    .crew-field input:disabled { color: var(--gx-text-mute); cursor: default; }
+    .crew-field-note { font-size: 10.5px; color: var(--gx-text-mute); min-height: 13px; }
+    .crew-field.is-gap .crew-field-note { color: var(--gx-gold); }
+    .crew-field-note.is-bad { color: var(--gx-red); }
+    .crew-field-note.is-saved { color: var(--gx-green); }
+
+    .crew-permit { background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-lg); padding: 16px 18px; }
+    .crew-permit.is-bad { border-color: rgba(239, 68, 68, .4); }
+    .crew-permit-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     .crew-permit-no { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 12px; color: var(--gx-text-dim); letter-spacing: .5px; }
+      font-size: 14px; letter-spacing: .5px; color: var(--gx-text); }
+    .crew-permit-pill { font-size: 11px; font-weight: 700; letter-spacing: .6px;
+      text-transform: uppercase; border: 1px solid currentColor;
+      border-radius: var(--gx-radius-pill); padding: 2px 10px; }
+    /* The two inputs that appear only when there is no permit on file — see permitCard(). */
+    .crew-permit-in { flex: 0 1 170px; background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius); color: var(--gx-text);
+      padding: 6px 9px; font: inherit; font-size: 13px; outline: none; color-scheme: dark; }
+    .crew-permit-in.is-no { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .5px; }
+    .crew-permit-in:focus { border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
+    .crew-permit-line { margin-left: auto; font-size: 12.5px; color: var(--gx-text-dim); }
+    .crew-permit-bar { height: 4px; border-radius: var(--gx-radius-pill);
+      background: var(--gx-surface-3); margin: 13px 0 0; overflow: hidden; }
+    .crew-permit-fill { height: 100%; }
+    .is-ok   { color: var(--gx-green); }
+    .is-warn { color: var(--gx-gold); }
+    .is-bad-t { color: var(--gx-red); }
 
-    /* ── v7: review queue ────────────────────────────────────────────────── */
-    .crew-badge { display: inline-block; margin-left: 7px; padding: 1px 7px;
-      border-radius: var(--gx-radius-pill); font-size: 10px; letter-spacing: 0;
-      background: var(--gx-gold-soft); color: var(--gx-gold); border: 1px solid var(--gx-gold-line); }
-    .crew-badge.is-high { background: var(--gx-red-soft); color: var(--gx-red); border-color: var(--gx-red); }
-
-    .crew-review-intro { font-size: 12px; margin: 0 0 16px; }
-    .crew-review-intro b { color: var(--gx-text); }
-    .crew-allclear { color: var(--gx-green); font-size: 14px; padding: 18px 0; }
-
-    .crew-review { border: 1px solid var(--gx-border); border-left-width: 3px;
-      border-radius: var(--gx-radius-md); padding: 13px 15px; margin: 0 0 10px;
-      background: var(--gx-surface-2); transition: opacity .25s; }
-    .crew-review-high { border-left-color: var(--gx-red); }
-    .crew-review-warn { border-left-color: var(--gx-gold); }
-    .crew-review-info { border-left-color: var(--gx-border-strong); }
-    .crew-review.is-done { opacity: .4; }
-
-    .crew-review-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-    .crew-review-head b { color: var(--gx-text); font-size: 14px; }
-    .crew-review-kind { font-size: 10px; font-weight: 700; letter-spacing: 1.1px;
+    .crew-links { background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-lg); padding: 14px 18px; }
+    .crew-linkrow { display: flex; flex-wrap: wrap; gap: 8px; }
+    .crew-linkpill { display: inline-flex; align-items: center; gap: 7px; font-size: 12px;
+      color: var(--gx-text); background: var(--gx-surface-3); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-pill); padding: 4px 11px; }
+    .crew-linkpill.is-warn { color: var(--gx-gold); }
+    .crew-linkpill.is-bad  { color: var(--gx-red); }
+    .crew-linkpill-l { font-size: 9.5px; font-weight: 700; letter-spacing: .8px;
       text-transform: uppercase; color: var(--gx-text-mute); }
-    .crew-review-src { margin-left: auto; font-size: 10px; letter-spacing: 1px;
-      text-transform: uppercase; color: var(--gx-text-mute); }
-    .crew-review-detail { font-size: 12.5px; color: var(--gx-text-dim); margin: 7px 0 0; line-height: 1.5; }
+    .crew-linknote { margin: 11px 0 0; font-size: 11.5px; color: var(--gx-text-mute); line-height: 1.55; }
+    .crew-celeb { display: flex; align-items: center; gap: 9px; margin: 13px 0 0;
+      font-size: 12.5px; color: var(--gx-text-dim); cursor: pointer; }
+    .crew-celeb input { accent-color: var(--gx-green); }
 
-    .crew-review-cmp { display: flex; align-items: stretch; gap: 12px; margin: 11px 0 0; flex-wrap: wrap; }
-    .crew-review-col { display: flex; flex-direction: column; gap: 3px; font-size: 13px;
-      color: var(--gx-text-dim); background: var(--gx-surface-3);
-      border: 1px solid var(--gx-border); border-radius: var(--gx-radius); padding: 6px 11px; }
-    .crew-review-col em { font-size: 9.5px; font-style: normal; font-weight: 700;
-      letter-spacing: 1px; text-transform: uppercase; color: var(--gx-text-mute); }
-    .crew-review-col.is-proposed { color: var(--gx-green); border-color: var(--gx-green-dim); }
-    .crew-review-arrow { align-self: center; color: var(--gx-text-mute); }
+    .crew-pfoot { display: flex; align-items: center; gap: 10px; margin: 24px 0 0;
+      padding-top: 16px; border-top: 1px solid var(--crew-rule); }
+    .crew-pfoot .crew-btn { padding: 7px 13px; font-size: 12px; }
+    .crew-pfoot-right { margin-left: auto; }
 
-    .crew-review-acts { display: flex; align-items: center; gap: 8px; margin: 13px 0 0; flex-wrap: wrap; }
-    .crew-save.is-primary { background: var(--gx-green); border-color: var(--gx-green);
-      color: var(--gx-green-ink); font-weight: 700; }
-    .crew-save.is-primary:hover:not(:disabled) { background: var(--gx-green-bright); }
-
-    /* ── v8: identity edit panel ─────────────────────────────────────────── */
-    .crew-nick { color: var(--gx-green); font-size: 12px; }
-    /* A blanked identity row. Red rather than muted on purpose: this is damage to the
-       record, not a field somebody has not filled in yet. */
-    .crew-noname { color: var(--gx-red); }
-    .crew-edit { margin-left: 10px; font-size: 11px; }
-    .crew-editrow td { background: var(--gx-surface-2); padding: 16px 14px !important; }
-    .crew-editform { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
-    .crew-editform label { display: flex; flex-direction: column; gap: 4px;
-      font-size: 9.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    /* Merge chooser. Merging is picking the OTHER record, so it is a search over people rather
+       than a two-click dance across a table that no longer exists. */
+    .crew-mergebox { margin: 12px 0 0; background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-lg); padding: 14px 16px; }
+    .crew-mergelist { max-height: 240px; overflow-y: auto; margin: 10px 0 0; }
+    .crew-mergerow { display: flex; align-items: center; gap: 10px; width: 100%;
+      box-sizing: border-box; text-align: left; background: transparent; border: 0;
+      border-bottom: 1px solid var(--crew-rule); padding: 7px 4px; font: inherit;
+      font-size: 12.5px; color: var(--gx-text); cursor: pointer; }
+    .crew-mergerow:hover { background: var(--gx-surface-2); }
+    .crew-mergerow em { margin-left: auto; font-style: normal; font-size: 11px;
       color: var(--gx-text-mute); }
-    .crew-editform input, .crew-editform select {
-      background: var(--gx-surface-3); border: 1px solid var(--gx-border);
-      border-radius: var(--gx-radius); color: var(--gx-text); padding: 7px 10px;
-      font-size: 13px; font-family: inherit; letter-spacing: normal; text-transform: none;
-      outline: none; color-scheme: dark; min-width: 150px; }
-    .crew-editform input:focus, .crew-editform select:focus {
-      border-color: var(--gx-green-dim); box-shadow: 0 0 0 3px var(--gx-green-soft); }
-    .crew-editnote { font-size: 11px; color: var(--gx-text-mute); margin: 12px 0 0; }
-    .crew-editacts { display: flex; align-items: center; gap: 10px; margin: 12px 0 0; }
 
-    /* ── v11: avatars ────────────────────────────────────────────────────── */
-    .crew-namecell { display: flex; align-items: center; gap: 9px; }
+    /* ── Toast ────────────────────────────────────────────────────────────────
+       Save confirmation. Every control is live, so this is the only thing that says a write
+       landed — it names the field rather than saying "Saved", because on a screen of twenty
+       inputs "Saved" does not tell you which one. */
+    .crew-toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+      z-index: 60; background: var(--gx-surface-2); border: 1px solid var(--gx-green-dim);
+      border-radius: var(--gx-radius-pill); padding: 8px 18px; font-size: 12.5px;
+      color: var(--gx-green); box-shadow: var(--gx-shadow); display: flex; align-items: center; gap: 12px; }
+    .crew-toast.is-err { border-color: var(--gx-red); color: var(--gx-red); }
+    .crew-toast button { background: none; border: 0; color: inherit; font: inherit;
+      font-weight: 700; text-decoration: underline; cursor: pointer; padding: 0; }
+
+    /* ── Avatars ──────────────────────────────────────────────────────────────
+       The puck is the rendered DiceBear face, or initials when nobody has picked one. Faces come
+       from an external service, so a failed load falls back to initials rather than a broken image. */
     .crew-ava { position: relative; width: 28px; height: 28px; flex: none; border-radius: 50%;
       overflow: hidden; background: var(--gx-surface-3); border: 1px solid var(--gx-border-strong);
       display: flex; align-items: center; justify-content: center; }
     .crew-ava img { width: 100%; height: 100%; display: block; }
-    .crew-ava.is-initials { font-size: 10px; font-weight: 700; color: var(--gx-text-dim); }
+    .crew-ava.is-initials { font-size: 9.5px; font-weight: 700; color: var(--gx-text-dim); }
     /* The GC hat is an overlay on top of the DiceBear face, sized to the same 280x280 viewBox. */
     .crew-ava-hat { position: absolute; inset: 0; pointer-events: none; }
     .crew-ava-hat svg { width: 100%; height: 100%; display: block; }
+    .crew-ava.is-md { width: 48px; height: 48px; border-color: var(--gx-gold); }
+    .crew-ava.is-md.is-initials { font-size: 15px; }
+    .crew-ava.is-xl { width: 62px; height: 62px; }
+    .crew-ava.is-xl.is-initials { font-size: 19px; }
     .crew-ava.is-lg { width: 96px; height: 96px; }
     .crew-ava.is-lg.is-initials { font-size: 30px; }
 
-    .crew-avapick { display: flex; gap: 20px; margin: 18px 0 0; padding: 16px 0 0;
-      border-top: 1px solid var(--gx-border); flex-wrap: wrap; }
+    .crew-nick { color: var(--gx-green); font-size: 12px; }
+    /* A blanked identity row. Red rather than muted on purpose: this is damage to the
+       record, not a field somebody has not filled in yet. */
+    .crew-noname { color: var(--gx-red); }
+
+    /* ── Avatar picker ────────────────────────────────────────────────────── */
+    .crew-avapick { display: flex; gap: 20px; margin: 12px 0 0; background: var(--gx-surface);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius-lg);
+      padding: 16px 18px; flex-wrap: wrap; }
     .crew-avapreview { flex: none; }
     .crew-avacol { flex: 1 1 420px; min-width: 280px; }
     .crew-avacontrols { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
@@ -305,60 +469,15 @@
       outline: none; color-scheme: dark; width: 100%; }
     .crew-avaswatch { position: absolute; right: 8px; bottom: 8px; width: 12px; height: 12px;
       border-radius: 3px; border: 1px solid var(--gx-border-strong); pointer-events: none; }
-    .crew-avaacts { display: flex; gap: 8px; margin: 12px 0 0; flex-wrap: wrap; }
+    .crew-avaacts { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; flex-wrap: wrap; }
+    .crew-editnote { font-size: 11px; color: var(--gx-text-mute); margin: 12px 0 0; }
 
-    /* ── v9: edit mode ───────────────────────────────────────────────────── */
-    .crew-editmode { padding: 4px 10px; border: 1px solid var(--gx-border-strong);
-      border-radius: var(--gx-radius-pill); }
-    .crew-editmode.is-on { border-color: var(--gx-green); color: var(--gx-green); }
-    .crew-numcell { text-align: center; font-variant-numeric: tabular-nums;
-      color: var(--gx-text-dim); }
-    /* Read-only rows should look settled, not like disabled inputs waiting to be fixed. */
-    .crew-table input:disabled, .crew-table select:disabled {
-      opacity: 1; background: transparent; border-color: transparent;
-      color: var(--gx-text-dim); padding-left: 0;
-      /* Drop the native control chrome too — a chevron on a disabled select still reads as
-         "you can change this", which is the opposite of what read-only should say. */
-      appearance: none; -webkit-appearance: none; }
-    .crew-table input:disabled.is-flagged, .crew-table select:disabled.is-flagged {
-      color: var(--gx-red); border-color: transparent; }
-
-    /* Employee of the Month picker. A radio list rather than a table: exactly one person holds it,
-    and picking is the whole interaction — there is no Save button to forget to press. */
-    .crew-eom { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 6px; padding: 4px 0 2px; }
-    .crew-eom-pick { display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-width: 0;
-    border: 1px solid var(--gx-border); border-radius: var(--gx-radius-md); cursor: pointer;
-    transition: border-color .15s, background .15s; }
-    .crew-eom-pick:hover { border-color: var(--gx-border-strong); background: var(--gx-surface-2); }
-    .crew-eom-pick.is-current { border-color: var(--gx-gold); background: rgba(234,179,8,0.06); }
-    .crew-eom-pick input { accent-color: var(--gx-green); flex-shrink: 0; margin: 0; }
-    .crew-eom-pick input:disabled { cursor: not-allowed; }
-    .crew-eom-name { font-size: 13px; color: var(--gx-text); white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .crew-eom-store { margin-left: auto; font-size: 10px; letter-spacing: .8px;
-    text-transform: uppercase; color: var(--gx-text-mute); flex-shrink: 0; }
-    .crew-eom-foot { display: flex; justify-content: flex-end; padding-top: 10px; }
-
-    /* The history below the picker. A list rather than a table: three facts per reign, and a
-    table's rules would carry more weight than the content does. The gold marker matches the
-    picker's is-current, so the same person reads as the same person in both. */
-    .crew-eomlog { list-style: none; margin: 2px 0 0; padding: 0; }
-    .crew-eomlog-row { display: flex; align-items: center; gap: 10px; padding: 8px 2px;
-    border-bottom: 1px solid var(--gx-border); }
-    .crew-eomlog-row:last-child { border-bottom: 0; }
-    .crew-eomlog-row.is-current { border-left: 2px solid var(--gx-gold); padding-left: 10px;
-    margin-left: -12px; }
-    .crew-eomlog-name { font-size: 13px; color: var(--gx-text); white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-    .crew-eomlog-none { display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%;
-    border: 1px dashed var(--gx-border-strong); color: var(--gx-text-mute); font-size: 12px; }
-    .crew-eomlog-when { margin-left: auto; font-size: 11px; color: var(--gx-text-dim);
-    white-space: nowrap; flex-shrink: 0; }
-    .crew-eomlog-by { font-size: 10px; letter-spacing: .6px; text-transform: uppercase;
-    color: var(--gx-text-mute); white-space: nowrap; flex-shrink: 0; }
-
+    /* Desktop only, per the brief. Below ~1100px the sub nav wraps; the rail stays 340px so
+       the two panes never fight over the same space. */
+    @media (max-width: 1100px) {
+      .crew-attn { margin-left: 0; }
+      .crew-ov, .crew-pbody, .crew-phead-in { max-width: none; }
+    }
   </style>
 </head>
 <body class="gx-app">
@@ -377,6 +496,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.310"></script>
+  <script src="crew.js?v=1.311"></script>
 </body>
 </html>

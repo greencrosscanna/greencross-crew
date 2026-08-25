@@ -37,22 +37,30 @@
   var mount = document.getElementById('app');
   var GXCore = window.GXClient(GXCORE_URL);
   var Engine = null;           // built once we know the engine URL
+  /* ── Workspace state ────────────────────────────────────────────────────────
+   * One roster screen: a permanent people list on the left, and a right pane that is either
+   * ONE person's whole record or — when nobody is selected — the queue of everything that needs
+   * a decision. The Review and EoM tabs are gone; their content lives in that overview.
+   *
+   * There is no edit mode. Every control is live and commits on its own, which is why the state
+   * below carries no `editMode`, no per-row `openId` and no dirty flag: there is nothing to arm
+   * and nothing to forget to press. `dismissed` and `celebrations` are the optimistic overlays
+   * that let a resolved question disappear and a checkbox move before the write comes back.
+   */
   var state  = { rows: [], canEdit: false, shirtSizes: [], roleTitles: [], user: '', role: '', identity: null,
                  stores: {}, storeOrder: {}, storeFilter: {},
-                 showRetired: false, retiredTotal: 0, hrSheetUrl: '', q: '',
-                 sortKey: 'name', sortDir: 1, mergeFrom: null, onlyFlagged: false,
-                 view: 'roster', review: null, reviewCounts: {},
-                 /* The roster is READ-ONLY until you ask for edit mode. Most visits are to look
-                    something up, and a table of live inputs invites a stray keystroke into wage
-                    or permit data. Edit mode opens exactly five operational fields; anything
-                    structural (name, nickname, store, role, hire date, employee #) stays behind
-                    the identity panel, which is a deliberate act rather than a click-through. */
-                 editMode: false };
+                 retiredTotal: 0, q: '',
+                 /* 'active' | 'attention' | 'retired'. Replaces the old showRetired + onlyFlagged
+                    checkbox pair, which could be combined into readings nobody meant. Entering
+                    `retired` triggers the same refetch showRetired used to, once. */
+                 scope: 'active', fetchedRetired: false,
+                 selected: null,           // employee_id, or null for the overview
+                 review: null, reviewCounts: {}, reviewErr: '',
+                 eom: undefined,           // undefined = not loaded yet; null = nobody holds it
+                 eomHistory: undefined, eomHistoryErr: '',
+                 dismissed: {},            // review ids resolved in this session
+                 avatarOpen: false, merging: false };
 
-  /* The only fields edit mode opens. Employee number is deliberately NOT here — it is the
-     canonical stable key the whole suite joins on, so it belongs with identity, not with
-     day-to-day corrections. */
-  var EDITABLE_INLINE = ['wage', 'shirt_size', 'birthday', 'permit_number', 'permit_expires'];
 
   // ─── tiny DOM helpers ────────────────────────────────────────────────────────
   function el(tag, cls, html) {
@@ -66,7 +74,14 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-  function clear() { mount.innerHTML = ''; }
+  /* Also unwinds the workspace shell. Login and the status card render into this same mount, and
+     a full-height flex column is the wrong frame for a centred card. */
+  function clear() {
+    mount.innerHTML = '';
+    mount.classList.remove('is-ws');
+    document.body.classList.remove('crew-ws');
+    ui = null;
+  }
 
   function card(titleHtml, bodyNodes) {
     var c = el('section', 'gx-card');
@@ -199,18 +214,10 @@
       counts[id] = (counts[id] || 0) + 1;
     });
     var wrap = el('div', 'crew-pills');
-    var anyPicked = !!Object.keys(state.storeFilter).length;
 
-    var all = el('button', 'crew-pill' + (anyPicked ? '' : ' is-on'),
-      'All <span class="crew-pill-n">' + (matched || []).length + '</span>');
-    all.type = 'button';
-    all.setAttribute('data-store', '*');
-    all.setAttribute('aria-pressed', anyPicked ? 'false' : 'true');
-    all.addEventListener('click', function () {
-      state.storeFilter = {}; renderRoster(); refocusPill('*');
-    });
-    wrap.appendChild(all);
-
+    /* No "All" pill any more. It was the reset for a row that had no other way back, and the
+       workspace has one: a selected pill toggles itself off. Keeping it would have meant a
+       control whose only job is to undo the control beside it. */
     ids.forEach(function (id) {
       var n  = counts[id] || 0;
       var on = !!state.storeFilter[id];
@@ -225,7 +232,7 @@
       b.addEventListener('click', function () {
         if (state.storeFilter[id]) delete state.storeFilter[id];
         else state.storeFilter[id] = true;
-        renderRoster(); refocusPill(id);
+        paintSubnav(); paintRail(); refocusPill(id);
       });
       wrap.appendChild(b);
     });
@@ -315,18 +322,6 @@
     return String(name || '').trim().split(/\s+/).slice(0, 2)
       .map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?';
   }
-  /* How Crew writes a person, everywhere it writes one: legal name bold, nickname in quotes
-     beside it. A row with NO name is not a blank to render as whitespace — it is a GX Core
-     identity row that a partial write blanked, and the roster drew it as an avatar floating
-     beside nothing at all, which is exactly how it went unnoticed. Name the damage instead. */
-  function nameHtml(row) {
-    if (!String(row.name || '').trim()) {
-      return '<b class="crew-noname">⚠ Record blanked</b>' +
-             ' <span class="crew-nick">' + esc(row.employee_id || '') + '</span>';
-    }
-    return '<b>' + esc(row.name) + '</b>' +
-      (row.preferred_name ? ' <span class="crew-nick">“' + esc(row.preferred_name) + '”</span>' : '');
-  }
   /* Puck: the rendered avatar, or initials when nobody has picked one. Faces come from an
      external service, so a failed load falls back to initials rather than a broken image. */
   function avatarPuck(row, size) {
@@ -409,70 +404,37 @@
   /* Flags come from the engine so the roster, the UI and any future export share one
      definition of "questionable". A cell clears the moment the underlying value is fixed. */
   function has(row, flag) { return (row.flags || []).indexOf(flag) >= 0; }
-  function flagCls(row, flag, base) {
-    return (base ? base + ' ' : '') + (has(row, flag) ? 'is-flagged' : '');
+  /* Names the gaps a flag stands for, so a status dot's tooltip reads "Missing: wage, OLCC
+     permit" instead of repeating the engine's field keys at somebody. Same vocabulary as
+     rowFlags_ in Code.gs — add a flag there and it needs a line here or it shows raw. */
+  var FLAG_LABEL = { name: 'name', employee_number: 'employee number', hire_date: 'hire date',
+    store: 'store', role: 'role', no_account: 'GX account', wage: 'wage', birthday: 'birthday',
+    permit: 'OLCC permit', permit_expired: 'expired permit', permit_status: 'permit status' };
+
+  /* RED means damage or a compliance failure — an expired permit, no permit at all, a manager
+     who cannot be contacted, a blanked name. GOLD means a record that is merely incomplete.
+     The distinction is the whole point of the dot: a roster where everything is red teaches
+     people to ignore red. */
+  function gapSeverity(row) {
+    var gaps = row.flags || [];
+    if (!gaps.length) return '';
+    var bad = has(row, 'name') || has(row, 'no_account') || has(row, 'permit') ||
+              has(row, 'permit_expired') ||
+              (row.permit_days_left != null && row.permit_days_left < 0);
+    return bad ? 'high' : 'warn';
+  }
+  function gapTitle(row) {
+    return 'Missing: ' + (row.flags || []).map(function (f) { return FLAG_LABEL[f] || f; }).join(', ');
   }
 
-  /* Bare YYYY-MM-DD, matching the Hired column so the two read against each other. Urgency is
-     carried by colour and by the banner above the table, not by a "(5d)" tail in the cell. */
-  function permitExpiryCell(row) {
-    if (!row.permit_expires) return '<span class="is-flagged">—</span>';
-    var d = row.permit_days_left;
-    var cls = d == null ? '' : d < 0 ? 'permit-bad' : d <= 90 ? 'permit-warn' : 'permit-ok';
-    return '<span class="' + cls + '">' + esc(row.permit_expires) + '</span>';
-  }
-  /* The OLCC column states the permit's standing in METRC's own words — ACTIVE / VALID —
-     rather than answering a yes/no question the header no longer asks. */
-  function permitStatusCell(row) {
-    if (!row.permit_status) return '<span class="is-flagged">—</span>';
-    var good = ['active', 'valid'].indexOf(String(row.permit_status).toLowerCase()) >= 0;
-    return '<span class="' + (good ? 'permit-active' : 'permit-bad') + '">' +
-           esc(String(row.permit_status).toUpperCase()) + '</span>';
-  }
-  function permitNumberCell(row) {
-    if (!row.permit_number) return '<span class="is-flagged">—</span>';
-    return '<span class="crew-permit-no">' + esc(row.permit_number) + '</span>';
-  }
-
-  var COLUMNS = [
-    { key: 'employee_number', label: '#',            num: true },
-    { key: 'name',            label: 'Name' },
-    { key: 'store',           label: 'Store',        val: function (r) { return storeName(r.store); } },
-    { key: 'role',            label: 'Role' },
-    { key: 'hire_date',       label: 'Hired' },
-    { key: 'time_with_company', label: 'Time w Co.', num: true,
-      val: function (r) { var m = /(\d+)yr (\d+)mo/.exec(r.time_with_company || ''); 
-                          return m ? Number(m[1]) * 12 + Number(m[2]) : -1; } },
-    { key: 'wage',            label: 'Wage',         num: true },
-    { key: 'shirt_size',      label: 'Tee' },
-    { key: 'birthday',        label: 'Birthday' },
-    { key: 'permit_number',   label: 'OLCC permit #' },
-    { key: 'permit_status',   label: 'OLCC' },
-    { key: 'permit_expires',  label: 'OLCC expires' }
-  ];
-
-  function sortRows(rows) {
-    var col = COLUMNS.filter(function (c) { return c.key === state.sortKey; })[0] || COLUMNS[1];
-    var dir = state.sortDir;
-    return rows.slice().sort(function (a, b) {
-      var av = col.val ? col.val(a) : a[col.key];
-      var bv = col.val ? col.val(b) : b[col.key];
-      // Blanks ALWAYS sink, whichever column and whichever direction — a missing wage is the
-      // absence of a value, not the smallest one, and letting it ride the top of an ascending
-      // sort buries the rows you actually wanted to compare.
-      if (col.num) {
-        var an = parseFloat(av), bn = parseFloat(bv);
-        var ab = isNaN(an), bb = isNaN(bn);
-        if (ab && !bb) return 1;
-        if (!ab && bb) return -1;
-        if (ab && bb)  return a.name.localeCompare(b.name);
-        return (an - bn) * dir || a.name.localeCompare(b.name);
-      }
-      var as = String(av || ''), bs = String(bv || '');
-      if (!as && bs) return 1;
-      if (as && !bs) return -1;
-      return as.localeCompare(bs) * dir || a.name.localeCompare(b.name);
-    });
+  /* Alphabetical within a store group, with the blanks-always-sink rule the old sortRows applied
+     to every column: a record with no name is the absence of a value, not the smallest one, and
+     letting it ride the top buries the rows you actually came to compare. */
+  function byName(a, b) {
+    var as = String(a.name || '').trim(), bs = String(b.name || '').trim();
+    if (!as && bs) return 1;
+    if (as && !bs) return -1;
+    return as.localeCompare(bs);
   }
 
 
@@ -492,44 +454,20 @@
     role:                'Role differs'
   };
 
-  /* Repaint just the count on the Review tab, leaving resolved items and their ✓ in place. */
-  function refreshBadge() {
-    var n = state.reviewCounts || {};
-    var open = (n.high || 0) + (n.warn || 0);
-    var tab = document.querySelectorAll('.crew-tab')[1];
-    if (!tab) return;
-    var badge = tab.querySelector('.crew-badge');
-    if (!open) { if (badge) badge.remove(); return; }
-    if (!badge) {
-      badge = el('span', 'crew-badge');
-      tab.appendChild(badge);
-    }
-    badge.textContent = open;
-    badge.className = 'crew-badge' + (n.high ? ' is-high' : '');
-  }
-
   /* Tabs live in the shared header (#navTabs), not in the page body, so Crew matches every other app.
+     Review and EoM are no longer tabs — their content is the roster's overview pane, shown whenever
+     nobody is selected, so a disagreement is answered next to the record it is about rather than on
+     a screen of its own. That leaves Roster as Crew's only view today; Incentive and Payroll are
+     routes the engine still has commented out, and each becomes one more entry here when it lands.
      Returns null: callers no longer insert a nav node into the main column. */
   function navBar() {
     var nav = document.getElementById('navTabs');
     if (!nav) return null;
     nav.innerHTML = '';
-    [['roster', 'Roster'], ['review', 'Review'], ['eom', 'EoM']].forEach(function (v) {
-      var n = state.reviewCounts || {};
-      var badge = '';
-      if (v[0] === 'review' && (n.high || n.warn)) {
-        badge = ' <span class="crew-badge' + (n.high ? ' is-high' : '') + '">' +
-                ((n.high || 0) + (n.warn || 0)) + '</span>';
-      }
-      var b = el('button', 'gx-topnav-tab' + (state.view === v[0] ? ' is-active' : ''), v[1] + badge);
-      b.addEventListener('click', function () {
-        state.view = v[0];
-        if (v[0] === 'review' && !state.review) loadReview();
-        else if (v[0] === 'eom' && state.eom === undefined) loadEom();
-        else render();
-      });
-      nav.appendChild(b);
-    });
+    var b = el('button', 'gx-topnav-tab is-active', 'Roster');
+    b.type = 'button';
+    b.addEventListener('click', function () { state.selected = null; paintSubnav(); paintPane(); });
+    nav.appendChild(b);
     return null;
   }
 
@@ -591,18 +529,19 @@
       context:  function () {
         var picked = Object.keys(state.storeFilter);
         return {
-          view:         state.view,
+          /* Which PANE, not which person. The selected employee_id would name an employee in a
+             log every app in the suite can read, which is exactly what this snapshot exists to
+             avoid — and 'person' plus the scope reproduces the bug just as well. */
+          view:         state.selected ? 'person' : 'overview',
           stores:       picked.length ? picked.join(',') : 'all',
-          showRetired:  state.showRetired ? 'yes' : '',
-          onlyFlagged:  state.onlyFlagged ? 'yes' : '',
-          editMode:     state.editMode ? 'yes' : '',
+          scope:        state.scope,
           searchActive: state.q ? 'yes' : ''
         };
       },
       submit: function (payload) {
         // Crew's own authenticated path, which is the point of `submit` being a function: the shared
         // script never handles a token, so there is no second auth path to keep correct.
-        var params = { token: token(), tab: state.view };
+        var params = { token: token(), tab: state.selected ? 'person' : 'overview' };
         Object.keys(payload).forEach(function (k) { if (k !== 'action') params[k] = payload[k]; });
         return Engine.jsonp(payload.action, params, { timeoutMs: 20000, retries: 1 });
       }
@@ -610,104 +549,71 @@
     bugWired = true;
   }
 
+  /* The queue is loaded in the BACKGROUND, never in front of the roster. It is a second slow
+     read against the same two sheets, and the old Review tab made you wait for it before showing
+     anything; now it fills the overview in place once it arrives. A failure is recorded rather
+     than thrown — the roster is still usable without it, and the overview says so. */
   async function loadReview() {
-    renderStatus('Checking for misalignments…');
     try {
-      var r = await Engine.jsonp('review', { token: token() }, { timeoutMs: 45000, retries: 2 });
+      var r = await Engine.jsonp('review', { token: token() }, { timeoutMs: 45000, retries: 1 });
       if (!r || !r.ok) throw new Error((r && r.error) || 'Review load failed');
       state.review = r.items || [];
       state.reviewCounts = r.counts || {};
-      render();
+      state.reviewErr = '';
     } catch (e) {
-      renderStatus('⚠️ Could not load the review queue: ' + esc((e && e.message) || 'unknown error'));
+      state.review = state.review || [];
+      state.reviewErr = (e && e.message) || 'could not load the review queue';
     }
+    if (mount.classList.contains('is-ws')) { paintSubnav(); paintPane(); }
   }
 
-  function renderReview() {
-    clear();
-    navBar();                 // paints the shared header's tab row
-    renderUserChip();
-    var nodes = [];
-    var items = state.review || [];
-
-    if (!items.length) {
-      nodes.push(el('p', 'crew-allclear', '✓ Nothing to review — every source agrees.'));
-      mount.appendChild(card('Review', nodes));
-      return;
-    }
-
-    nodes.push(el('p', 'gx-muted crew-review-intro',
-      'Where the HR sheet, METRC and Leaderboard disagree. <b>Nothing here has been applied.</b> ' +
-      'Each answer is recorded, so a resolved item stays gone — but if the underlying values ' +
-      'change it will come back as a new question.'));
-
-    items.forEach(function (it) {
-      var box = el('div', 'crew-review crew-review-' + it.severity);
-      var head = el('div', 'crew-review-head');
-      head.innerHTML = '<span class="crew-review-kind">' + esc(KIND_LABEL[it.kind] || it.kind) +
-        '</span><b>' + esc(it.name) + '</b>' +
-        '<span class="crew-review-src">' + esc(it.source) + '</span>';
-      box.appendChild(head);
-      if (it.detail) box.appendChild(el('p', 'crew-review-detail', esc(it.detail)));
-
-      if (it.current_value || it.proposed_value) {
-        var cmp = el('div', 'crew-review-cmp');
-        cmp.innerHTML =
-          '<span class="crew-review-col"><em>now</em>' +
-            (it.current_value ? esc(it.current_value) : '<span class="crew-hint">—</span>') + '</span>' +
-          '<span class="crew-review-arrow">→</span>' +
-          '<span class="crew-review-col is-proposed"><em>' +
-            (it.kind === 'duplicate' ? 'keep' : 'proposed') + '</em>' +
-            (it.proposed_value ? esc(it.proposed_value) : '<span class="crew-hint">—</span>') + '</span>';
-        box.appendChild(cmp);
-      }
-
-      if (state.canEdit) {
-        var acts = el('div', 'crew-review-acts');
-        var status = el('span', 'crew-save-status');
-        var actionable = ['duplicate', 'name_spelling', 'role'].indexOf(it.kind) >= 0;
-        [[ 'accept', actionable ? (it.kind === 'duplicate' ? 'Merge them' : 'Apply') : 'Mark handled', 'primary'],
-         [ 'keep',    'Current is correct', ''],
-         [ 'dismiss', 'Not a problem', '']].forEach(function (a) {
-          var b = el('button', 'crew-save' + (a[2] === 'primary' ? ' is-primary' : ''), a[1]);
-          b.addEventListener('click', async function () {
-            if (it.kind === 'duplicate' && a[0] === 'accept' &&
-                !confirm('Merge "' + it.merge_from_name + '" into "' + it.name + '"?\n\n' +
-                         'Nothing is deleted, and future imports of "' + it.merge_from_name +
-                         '" will resolve to ' + it.name + '.')) return;
-            acts.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
-            status.textContent = 'Saving…'; status.className = 'crew-save-status';
-            try {
-              var r = await Engine.jsonp('review_resolve',
-                { token: token(), id: it.id, choice: a[0] }, { timeoutMs: 45000, retries: 2 });
-              if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
-              box.classList.add('is-done');
-              status.textContent = '✓ ' + (r.applied || a[1]);
-              status.className = 'crew-save-status ok';
-              state.review = state.review.filter(function (x) { return x.id !== it.id; });
-              state.reviewCounts[it.severity] = Math.max(0, (state.reviewCounts[it.severity] || 1) - 1);
-              state.rows = [];   // roster is stale after any of these
-              // Update the badge in place. Re-rendering would be simpler but would wipe the ✓
-              // confirmations off every item resolved so far, which is the feedback that tells
-              // you the queue is actually going down.
-              refreshBadge();
-            } catch (e) {
-              status.textContent = (e && e.message) || 'Failed';
-              status.className = 'crew-save-status err';
-              acts.querySelectorAll('button').forEach(function (x) { x.disabled = false; });
-            }
-          });
-          acts.appendChild(b);
-        });
-        acts.appendChild(status);
-        box.appendChild(acts);
-      }
-      nodes.push(box);
-    });
-
-    mount.appendChild(card('Review <span class="gx-muted crew-count">' + items.length + '</span>', nodes));
+  /* Every open question, minus the ones resolved in this session. Optimistic removal: a resolved
+     card disappears the moment the write succeeds rather than after a full reload, because the
+     count going down is the feedback that says the queue is finite. */
+  function openItems() {
+    return (state.review || []).filter(function (it) { return !state.dismissed[it.id]; });
+  }
+  function itemsFor(employeeId) {
+    return openItems().filter(function (it) { return String(it.employee_id) === String(employeeId); });
+  }
+  /* The primary action names what accepting will DO, because the three kinds do genuinely
+     different things: two write to GX Core identity, one merges two records, and the rest only
+     record that a human handled something this app cannot action (renewing a permit, revoking
+     METRC access). "Apply" on all four would promise a write that never happens. */
+  function ctaFor(kind) {
+    return kind === 'duplicate'     ? 'Merge them'
+         : kind === 'name_spelling' ? 'Apply METRC spelling'
+         : kind === 'role'          ? 'Apply Leaderboard role'
+         : 'Mark handled';
   }
 
+  /* Records one of the three honest answers. All of them are written: "I looked and it is fine"
+     has to silence an item as firmly as a correction does, or the queue never empties. */
+  async function resolveItem(it, choice, node, btns) {
+    btns.forEach(function (b) { b.disabled = true; });
+    try {
+      var r = await Engine.jsonp('review_resolve',
+        { token: token(), id: it.id, choice: choice }, { timeoutMs: 45000, retries: 2 });
+      if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
+      state.dismissed[it.id] = true;
+      state.reviewCounts[it.severity] = Math.max(0, (state.reviewCounts[it.severity] || 1) - 1);
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+      toast(choice === 'accept' ? ('✓ ' + (r.applied || ctaFor(it.kind)))
+            : choice === 'keep' ? '✓ Kept the current value'
+            : '✓ Recorded as not a problem');
+      /* Accepting a name, a role or a merge CHANGES the roster, so the rows in hand are stale.
+         Refetch quietly rather than patching a guess into them. */
+      if (choice === 'accept' && ['duplicate', 'name_spelling', 'role'].indexOf(it.kind) >= 0) {
+        if (it.kind === 'duplicate' && String(state.selected) === String(it.merge_from)) {
+          state.selected = it.employee_id;      // the record they were reading no longer exists
+        }
+        boot(true);
+      } else { paintSubnav(); paintPane(); }
+    } catch (e) {
+      btns.forEach(function (b) { b.disabled = false; });
+      toast((e && e.message) || 'Failed', true);
+    }
+  }
 
   /* ── Employee of the Month ─────────────────────────────────────────────────────────────────────
      An HR call, so it lives here rather than in Leaderboard, which only RENDERS the badge on the
@@ -730,7 +636,7 @@
         state.eom = (v && v.employee_id) ? String(v.employee_id) : null;
       }
     } catch (e) { state.eom = null; }
-    render();
+    if (mount.classList.contains('is-ws')) { paintRail(); paintPane(); }
     loadEomHistory();
   }
 
@@ -747,27 +653,26 @@
       state.eomHistory = [];
       state.eomHistoryErr = (e && e.message) || 'could not load the history';
     }
-    if (state.view === 'eom') renderEom();
+    if (mount.classList.contains('is-ws') && !state.selected) paintPane();
   }
 
   async function setEom(employeeId, label) {
     var prev = state.eom;
-    state.eom = employeeId || null;            // optimistic: the radio has already moved
-    renderEom();
+    state.eom = employeeId || null;            // optimistic: the star has already moved
+    paintRail(); paintPane();
     try {
       var r = await GXCore.jsonp('set_eom',
         { token: token(), employee_id: employeeId || '' }, { retries: 1, timeoutMs: 12000 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'Save failed');
-      renderStatus(employeeId ? ('Employee of the Month: <b>' + esc(label) + '</b>')
-                              : 'Employee of the Month cleared');
+      toast(employeeId ? ('★ Employee of the Month · ' + label) : '★ Employee of the Month cleared');
       // Only now, once Core holds the new value — the engine logs what it READS, so asking any
       // earlier would just record the reign that is being replaced.
       state.eomHistory = undefined;
       loadEomHistory();
     } catch (e) {
       state.eom = prev;                        // put it back rather than lie about what is stored
-      renderEom();
-      renderStatus('Could not save: ' + esc(e.message || String(e)));
+      paintRail(); paintPane();
+      toast((e && e.message) || 'Could not save', true);
     }
   }
 
@@ -775,10 +680,17 @@
      false precision — and the one date we cannot know exactly is a cleared award's, which the
      engine can only stamp when it first noticed. */
   var MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  /* Read the YEAR and MONTH straight off the string. `new Date('2026-08-01')` parses as UTC
+     midnight and getMonth() answers in LOCAL time, so west of Greenwich every reign that began
+     on the 1st was reported a month early — the log read "Jul 2026 — present" for a pick made in
+     August. Same class of bug the suite's dates-are-TEXT rule exists to prevent, and there is no
+     conversion to get right here: the engine writes an ISO string and we want two fields of it. */
   function eomMonth(iso) {
-    var d = new Date(iso);
-    if (!iso || isNaN(d.getTime())) return '—';
-    return MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+    var m = /^(\d{4})-(\d{2})/.exec(String(iso || ''));
+    if (!m) return '—';
+    var mi = Number(m[2]) - 1;
+    if (mi < 0 || mi > 11) return '—';
+    return MONTHS[mi] + ' ' + m[1];
   }
   /* "Aug 2026 — present" while it runs, one month if it began and ended in the same one, a
      range otherwise. Reading "Mar 2026 – Mar 2026" tells you nothing the single month does not. */
@@ -789,109 +701,1191 @@
     return from === to ? from : from + ' – ' + to;
   }
 
+  /* The reign log. The face comes from the roster where they are still on it, but the NAME comes
+     from the log: someone since renamed or retired held it under the name they held it under, and
+     quietly restating the present would not be a record of the past. */
   function eomHistoryNodes() {
-    if (state.eomHistory === undefined) return [el('div', 'gx-muted', 'Loading…')];
-    if (state.eomHistoryErr) return [el('div', 'gx-muted', esc(state.eomHistoryErr))];
+    if (state.eomHistory === undefined) return [el('p', 'crew-hint', 'Loading the reign log…')];
+    if (state.eomHistoryErr) return [el('p', 'crew-hint', esc(state.eomHistoryErr))];
     if (!state.eomHistory.length) {
       return [el('p', 'crew-hint', 'Nobody has held it yet. Each pick is recorded here from now on.')];
     }
-
-    var byId = {};
-    (state.rows || []).forEach(function (r) { byId[String(r.employee_id)] = r; });
-
     var list = el('ol', 'crew-eomlog');
     state.eomHistory.forEach(function (h) {
-      var li = el('li', 'crew-eomlog-row' + (h.current ? ' is-current' : ''));
-
-      if (h.nobody) {
-        /* A deliberate "nobody" is part of the record, not a gap in it — the same distinction
-           Core draws by storing an empty value instead of deleting the key. */
-        li.appendChild(el('span', 'crew-eomlog-none', '—'));
-        li.appendChild(el('span', 'crew-eomlog-name', '<i>Nobody held it</i>'));
-      } else {
-        /* The face comes from the roster where they are still on it, but the NAME comes from the
-           log: someone who has since been renamed or retired held it under the name they held it
-           under, and quietly restating the present would not be a record of the past. */
-        li.appendChild(avatarPuck(byId[h.employee_id] || { name: h.name, employee_id: h.employee_id }));
-        li.appendChild(el('span', 'crew-eomlog-name', '<b>' + esc(h.name || h.employee_id) + '</b>'));
-      }
-
+      var li = el('li', 'crew-eomlog-row');
+      /* A deliberate "nobody" is part of the record, not a gap in it — the same distinction
+         Core draws by storing an empty value instead of deleting the key. */
+      li.appendChild(el('span', 'crew-eomlog-name' + (h.nobody ? ' is-nobody' : ''),
+        h.nobody ? 'Nobody held it' : esc(h.name || h.employee_id)));
       li.appendChild(el('span', 'crew-eomlog-when', esc(eomSpan(h))));
       /* Provenance, because the two are not the same claim. An observed reign is what GX Core
-         actually held; a backfilled one is somebody's memory of a month that predates the log,
-         accurate to the month at best. Saying which is which costs one word. */
-      if (h.backfilled) li.appendChild(el('span', 'crew-eomlog-by', 'recorded'));
-      else if (h.set_by) li.appendChild(el('span', 'crew-eomlog-by', 'set by ' + esc(h.set_by)));
+         actually held; a backfilled one is somebody's memory of a month that predates the log. */
+      li.appendChild(el('span', 'crew-eomlog-by',
+        h.backfilled ? 'recorded' : (h.set_by ? 'set by ' + esc(h.set_by) : '')));
       list.appendChild(li);
     });
-
-    return [list, el('p', 'crew-hint',
-      'Crew keeps this log — GX Core stores only who holds it right now, so a pick that is not ' +
-      'recorded here cannot be recovered later.')];
+    return [list];
   }
 
-  function renderEom() {
+
+  /* ── Toast ────────────────────────────────────────────────────────────────────
+     There is no Save button anywhere on this screen, so this is the only thing that says a
+     write landed. It NAMES the field — on a pane of twenty live controls "Saved" does not tell
+     you which one — and carries an undo where one is possible, because the cost of a live
+     control is that a stray keystroke commits. */
+  var toastNode = null, toastTimer = null;
+  function toast(msg, isErr, undo) {
+    if (toastNode && toastNode.parentNode) toastNode.parentNode.removeChild(toastNode);
+    clearTimeout(toastTimer);
+    toastNode = el('div', 'crew-toast' + (isErr ? ' is-err' : ''));
+    toastNode.appendChild(el('span', null, esc(msg)));
+    if (undo) {
+      var u = el('button', null, 'Undo');
+      u.type = 'button';
+      u.addEventListener('click', function () {
+        u.disabled = true;
+        undo();
+      });
+      toastNode.appendChild(u);
+    }
+    document.body.appendChild(toastNode);
+    // An error stays twice as long: it is the only notice you get, and 1.6s is not enough
+    // time to read a validation message you were not expecting.
+    toastTimer = setTimeout(function () {
+      if (toastNode && toastNode.parentNode) toastNode.parentNode.removeChild(toastNode);
+      toastNode = null;
+    }, isErr ? 4200 : 1600);
+  }
+
+
+  /* ── Which rows are in play ───────────────────────────────────────────────────
+     Three layers, applied in this order and never any other: SCOPE (what kind of record),
+     SEARCH (what you typed), STORE (which pills are lit). The store pill counts are taken
+     between the second and third, so the numbers stay truthful while you type and do not shift
+     depending on which pill you last pressed. */
+  function scopedRows() {
+    if (state.scope === 'retired') return state.rows.filter(function (r) { return r.retired; });
+    var live = state.rows.filter(function (r) { return !r.retired; });
+    if (state.scope === 'attention') return live.filter(function (r) { return (r.flags || []).length; });
+    return live;
+  }
+  /* Matches name, nickname, store label, role, employee number AND permit number. The last two
+     are why this is a search box and not a name filter: "who is #22" and "whose permit is
+     OLCC-151903" are both questions the roster gets asked. */
+  function searchRows(rows) {
+    var q = state.q.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(function (r) {
+      return (r.name + ' ' + (r.preferred_name || '') + ' ' + storeName(r.store) + ' ' +
+              r.role + ' ' + r.employee_number + ' ' + (r.permit_number || ''))
+             .toLowerCase().indexOf(q) >= 0;
+    });
+  }
+  function rowById(id) {
+    var hit = state.rows.filter(function (r) { return String(r.employee_id) === String(id); });
+    return hit[0] || null;
+  }
+
+
+  /* ── Shell ────────────────────────────────────────────────────────────────────
+     Built ONCE per load. Everything after this repaints a slot, never the whole page: the search
+     box has to keep focus while you type, and the people list has to keep its scroll position
+     when you select somebody halfway down it. */
+  var ui = null;
+
+  function renderWorkspace() {
     clear();
+    mount.classList.add('is-ws');
+    document.body.classList.add('crew-ws');
     navBar();
     renderUserChip();
+    initBugReport();
 
-    var live = (state.rows || []).filter(function (r) { return !r.retired; });
-    live.sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+    var subnav = el('div', 'crew-subnav');
 
-    var nodes = [];
-    var bar = el('div', 'crew-bar');
-    bar.innerHTML = '<span>One person at a time. Picking saves immediately' +
-      (state.canEdit ? '' : ' <em>(read-only — you cannot change this)</em>') + '.</span>';
-    nodes.push(bar);
+    var searchWrap = el('div', 'crew-searchwrap');
+    var search = el('input', 'crew-search');
+    search.type = 'search';
+    search.placeholder = 'Search people, permits, stores…';
+    search.value = state.q;
+    search.setAttribute('aria-label', 'Search people, permits, stores');
+    /* Repaints the pills, the counts and the list — never itself, which is the whole reason the
+       shell is built once. Rebuilding this input on every keystroke is what the old roster did,
+       and it had to hunt the node down and restore the caret afterwards. */
+    search.addEventListener('input', function () {
+      state.q = search.value;
+      paintPills(); paintRail();
+    });
+    searchWrap.appendChild(search);
+    searchWrap.appendChild(el('span', 'crew-searchico', '⌕'));
+    subnav.appendChild(searchWrap);
 
-    if (state.eom === undefined) {
-      nodes.push(el('div', 'gx-muted', 'Loading…'));
-      mount.appendChild(card('Employee of the Month', nodes));
+    var seg = el('div', 'crew-seg');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'Which records');
+    subnav.appendChild(seg);
+    subnav.appendChild(el('span', 'crew-div'));
+
+    var pillsSlot = el('div', 'crew-pills-slot');
+    pillsSlot.style.display = 'contents';
+    subnav.appendChild(pillsSlot);
+
+    var attn = el('button', 'crew-attn');
+    attn.type = 'button';
+    attn.addEventListener('click', function () {
+      state.selected = null; paintRail(); paintPane(); paintAttn();
+    });
+    subnav.appendChild(attn);
+
+    var body = el('div', 'crew-body');
+    var rail = el('div', 'crew-rail');
+    var pane = el('div', 'crew-pane');
+    body.appendChild(rail); body.appendChild(pane);
+
+    mount.appendChild(subnav);
+    mount.appendChild(body);
+
+    ui = { search: search, seg: seg, pills: pillsSlot, attn: attn, rail: rail, pane: pane };
+    paintSubnav(); paintRail(); paintPane();
+  }
+
+  function paintSubnav() { paintScope(); paintPills(); paintAttn(); }
+
+  function paintScope() {
+    if (!ui) return;
+    ui.seg.innerHTML = '';
+    var gaps = state.rows.filter(function (r) { return !r.retired && (r.flags || []).length; }).length;
+    [['active', 'Active'],
+     ['attention', 'Gaps ' + gaps],
+     ['retired', 'Retired' + (state.retiredTotal ? ' ' + state.retiredTotal : '')]
+    ].forEach(function (o) {
+      var b = el('button', 'crew-seg-btn' + (state.scope === o[0] ? ' is-on' : ''), esc(o[1]));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', state.scope === o[0] ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        if (state.scope === o[0]) return;
+        state.scope = o[0];
+        /* Retired rows are not in hand — the roster read asks for them explicitly, exactly as the
+           old "Show retired" checkbox did. Fetch once and keep them; switching back and forth
+           should not cost a ten-second read each time. */
+        if (o[0] === 'retired' && !state.fetchedRetired) { boot(true); return; }
+        paintSubnav(); paintRail();
+      });
+      ui.seg.appendChild(b);
+    });
+  }
+
+  function paintPills() {
+    if (!ui) return;
+    ui.pills.innerHTML = '';
+    var row = storePills(searchRows(scopedRows()));
+    if (row) ui.pills.appendChild(row);
+  }
+
+  function paintAttn() {
+    if (!ui) return;
+    var open = openItems();
+    var high = open.filter(function (it) { return it.severity === 'high'; }).length;
+    ui.attn.className = 'crew-attn' + (state.selected ? '' : ' is-on');
+    ui.attn.setAttribute('aria-pressed', state.selected ? 'false' : 'true');
+    ui.attn.innerHTML = '';
+    var dot = el('span', 'crew-attn-dot');
+    dot.style.background = high ? 'var(--gx-red)' : open.length ? 'var(--gx-gold)' : 'var(--gx-green)';
+    ui.attn.appendChild(dot);
+    ui.attn.appendChild(el('span', null,
+      state.review === null ? 'Checking…' : open.length ? open.length + ' to look at' : 'All clear'));
+  }
+
+
+  /* ── People list (left) ───────────────────────────────────────────────────────
+     Grouped by store, alphabetical inside each group, empty groups omitted entirely. The scroll
+     position is captured and restored around every repaint: selecting somebody must not move the
+     list under the cursor, or the next click lands on whoever slid into that spot. */
+  function paintRail() {
+    if (!ui) return;
+    var keepScroll = ui.rail.scrollTop;
+    ui.rail.innerHTML = '';
+
+    if (!state.rows.length) {
+      /* A skeleton, not an empty pane. The first roster read is ~10s cold, and an empty column
+         where the staff go reads as "nobody works here" rather than "still loading". */
+      for (var k = 0; k < 9; k++) ui.rail.appendChild(el('div', 'crew-skel'));
       return;
     }
 
-    var grid = el('div', 'crew-eom');
-    live.forEach(function (row) {
-      var isCur = state.eom && String(row.employee_id) === String(state.eom);
-      var lbl = el('label', 'crew-eom-pick' + (isCur ? ' is-current' : ''));
+    var matched = searchRows(scopedRows());
+    var rows = filterByStore(matched);
+    var ids = storesInRoster(state.rows);
+    var shown = 0;
 
-      var radio = el('input');
-      radio.type = 'radio';
-      radio.name = 'crewEom';
-      radio.checked = !!isCur;
-      radio.disabled = !state.canEdit;
-      radio.addEventListener('change', function () {
-        if (radio.checked) setEom(String(row.employee_id), row.name);
-      });
-      lbl.appendChild(radio);
-      lbl.appendChild(avatarPuck(row));
-
-      lbl.appendChild(el('span', 'crew-eom-name', nameHtml(row)));
-      lbl.appendChild(el('span', 'crew-eom-store', esc(row.store ? storeName(row.store) : '')));
-      grid.appendChild(lbl);
+    ids.forEach(function (id) {
+      var list = rows.filter(function (r) { return String(r.store || '') === id; }).sort(byName);
+      if (!list.length) return;
+      shown += list.length;
+      var head = el('div', 'crew-group-head');
+      var dot = el('span', 'crew-group-dot');
+      var c = storeColor(id);
+      if (c) dot.style.setProperty('--crew-group-color', c);
+      head.appendChild(dot);
+      head.appendChild(el('span', 'crew-group-label', esc(id ? storeName(id) : 'No store')));
+      head.appendChild(el('span', 'crew-group-n', String(list.length)));
+      ui.rail.appendChild(head);
+      list.forEach(function (r) { ui.rail.appendChild(personRow(r)); });
     });
 
-    if (!live.length) grid.appendChild(el('div', 'gx-muted', 'No active employees on the roster.'));
-    nodes.push(grid);
+    if (!shown) {
+      /* Name the filter that is hiding people. "No employees" in front of a 75-person roster
+         sent somebody looking for a data problem that was a pressed pill. */
+      var why = [];
+      if (state.q) why.push('matching “' + esc(state.q) + '”');
+      var picked = Object.keys(state.storeFilter);
+      if (picked.length) {
+        why.push('at ' + picked.map(function (x) {
+          return esc(x ? storeName(x) : 'No store'); }).join(' or '));
+      }
+      if (state.scope === 'attention') why.push('with a gap');
+      if (state.scope === 'retired')   why.push('retired');
+      ui.rail.appendChild(el('p', 'crew-rail-empty',
+        why.length ? 'Nobody ' + why.join(' ') + '.' : 'Nobody in this view.'));
+    }
+    ui.rail.scrollTop = keepScroll;
+  }
 
-    if (state.canEdit) {
-      var clearBtn = el('button', 'gx-btn', 'Clear');
-      clearBtn.disabled = !state.eom;
-      clearBtn.addEventListener('click', function () { setEom('', ''); });
-      var foot = el('div', 'crew-eom-foot');
-      foot.appendChild(clearBtn);
-      nodes.push(foot);
+  function personRow(r) {
+    var sel = String(state.selected) === String(r.employee_id);
+    var b = el('button', 'crew-person' + (sel ? ' is-sel' : '') + (r.retired ? ' is-retired' : ''));
+    b.type = 'button';
+    b.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    b.appendChild(avatarPuck(r));
+
+    var txt = el('span', 'crew-person-txt');
+    var named = !!String(r.name || '').trim();
+    txt.appendChild(el('span', 'crew-person-name' + (named ? '' : ' is-blank'),
+      named ? esc(r.name) : '⚠ Record blanked'));
+    txt.appendChild(el('span', 'crew-person-meta',
+      esc(r.role) + (r.preferred_name ? ' · “' + esc(r.preferred_name) + '”' : '')));
+    b.appendChild(txt);
+
+    if (state.eom && String(state.eom) === String(r.employee_id)) {
+      var star = el('span', 'crew-person-star', '★');
+      star.title = 'Employee of the Month';
+      b.appendChild(star);
+    }
+    var sev = gapSeverity(r);
+    if (sev) {
+      var d = el('span', 'crew-person-dot');
+      d.style.background = sev === 'high' ? 'var(--gx-red)' : 'var(--gx-gold)';
+      d.title = gapTitle(r);
+      b.appendChild(d);
     }
 
-    mount.appendChild(card('Employee of the Month', nodes));
-    mount.appendChild(card('Who has held it', eomHistoryNodes()));
+    b.addEventListener('click', function () {
+      state.selected = r.employee_id;
+      paintRail(); paintPane(); paintAttn();
+    });
+    return b;
   }
+
+
+  /* ── Right pane ───────────────────────────────────────────────────────────── */
+  var lastPainted = null;
+  function paintPane() {
+    if (!ui) return;
+    /* Panels belong to the person you opened them on. Carrying an open avatar picker or a
+       half-typed merge search across a selection change would show one person's editor over
+       another person's record. */
+    if (String(state.selected) !== String(lastPainted)) {
+      state.avatarOpen = false; state.merging = false; lastPainted = state.selected;
+      ui.pane.scrollTop = 0;
+    }
+    ui.pane.innerHTML = '';
+    var row = state.selected ? rowById(state.selected) : null;
+    /* The selection can outlive the record — a merge or a retire-then-refetch removes rows. Fall
+       back to the overview rather than rendering a person-shaped hole. */
+    if (state.selected && !row) state.selected = null;
+    if (row) renderPerson(row, ui.pane);
+    else renderOverview(ui.pane);
+  }
+
+
+  /* ── Overview: everything that needs a person ─────────────────────────────── */
+  function renderOverview(pane) {
+    var wrap = el('div', 'crew-ov');
+
+    if (state.identity && state.identity.note) wrap.appendChild(banner('warn', esc(state.identity.note)));
+    if (state.identity && state.identity.error)
+      wrap.appendChild(banner('error', 'GX Core identity read failed: ' + esc(state.identity.error)));
+
+    var live     = state.rows.filter(function (r) { return !r.retired; });
+    var open     = openItems();
+    var expiring = live.filter(function (r) { return r.permit_days_left != null && r.permit_days_left <= 90; }).length;
+    var gaps     = live.filter(function (r) { return (r.flags || []).length; }).length;
+
+    wrap.appendChild(el('h1', 'crew-ov-h1', 'Everything that needs a person'));
+    wrap.appendChild(el('p', 'crew-ov-sub',
+      open.length + ' open question' + (open.length === 1 ? '' : 's') + ' · ' +
+      expiring + ' permit' + (expiring === 1 ? '' : 's') + ' inside 90 days · ' +
+      gaps + ' record' + (gaps === 1 ? '' : 's') + ' with a gap'));
+
+    var stats = el('div', 'crew-stats');
+    [[live.length, 'active people', ''],
+     [open.length, 'open questions', open.length ? 'is-warn' : 'is-ok'],
+     [expiring, 'permits inside 90 days', expiring ? 'is-bad' : 'is-ok'],
+     [gaps, 'records with a gap', gaps ? 'is-warn' : 'is-ok']
+    ].forEach(function (t) {
+      var c = el('div', 'crew-stat');
+      c.appendChild(el('div', 'crew-stat-n' + (t[2] ? ' ' + t[2] : ''), String(t[0])));
+      c.appendChild(el('div', 'crew-stat-l', esc(t[1])));
+      stats.appendChild(c);
+    });
+    wrap.appendChild(stats);
+
+    var sect = el('div', 'crew-sect');
+    sect.appendChild(el('h2', null, 'Open questions'));
+    sect.appendChild(el('span', null, 'nothing here has been applied'));
+    wrap.appendChild(sect);
+
+    if (state.review === null) {
+      wrap.appendChild(el('p', 'crew-hint', 'Checking the HR sheet, METRC and Leaderboard for disagreements…'));
+    } else if (state.reviewErr) {
+      wrap.appendChild(banner('warn', 'Could not load the review queue: ' + esc(state.reviewErr) +
+        ' — the roster below is still current.'));
+    } else if (!open.length) {
+      wrap.appendChild(el('div', 'crew-clear', '✓ Every source agrees. Nothing to review.'));
+    } else {
+      open.forEach(function (it) { wrap.appendChild(queueCard(it)); });
+    }
+
+    var esect = el('div', 'crew-sect');
+    esect.appendChild(el('h2', null, 'Employee of the Month'));
+    esect.appendChild(el('span', null, 'picked here, shown on the kiosk'));
+    wrap.appendChild(esect);
+    wrap.appendChild(eomCard());
+    eomHistoryNodes().forEach(function (n) { wrap.appendChild(n); });
+
+    pane.appendChild(wrap);
+  }
+
+  function eomCard() {
+    var card = el('div', 'crew-eomcard');
+    var holder = state.eom ? rowById(state.eom) : null;
+    card.appendChild(avatarPuck(holder || { name: '—' }, 'md'));
+    var txt = el('div', 'crew-eomcard-txt');
+    txt.appendChild(el('div', 'crew-eomcard-name',
+      state.eom === undefined ? 'Loading…' : holder ? esc(holder.name) : 'Nobody'));
+    var since = (state.eomHistory || []).filter(function (h) { return h.current && !h.nobody; })[0];
+    txt.appendChild(el('div', 'crew-eomcard-sub', holder
+      ? esc(holder.role) + ' · ' + esc(storeName(holder.store)) +
+        (since ? ' · since ' + esc(eomMonth(since.started_at)) : '')
+      : 'Nobody holds it right now'));
+    card.appendChild(txt);
+    if (holder) {
+      var b = el('button', 'crew-btn is-gold', 'Open record');
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        state.selected = holder.employee_id; paintRail(); paintPane(); paintAttn();
+      });
+      card.appendChild(b);
+    }
+    return card;
+  }
+
+  /* One open question, on the overview. Severity rides the left edge only — a queue of ten
+     bordered entirely in red reads as ten alarms, and then as none. */
+  function queueCard(it) {
+    var box = el('div', 'crew-q sev-' + (it.severity || 'info'));
+
+    var who = el('button', 'crew-q-who');
+    who.type = 'button';
+    var row = rowById(it.employee_id);
+    who.appendChild(avatarPuck(row || { name: it.name, employee_id: it.employee_id }));
+    var txt = el('span', 'crew-q-txt');
+    txt.appendChild(el('span', 'crew-q-name', esc(it.name || it.employee_id)));
+    txt.appendChild(el('span', 'crew-q-kind', esc(KIND_LABEL[it.kind] || it.kind)));
+    who.appendChild(txt);
+    who.addEventListener('click', function () {
+      state.selected = it.employee_id; paintRail(); paintPane(); paintAttn();
+    });
+    box.appendChild(who);
+
+    box.appendChild(el('span', 'crew-q-detail', esc(it.detail || '')));
+
+    var acts = el('div', 'crew-q-acts');
+    if (state.canEdit) {
+      var go = el('button', 'crew-btn is-primary', esc(ctaFor(it.kind)));
+      var no = el('button', 'crew-btn', 'Not a problem');
+      go.type = 'button'; no.type = 'button';
+      var btns = [go, no];
+      go.addEventListener('click', function () {
+        if (it.kind === 'duplicate' &&
+            !confirm('Merge "' + it.merge_from_name + '" into "' + it.name + '"?\n\n' +
+                     'Nothing is deleted, and future imports of "' + it.merge_from_name +
+                     '" will resolve to ' + it.name + '.')) return;
+        resolveItem(it, 'accept', box, btns);
+      });
+      no.addEventListener('click', function () { resolveItem(it, 'dismiss', box, btns); });
+      acts.appendChild(go); acts.appendChild(no);
+    } else {
+      acts.appendChild(el('span', 'crew-hint', 'read-only'));
+    }
+    box.appendChild(acts);
+    return box;
+  }
+
+
+  /* ── Saving ───────────────────────────────────────────────────────────────────
+   * ONE FIELD PER WRITE. The old roster posted five at once behind an Edit-mode toggle; every
+   * control here is live, so each commits alone.
+   *
+   * That is only safe because both engine routes are PATCHES: an absent parameter means "leave
+   * this alone" and an empty one means "clear it", and both read-merge-write onto the existing
+   * row. Send the whole record instead and gxWrite_ blanks whatever you left out — which is
+   * dutchie_employee_id (SPIFF and Leaderboard attribution) and user_id (the email link),
+   * neither of which this screen even shows.
+   *
+   * The two routes are not interchangeable. Identity — name, nickname, store, role, hire date,
+   * avatar — lives in GX Core and goes through roster_identity, which also records a rename
+   * alias so the old employee_id keeps resolving. Everything else is a Crew attribute and goes
+   * through roster_save.
+   */
+  async function postField(row, route, field, value) {
+    var q = { token: token(), employee_id: row.employee_id };
+    q[field] = value;
+    var r = await Engine.jsonp(route === 'identity' ? 'roster_identity' : 'roster_save',
+      q, { timeoutMs: 45000, retries: 2 });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
+    /* saveIdentity_ answers ok:true with a WARNING when GX Core refused to clear a field, because
+       Core reads an empty value as "leave alone". Reporting that as a save would repeat exactly
+       the lie the warning exists to prevent. */
+    if (r.warning) throw new Error(r.warning);
+    return r;
+  }
+
+  /* The engine owns the definition of "questionable" (rowFlags_), and this does not second-guess
+     it — it adjusts the one flag belonging to the field just written, so the gold border and the
+     list's status dot stop lying the moment the value lands. The next roster read replaces
+     row.flags wholesale with the engine's answer. */
+  function retagFlag(row, flag, missing) {
+    var f = (row.flags || []).filter(function (x) { return x !== flag; });
+    if (missing) f.push(flag);
+    row.flags = f;
+  }
+
+  var IDENTITY_PATCH = {
+    full_name:      function (row, v) { row.name = v; retagFlag(row, 'name', !v); },
+    preferred_name: function (row, v) { row.preferred_name = v; },
+    home_store:     function (row, v) { row.store = v; retagFlag(row, 'store', !v); },
+    role_title:     function (row, v) {
+      row.role = v || 'Budtender'; row.role_is_default = !v; retagFlag(row, 'role', !v);
+    },
+    hire_date:      function (row, v) { row.hire_date = v; retagFlag(row, 'hire_date', !v); },
+    avatar_config:  function (row, v) { row.avatar_config = v; }
+  };
+
+  function applySaved(row, route, field, value, res) {
+    if (route === 'identity') {
+      (IDENTITY_PATCH[field] || function () {})(row, value);
+      return;
+    }
+    // roster_save answers with the whole stored record, so take its normalised values rather
+    // than the raw text: "17.50 " comes back "17.50", and "3-7" comes back "03-07".
+    var saved = (res && res.saved) || {};
+    ['wage', 'shirt_size', 'birthday', 'permit_number', 'permit_expires', 'permit_status']
+      .forEach(function (k) { if (saved[k] != null) row[k] = saved[k]; });
+    if (saved.celebrations_opt_out != null) row.celebrations_opt_out = !!saved.celebrations_opt_out;
+    retagFlag(row, 'wage', !row.wage);
+    retagFlag(row, 'birthday', !row.birthday);
+    retagFlag(row, 'permit', !row.permit_number);
+  }
+
+  /* One save, with the undo the live-control trade demands: nothing here is armed, so a stray
+     keystroke commits, and the toast is the only place to catch it. Undo re-posts the previous
+     value through the same patch — it is a second write, not a rollback, which is the honest
+     shape of it when the record has already changed. */
+  function saveField(row, route, field, value, label, prev, after) {
+    return postField(row, route, field, value)
+      .then(function (r) {
+        applySaved(row, route, field, value, r);
+        var canUndo = prev != null && String(prev) !== String(value) &&
+                      !(field === 'full_name' && !String(prev).trim());
+        toast('Saved · ' + label, false, canUndo ? function () {
+          saveField(row, route, field, prev, label, null, after);
+        } : null);
+        if (after) after(r);
+        paintRail(); paintPills(); paintScope();
+      })
+      .catch(function (e) {
+        toast((e && e.message) || 'Save failed', true);
+        if (after) after(null, e);
+        throw e;
+      });
+  }
+
+
+  /* ── One field, one card ──────────────────────────────────────────────────────
+     Text commits on a 600ms pause and again on blur; selects and dates commit the instant they
+     change, because there is no half-typed state to wait out. The three fields a careless write
+     damages worst — name, store and role — ask once before overwriting a value that is already
+     there; the rest just save. */
+  function fieldCard(row, o) {
+    var card = el('label', 'crew-field');
+    card.appendChild(el('span', 'crew-field-label', esc(o.label)));
+
+    var input;
+    if (o.options) {
+      input = el('select');
+      input.innerHTML = o.options.map(function (op) {
+        return '<option value="' + esc(op[0]) + '"' + (String(o.value || '') === String(op[0]) ? ' selected' : '') +
+               '>' + esc(op[1]) + '</option>';
+      }).join('');
+    } else {
+      input = el('input');
+      input.type = o.type || 'text';
+      input.value = o.value || '';
+      if (o.placeholder) input.placeholder = o.placeholder;
+    }
+    if (o.disabled || !state.canEdit) input.disabled = true;
+    if (o.title) input.title = o.title;
+    card.appendChild(input);
+
+    var note = el('span', 'crew-field-note');
+    card.appendChild(note);
+
+    function paintNote() {
+      var n = o.note(row);
+      card.className = 'crew-field' + (n.kind === 'gap' ? ' is-gap' : '');
+      note.className = 'crew-field-note' + (n.kind === 'bad' ? ' is-bad' : '');
+      note.textContent = n.text;
+    }
+    paintNote();
+    if (o.disabled || !state.canEdit) return card;
+
+    var last = String(o.value == null ? '' : o.value);
+    var timer = null;
+
+    function commit() {
+      clearTimeout(timer);
+      var v = input.value;
+      if (input.type !== 'date' && !o.options) v = v.trim();
+      if (v === last) return;
+      var prev = last;
+      if (o.confirm && String(prev).trim() &&
+          !confirm('Change ' + o.label.toLowerCase() + ' from “' + prev + '” to “' +
+                   (v || '— nothing —') + '”?')) {
+        input.value = prev;
+        return;
+      }
+      last = v;
+      input.disabled = true;
+      saveField(row, o.route, o.field, v, o.label.toLowerCase(), prev, function (r, err) {
+        input.disabled = false;
+        if (err) { last = prev; input.value = prev; }
+        else if (!o.options) input.value = (o.read ? o.read(row) : v);
+        paintNote();
+      }).catch(function () {});
+    }
+
+    if (o.options || input.type === 'date') input.addEventListener('change', commit);
+    else {
+      input.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(commit, 600);
+      });
+      input.addEventListener('change', commit);       // blur / Enter beats the timer
+    }
+    return card;
+  }
+
+
+  /* ── Person record ────────────────────────────────────────────────────────────
+     One person's whole record on one screen — what used to be a table row, an inline identity
+     panel and two sibling tabs. */
+  function renderPerson(row, pane) {
+    pane.appendChild(personHeader(row));
+
+    var body = el('div', 'crew-pbody');
+
+    if (state.avatarOpen) body.appendChild(avatarPanel(row));
+
+    /* This person's open questions come FIRST, above their own fields: a disagreement should be
+       answered where the record is being read, not on a screen you have to remember to visit. */
+    itemsFor(row.employee_id).forEach(function (it) { body.appendChild(personQuestion(it, row)); });
+
+    body.appendChild(fieldGrid(row));
+
+    var ps = el('div', 'crew-sect');
+    ps.style.marginTop = '0';
+    ps.appendChild(el('h2', null, 'OLCC permit'));
+    ps.appendChild(el('span', null, 'METRC owns these · read-only here'));
+    body.appendChild(ps);
+    body.appendChild(permitCard(row));
+
+    var ls = el('div', 'crew-sect');
+    ls.appendChild(el('h2', null, 'Links &amp; visibility'));
+    body.appendChild(ls);
+    body.appendChild(linksCard(row));
+
+    body.appendChild(personFooter(row));
+    /* Below the button that opened it, not above — the chooser is what "Merge duplicate…" does
+       next, and putting it before the footer made it read as part of the record. */
+    if (state.merging && state.canEdit) body.appendChild(mergeBox(row));
+    pane.appendChild(body);
+  }
+
+  function personHeader(row) {
+    var head = el('div', 'crew-phead');
+    var inner = el('div', 'crew-phead-in');
+    inner.appendChild(avatarPuck(row, 'xl'));
+
+    var txt = el('div', 'crew-phead-txt');
+    var nameRow = el('div', 'crew-pnamerow');
+
+    /* The legal name edits in place. It is a heading that happens to be correctable, not a form
+       field — but it is also the single most damaging thing on this pane to change by accident,
+       so it is the one text input that confirms before overwriting. */
+    var nameIn = el('input', 'crew-pname');
+    nameIn.value = row.name || '';
+    nameIn.placeholder = 'Record blanked — put the name back';
+    nameIn.setAttribute('aria-label', 'Full name');
+    nameIn.disabled = !state.canEdit;
+    nameIn.style.width = Math.max(200, String(row.name || '').length * 14) + 'px';
+    if (!String(row.name || '').trim()) nameIn.classList.add('crew-noname');
+    var lastName = row.name || '', nameTimer = null;
+    function commitName() {
+      clearTimeout(nameTimer);
+      var v = nameIn.value.replace(/\s+/g, ' ').trim();
+      if (v === lastName) return;
+      var prev = lastName;
+      if (String(prev).trim() &&
+          !confirm('Change the legal name from “' + prev + '” to “' + v + '”?\n\n' +
+                   'GX Core records a rename alias, so Leaderboard and SPIFF keep resolving the ' +
+                   'old key — but this is the name payroll and METRC are matched against.')) {
+        nameIn.value = prev; return;
+      }
+      lastName = v;
+      nameIn.disabled = true;
+      saveField(row, 'identity', 'full_name', v, 'full name', prev, function (r, err) {
+        nameIn.disabled = false;
+        if (err) { lastName = prev; nameIn.value = prev; }
+        else { nameIn.classList.remove('crew-noname'); paintPane(); }
+      }).catch(function () {});
+    }
+    if (state.canEdit) {
+      nameIn.addEventListener('input', function () {
+        clearTimeout(nameTimer); nameTimer = setTimeout(commitName, 600);
+      });
+      nameIn.addEventListener('change', commitName);
+    }
+    nameRow.appendChild(nameIn);
+    if (row.preferred_name) nameRow.appendChild(el('span', 'crew-pnick', '“' + esc(row.preferred_name) + '”'));
+    if (row.retired) nameRow.appendChild(el('span', 'crew-tag', 'retired'));
+    txt.appendChild(nameRow);
+
+    var meta = el('div', 'crew-pmeta');
+    var st = el('span', 'crew-pmeta-store');
+    var dot = el('span', 'crew-pmeta-dot');
+    var c = storeColor(row.store);
+    if (c) dot.style.setProperty('--crew-store-color', c);
+    st.appendChild(dot);
+    st.appendChild(el('span', null, esc(row.store ? storeName(row.store) : 'No store')));
+    meta.appendChild(st);
+    [esc(row.role),
+     row.time_with_company && row.time_with_company !== '—'
+       ? esc(row.time_with_company) + ' with the company' : 'no hire date on file'
+    ].forEach(function (t) {
+      meta.appendChild(el('span', 'crew-pmeta-sep', '·'));
+      meta.appendChild(el('span', null, t));
+    });
+    meta.appendChild(el('span', 'crew-pmeta-sep', '·'));
+    meta.appendChild(el('span', 'crew-pmeta-num', '#' + esc(row.employee_number || '—')));
+    txt.appendChild(meta);
+    inner.appendChild(txt);
+
+    var acts = el('div', 'crew-pacts');
+    var isEom = state.eom && String(state.eom) === String(row.employee_id);
+    var eomBtn = el('button', 'crew-btn crew-eomtog' + (isEom ? ' is-on' : ''), '★ EoM');
+    eomBtn.type = 'button';
+    eomBtn.disabled = !state.canEdit;
+    eomBtn.title = isEom ? 'Holds Employee of the Month — click to clear it'
+                         : 'Make them Employee of the Month';
+    /* Keyed on employee_id, never on a name: Leaderboard used to key this on a name-derived
+       string, so renaming somebody silently dropped the star off the board. */
+    eomBtn.addEventListener('click', function () {
+      setEom(isEom ? '' : String(row.employee_id), row.name);
+    });
+    acts.appendChild(eomBtn);
+
+    var avaBtn = el('button', 'crew-btn', state.avatarOpen ? 'Close avatar' : 'Avatar');
+    avaBtn.type = 'button';
+    avaBtn.disabled = !state.canEdit;
+    avaBtn.addEventListener('click', function () {
+      state.avatarOpen = !state.avatarOpen;
+      paintPane();
+    });
+    acts.appendChild(avaBtn);
+    inner.appendChild(acts);
+
+    head.appendChild(inner);
+    return head;
+  }
+
+  /* The same card as the overview's, plus the now → proposed chips. They belong here rather than
+     there because this is where you can see what the proposal would replace. */
+  function personQuestion(it, row) {
+    var box = el('div', 'crew-pq sev-' + (it.severity || 'info'));
+    var head = el('div', 'crew-pq-head');
+    head.appendChild(el('span', 'crew-pq-kind', esc(KIND_LABEL[it.kind] || it.kind)));
+    head.appendChild(el('span', 'crew-pq-src', esc(it.source || '')));
+    box.appendChild(head);
+    box.appendChild(el('p', 'crew-pq-detail', esc(it.detail || '')));
+
+    /* Both halves or neither. A compliance item's "proposed value" is a verb — renew, revoke,
+       assign next number — so pairing it against the current expiry date reads as a swap that is
+       not on offer, and a lone chip beside a "—" says even less. */
+    if (it.current_value && it.proposed_value) {
+      var cmp = el('div', 'crew-pq-cmp');
+      cmp.appendChild(el('span', 'crew-pq-chip', esc(it.current_value)));
+      cmp.appendChild(el('span', 'crew-pq-arrow', '→'));
+      cmp.appendChild(el('span', 'crew-pq-chip is-proposed', esc(it.proposed_value)));
+      box.appendChild(cmp);
+    }
+
+    if (state.canEdit) {
+      var acts = el('div', 'crew-pq-acts');
+      var go = el('button', 'crew-btn is-primary', esc(ctaFor(it.kind)));
+      var no = el('button', 'crew-btn', 'Keep what we have');
+      go.type = 'button'; no.type = 'button';
+      var btns = [go, no];
+      go.addEventListener('click', function () {
+        if (it.kind === 'duplicate' &&
+            !confirm('Merge "' + it.merge_from_name + '" into "' + it.name + '"?\n\n' +
+                     'Nothing is deleted, and future imports of "' + it.merge_from_name +
+                     '" will resolve to ' + it.name + '.')) return;
+        resolveItem(it, 'accept', box, btns);
+      });
+      /* "Keep" and "dismiss" are different recorded answers, not two words for closing a card:
+         keep says the value we hold is right, dismiss says the question was never a problem. */
+      no.addEventListener('click', function () { resolveItem(it, 'keep', box, btns); });
+      acts.appendChild(go); acts.appendChild(no);
+      box.appendChild(acts);
+    }
+    return box;
+  }
+
+  function fieldGrid(row) {
+    var grid = el('div', 'crew-fields');
+
+    var storeOpts = [['', '— none —']]
+      .concat(Object.keys(state.stores).map(function (sid) { return [sid, state.stores[sid]]; }))
+      .concat([['corporate', 'Corporate']]);
+
+    /*
+     * Role is a closed set of four, so it is picked and never typed. A free-text box is how
+     * "Assistant Store Manager" and "Assistant Manager" both ended up in a registry Leaderboard
+     * groups by, and neither one is a typo anybody would notice.
+     *
+     * The one subtlety: a row may already HOLD a title outside the four, put there by an older
+     * import. Dropping it from the list would mean opening this pane to fix a birthday and
+     * silently re-filing that person as somebody else on the next save. So an off-list value is
+     * carried as its own option, selected, and labelled — visible, kept, one click from correct.
+     */
+    var held = row.role_is_default ? '' : String(row.role || '').trim();
+    var offList = held && state.roleTitles.indexOf(held) < 0;
+    var roleOpts = [['', '— none — (shows as Budtender)']]
+      .concat(state.roleTitles.map(function (t) { return [t, t]; }))
+      .concat(offList ? [[held, held + ' — not a standard role']] : []);
+
+    [
+      { label: 'Nickname', route: 'identity', field: 'preferred_name', value: row.preferred_name,
+        placeholder: 'shown on the board',
+        note: function () { return { text: 'What the kiosk calls them', kind: '' }; },
+        read: function (r) { return r.preferred_name || ''; } },
+
+      { label: 'Store', route: 'identity', field: 'home_store', value: row.store,
+        options: storeOpts, confirm: true,
+        note: function (r) { return r.store ? { text: '', kind: '' }
+                                            : { text: 'No store on file', kind: 'gap' }; } },
+
+      { label: 'Role', route: 'identity', field: 'role_title', value: held,
+        options: roleOpts, confirm: true,
+        note: function (r) {
+          return has(r, 'no_account')
+            ? { text: 'Manager with no GX account', kind: 'bad' }
+            : { text: 'One of four titles', kind: '' };
+        } },
+
+      { label: 'Hire date', route: 'identity', field: 'hire_date', value: row.hire_date, type: 'date',
+        note: function (r) { return r.hire_date
+          ? { text: 'Drives tenure and anniversaries', kind: '' }
+          : { text: 'Missing — no tenure, no anniversary', kind: 'gap' }; } },
+
+      { label: 'Wage', route: 'attr', field: 'wage', value: row.wage, placeholder: '0.00',
+        note: function (r) { return r.wage ? { text: 'Hourly', kind: '' }
+                                           : { text: 'Not set', kind: 'gap' }; },
+        read: function (r) { return r.wage || ''; } },
+
+      { label: 'Birthday', route: 'attr', field: 'birthday', value: row.birthday, placeholder: 'MM-DD',
+        title: 'Month and day only — GX Crew does not store birth years.',
+        note: function (r) { return { text: 'Month and day only', kind: r.birthday ? '' : 'gap' }; },
+        read: function (r) { return r.birthday || ''; } },
+
+      { label: 'Shirt size', route: 'attr', field: 'shirt_size', value: row.shirt_size,
+        options: [['', '—']].concat(state.shirtSizes.map(function (x) { return [x, x]; })),
+        note: function () { return { text: '', kind: '' }; } },
+
+      /* Shown, never editable. The number is issued by the system and never reused — typing one
+         risks handing a new person a retired employee's history. The engine refuses it outright. */
+      { label: 'Employee #', value: row.employee_number || 'auto', disabled: true,
+        note: function () { return { text: 'Issued, never reused', kind: '' }; } }
+    ].forEach(function (o) { grid.appendChild(fieldCard(row, o)); });
+
+    return grid;
+  }
+
+
+  /* ── OLCC permit ──────────────────────────────────────────────────────────────
+   * READ-ONLY, because METRC owns every value in it and an import overwrites whatever is here
+   * the next time one runs. Typing over it would be a change with a shelf life.
+   *
+   * With ONE exception, and it is the reason the exception exists at all: when there is no
+   * permit number on file the queue raises a `missing_permit` item at HIGH severity whose only
+   * offered answer is "Mark handled" — an acknowledgement, not a fix. Seven active staff are in
+   * that state. Leaving the card read-only there would make the highest-severity item on the
+   * board unresolvable except by lying about it, so an empty permit becomes two inputs and
+   * nothing else does. saveRosterAttrs_ has allowed exactly this since it was written.
+   */
+  function permitCard(row) {
+    var pd = row.permit_days_left;
+    var expired = pd != null && pd < 0;
+    var box = el('div', 'crew-permit' + ((expired || !row.permit_number) ? ' is-bad' : ''));
+
+    var top = el('div', 'crew-permit-top');
+    var statusCls = !row.permit_status ? 'is-warn'
+      : ['active', 'valid'].indexOf(String(row.permit_status).toLowerCase()) >= 0
+        ? (pd != null && pd <= 90 ? 'is-warn' : 'is-ok') : 'is-bad-t';
+
+    if (row.permit_number || !state.canEdit) {
+      top.appendChild(el('span', 'crew-permit-no', esc(row.permit_number || 'No permit number on file')));
+      top.appendChild(el('span', 'crew-permit-pill ' + statusCls,
+        esc(row.permit_status ? String(row.permit_status).toUpperCase() : 'UNKNOWN')));
+      var line = row.permit_expires
+        ? (expired ? 'Expired ' + Math.abs(pd) + ' days ago · ' + row.permit_expires
+                   : pd + ' days left · expires ' + row.permit_expires)
+        : 'METRC has no matching record under this name';
+      var lineCls = !row.permit_expires ? 'is-warn' : expired ? 'is-bad-t' : pd <= 90 ? 'is-warn' : '';
+      top.appendChild(el('span', 'crew-permit-line ' + lineCls, esc(line)));
+    } else {
+      var noIn = el('input', 'crew-permit-in is-no');
+      noIn.placeholder = 'OLCC-000000';
+      noIn.setAttribute('aria-label', 'OLCC permit number');
+      var exIn = el('input', 'crew-permit-in');
+      exIn.type = 'date';
+      exIn.setAttribute('aria-label', 'Permit expiry');
+      var add = el('button', 'crew-btn', 'Add permit');
+      add.type = 'button';
+      add.addEventListener('click', async function () {
+        var num = noIn.value.trim();
+        if (!num) { toast('Type the permit number first', true); return; }
+        add.disabled = true;
+        try {
+          await postField(row, 'attr', 'permit_number', num);
+          if (exIn.value) {
+            var r2 = await postField(row, 'attr', 'permit_expires', exIn.value);
+            applySaved(row, 'attr', 'permit_expires', exIn.value, r2);
+          } else {
+            row.permit_number = num;
+          }
+          retagFlag(row, 'permit', false);
+          toast('Saved · OLCC permit');
+          paintRail(); paintPane();
+        } catch (e) {
+          add.disabled = false;
+          toast((e && e.message) || 'Save failed', true);
+        }
+      });
+      top.appendChild(noIn); top.appendChild(exIn); top.appendChild(add);
+      var hint = el('span', 'crew-permit-line is-warn', 'METRC has no record — type it in if you have it');
+      top.appendChild(hint);
+    }
+    box.appendChild(top);
+
+    /* A two-year permit drawn as elapsed time. It is a shape, not a measurement — the point is
+       that a bar nearly full is a renewal you should already be arranging. */
+    var bar = el('div', 'crew-permit-bar');
+    var fill = el('div', 'crew-permit-fill');
+    fill.style.width = pd == null ? '0%'
+      : expired ? '100%' : Math.max(4, Math.min(100, Math.round((1 - pd / 730) * 100))) + '%';
+    fill.style.background = statusCls === 'is-ok' ? 'var(--gx-green)'
+      : statusCls === 'is-warn' ? 'var(--gx-gold)' : 'var(--gx-red)';
+    bar.appendChild(fill);
+    box.appendChild(bar);
+    return box;
+  }
+
+
+  /* ── Links & visibility ───────────────────────────────────────────────────────
+     The three columns a partial write destroys, shown together and named, because nothing else
+     on this pane would tell you they exist until they were gone. */
+  function linksCard(row) {
+    var box = el('div', 'crew-links');
+    var pills = el('div', 'crew-linkrow');
+    [['Dutchie', row.dutchie_employee_id || 'not linked', row.dutchie_employee_id ? '' : 'is-warn'],
+     ['GX account', row.user_id || 'none',
+       row.user_id ? '' : (has(row, 'no_account') ? 'is-bad' : '')],
+     ['Employee', '#' + (row.employee_number || '—'), '']
+    ].forEach(function (l) {
+      var p = el('span', 'crew-linkpill' + (l[2] ? ' ' + l[2] : ''));
+      p.appendChild(el('span', 'crew-linkpill-l', esc(l[0])));
+      p.appendChild(el('span', null, esc(l[1])));
+      pills.appendChild(p);
+    });
+    box.appendChild(pills);
+    box.appendChild(el('p', 'crew-linknote',
+      'Every save is read-merge-write, so these links survive it. Blank one and the join to ' +
+      'SPIFF, Leaderboard or email breaks silently.'));
+
+    /* Deliberately NOT inferred from role or store: `corporate` and `Admin` both belong to real
+       staff who should be celebrated. It is off for the handful of people who are on the roster
+       for access rather than for work. Stored inverted — the column is an opt-OUT. */
+    var lbl = el('label', 'crew-celeb');
+    var cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = !row.celebrations_opt_out;
+    cb.disabled = !state.canEdit;
+    cb.addEventListener('change', function () {
+      var on = cb.checked;
+      cb.disabled = true;
+      /* 'no', not '' — an empty value is an explicit clear on this route, and while that happens
+         to store the same thing, saying what you mean is what keeps the next reader honest. */
+      saveField(row, 'attr', 'celebrations_opt_out', on ? 'no' : 'yes',
+        on ? 'celebrations on' : 'celebrations off', null, function (r, err) {
+          cb.disabled = false;
+          if (err) cb.checked = !on;
+        }).catch(function () {});
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(el('span', null, 'Show birthday and work anniversary on the kiosk'));
+    box.appendChild(lbl);
+    return box;
+  }
+
+
+  /* ── Footer: merge and retire ─────────────────────────────────────────────── */
+  function personFooter(row) {
+    var foot = el('div', 'crew-pfoot');
+    if (!state.canEdit) {
+      foot.appendChild(el('span', 'crew-hint', 'Your role is read-only on the Crew roster.'));
+      return foot;
+    }
+
+    var mg = el('button', 'crew-btn', state.merging ? 'Cancel merge' : 'Merge duplicate…');
+    mg.type = 'button';
+    mg.addEventListener('click', function () { state.merging = !state.merging; paintPane(); });
+    foot.appendChild(mg);
+
+    /* Nothing is deleted. Retired staff keep their record, their permit history and their
+       employee number; they drop out of the default view. */
+    var ret = el('button', 'crew-btn is-danger crew-pfoot-right', row.retired ? 'Un-retire' : 'Retire');
+    ret.type = 'button';
+    ret.addEventListener('click', async function () {
+      if (!row.retired && !confirm('Retire ' + (row.name || 'this person') + '?\n\n' +
+          'They drop out of the roster but keep their record, permit history and employee number.')) return;
+      ret.disabled = true;
+      try {
+        var r = await Engine.jsonp('roster_retire',
+          { token: token(), employee_id: row.employee_id, retired: row.retired ? '0' : '1' },
+          { timeoutMs: 45000, retries: 2 });
+        if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
+        toast(row.retired ? 'Un-retired · ' + row.name : 'Retired · ' + row.name);
+        boot(true);
+      } catch (e) {
+        ret.disabled = false;
+        toast((e && e.message) || 'Failed', true);
+      }
+    });
+    foot.appendChild(ret);
+    return foot;
+  }
+
+  /* Merging is picking the OTHER record. The old roster did it as a two-click dance across a
+     table — mark a row, scroll, press "keep this one" on another — which only worked while both
+     rows were on screen at once. There is no table now, so it is a search: this record is always
+     the one kept, and you choose who folds into it. */
+  function mergeBox(row) {
+    var box = el('div', 'crew-mergebox');
+    box.appendChild(el('p', 'crew-hint',
+      '<b style="color:var(--gx-text)">' + esc(row.name) + '</b> is kept. Any field they are ' +
+      'missing is filled from the record you pick. Nothing is deleted, and future imports of ' +
+      'the other name resolve here.'));
+
+    var find = el('input', 'crew-search');
+    find.type = 'search';
+    find.placeholder = 'Find the duplicate record…';
+    find.style.marginTop = '10px';
+    box.appendChild(find);
+
+    var list = el('div', 'crew-mergelist');
+    box.appendChild(list);
+
+    function paint() {
+      list.innerHTML = '';
+      var q = find.value.trim().toLowerCase();
+      var cands = state.rows.filter(function (r) {
+        return String(r.employee_id) !== String(row.employee_id) &&
+               (!q || (r.name + ' ' + r.employee_number + ' ' + storeName(r.store)).toLowerCase().indexOf(q) >= 0);
+      }).sort(byName).slice(0, 40);
+      if (!cands.length) { list.appendChild(el('p', 'crew-hint', 'Nobody matches.')); return; }
+      cands.forEach(function (c) {
+        var b = el('button', 'crew-mergerow');
+        b.type = 'button';
+        b.appendChild(avatarPuck(c));
+        b.appendChild(el('span', null, esc(c.name || c.employee_id) +
+          (c.retired ? ' <span class="crew-tag">retired</span>' : '')));
+        b.appendChild(el('em', null, esc(storeName(c.store)) + ' · #' + esc(c.employee_number || '—')));
+        b.addEventListener('click', async function () {
+          if (!confirm('Merge "' + c.name + '" into "' + row.name + '"?\n\n' +
+                       row.name + ' is kept. Any field they are missing is filled from ' +
+                       c.name + '. Nothing is deleted, and future imports of "' + c.name +
+                       '" will resolve to ' + row.name + '.')) return;
+          b.disabled = true;
+          try {
+            var r = await Engine.jsonp('roster_merge',
+              { token: token(), keep: row.employee_id, merge: c.employee_id, confirm: 'yes' },
+              { timeoutMs: 45000, retries: 2 });
+            if (!r || !r.ok) throw new Error((r && r.error) || 'Merge failed');
+            state.merging = false;
+            toast('Merged · ' + c.name + ' → ' + row.name);
+            boot(true);
+          } catch (e) {
+            b.disabled = false;
+            toast((e && e.message) || 'Merge failed', true);
+          }
+        });
+        list.appendChild(b);
+      });
+    }
+    find.addEventListener('input', paint);
+    paint();
+    return box;
+  }
+
+
+  /* ── Avatar picker ────────────────────────────────────────────────────────────
+   * Lives beside the nickname because they are the same decision — how this person is presented
+   * on the kiosk — and Crew is now the only place either is set.
+   *
+   * The one compound control on a screen of single-field saves, so it debounces harder (900ms)
+   * and serialises: a config is fourteen dropdowns describing ONE value, and two writes in
+   * flight at once would land in whichever order Apps Script finished them.
+   */
+  function avatarPanel(row) {
+    var pick = el('div', 'crew-avapick');
+    var working = parseCfg(row);
+    var preview = el('div', 'crew-avapreview');
+    var seedNote = el('p', 'crew-editnote');
+    var controls = el('div', 'crew-avacontrols');
+    var timer = null, inFlight = false, queued = null;
+
+    function push() {
+      var payload = working ? JSON.stringify(working) : '';
+      if (inFlight) { queued = payload; return; }
+      inFlight = true;
+      postField(row, 'identity', 'avatar_config', payload)
+        .then(function () {
+          row.avatar_config = payload;
+          toast('Saved · avatar');
+          paintRail();
+        })
+        .catch(function (e) { toast((e && e.message) || 'Could not save the avatar', true); })
+        .then(function () {
+          inFlight = false;
+          if (queued != null) { var q = queued; queued = null; if (q !== payload) push(); }
+        });
+    }
+    function schedule() { clearTimeout(timer); timer = setTimeout(push, 900); }
+
+    function paintPreview() {
+      preview.innerHTML = '';
+      preview.appendChild(avatarPuck({ name: row.name, employee_id: row.employee_id,
+        avatar_seed: row.avatar_seed,
+        avatar_config: working ? JSON.stringify(working) : '' }, 'lg'));
+      seedNote.innerHTML = working
+        ? 'Seed pinned to employee&nbsp;#<b>' + esc(row.avatar_seed || '—') +
+          '</b> — renaming will not change this face.'
+        : 'No avatar set — the kiosk shows initials.';
+    }
+    function paintControls() {
+      controls.innerHTML = '';
+      if (!working) return;
+      OPTION_ORDER.forEach(function (key) {
+        // Only offer a colour when the feature it colours is actually switched on.
+        if (key === 'hatColor' && !HAT_TOPS[working.top]) return;
+        if (key === 'hairColor' && (working.top === '_none' || HAT_TOPS[working.top])) return;
+        if (key === 'facialHairColor' && working.facialHair === '_none') return;
+        if (key === 'accessoriesColor' && working.accessories === '_none') return;
+        // Only graphicShirt has a graphic to choose. Same rule as the colours above.
+        if (key === 'clothingGraphic' && working.clothing !== 'graphicShirt') return;
+        /* A config may not carry every key — Sky's had no hatColor at all, so choosing a hat
+           rendered a control showing a value the config did not hold, and the avatar came back
+           with DiceBear's default instead. Adopt the displayed value into the config so what you
+           see is always what gets saved. */
+        if (working[key] == null) working[key] = AVATAR_OPTIONS[key][0];
+        var wrap = el('label', 'crew-avaopt');
+        var isColor = !!COLOR_KEYS[key];
+        var opts = AVATAR_OPTIONS[key].map(function (v) {
+          var lbl = v === '_none' ? 'none' : v === '_gchat' ? 'GC hat' : v;
+          return '<option value="' + esc(v) + '"' + (working[key] === v ? ' selected' : '') +
+                 '>' + esc(lbl) + '</option>';
+        }).join('');
+        wrap.innerHTML = '<span>' + esc(OPTION_LABEL[key] || key) + '</span>' +
+          '<select>' + opts + '</select>' +
+          (isColor ? '<i class="crew-avaswatch" style="background:#' + esc(working[key] || '000') + '"></i>' : '');
+        wrap.querySelector('select').addEventListener('change', function () {
+          working[key] = this.value;
+          // Controls first: choosing a hat introduces hatColor, and paintControls is what adopts
+          // that default into `working`. Painting the preview first would render one change
+          // behind, silently dropping the new key from the URL.
+          paintControls(); paintPreview(); schedule();
+        });
+        controls.appendChild(wrap);
+      });
+    }
+
+    var acts = el('div', 'crew-avaacts');
+    var bStart = el('button', 'crew-btn', working ? 'Reset to default' : 'Give them an avatar');
+    bStart.type = 'button';
+    var bClear = el('button', 'crew-btn', 'Remove avatar');
+    bClear.type = 'button';
+    bClear.style.display = working ? '' : 'none';
+    bStart.addEventListener('click', function () {
+      working = JSON.parse(JSON.stringify(DEFAULT_AVATAR));
+      bStart.textContent = 'Reset to default';
+      bClear.style.display = '';
+      paintControls(); paintPreview(); push();
+    });
+    /* Works as of GXCore v174: the engine NAMES avatar_config in a clear= list, because an empty
+       value on its own means "leave alone" in Core's patch path. This button spent a release
+       disabled rather than deleted — it used to clear the preview, report success and let the
+       face come back on reload. */
+    bClear.addEventListener('click', function () {
+      working = null;
+      bStart.textContent = 'Give them an avatar';
+      bClear.style.display = 'none';
+      paintControls(); paintPreview(); push();
+    });
+    acts.appendChild(bStart); acts.appendChild(bClear);
+
+    var col = el('div', 'crew-avacol');
+    col.appendChild(controls); col.appendChild(acts); col.appendChild(seedNote);
+    pick.appendChild(preview); pick.appendChild(col);
+    paintControls(); paintPreview();
+    return pick;
+  }
+
 
   function render() {
     initBugReport();          // no-op once wired; here so a late gx-bugreport.js still gets picked up
-    if (state.view === 'review') renderReview();
-    else if (state.view === 'eom') renderEom();
-    else renderRoster();
+    renderWorkspace();
   }
 
   /* One listener for the shared header's menu. gx-topnav.js emits the event; what each action MEANS
@@ -900,7 +1894,9 @@
     var a = e.detail && e.detail.action;
     if (a === 'logout') {
       setSession('', '');
-      state.rows = []; state.review = null; state.view = 'roster';
+      state.rows = []; state.review = null; state.selected = null;
+      state.eom = undefined; state.eomHistory = undefined; state.dismissed = {};
+      ui = null;
       var slot = document.getElementById('userSlot'); if (slot) slot.innerHTML = '';
       var tabs = document.getElementById('navTabs');  if (tabs) tabs.innerHTML = '';
       renderLogin();
@@ -910,474 +1906,6 @@
     // the roster was telling you, to say something already printed on the row you clicked.
   });
 
-  function renderRoster() {
-    if (!state.rows.length && state.view === 'roster' && state.review) { boot(true); return; }
-    clear();
-    navBar();                 // paints the shared header's tab row
-    renderUserChip();
-    var nodes = [];
-
-    var bar = el('div', 'crew-bar');
-    bar.innerHTML = '<span>Signed in as <b>' + esc(state.user) + '</b> · ' + esc(state.role) +
-      (state.canEdit ? '' : ' <em>(read-only)</em>') + '</span>';
-    /* Nothing on the right any more, and both absences are deliberate.
-       The HR spreadsheet link is gone because Crew is the system of record now, and a one-click
-       path back to the superseded source is an invitation to edit the wrong thing.
-       Sign out is gone because it already lives in the user-chip menu in the header — the one
-       place every app in the suite puts it. Two sign-outs on one screen is not redundancy that
-       helps; it is a second control to keep working, and it only ever appeared on the roster,
-       so Review and EoM already relied on the header. The header is the survivor. */
-    nodes.push(bar);
-
-    if (state.identity && state.identity.note) nodes.push(banner('warn', esc(state.identity.note)));
-    if (state.identity && state.identity.error)
-      nodes.push(banner('error', 'GX Core identity read failed: ' + esc(state.identity.error)));
-
-    // expiring permits are the reason this data is here — surface them, don't make people scan
-    var soon = state.rows.filter(function (r) { return r.permit_days_left != null && r.permit_days_left <= 90; })
-                         .sort(function (a, b) { return a.permit_days_left - b.permit_days_left; });
-    if (soon.length) {
-      nodes.push(banner(soon.some(function (r) { return r.permit_days_left < 0; }) ? 'error' : 'warn',
-        '<b>' + soon.length + ' OLCC permit' + (soon.length > 1 ? 's' : '') + ' need attention:</b> ' +
-        soon.map(function (r) {
-          return esc(r.name) + ' — ' + (r.permit_days_left < 0 ? 'EXPIRED' : r.permit_days_left + 'd');
-        }).join(' · ')));
-    }
-
-    var tools = el('div', 'crew-tools');
-    var search = el('input', 'crew-search');
-    search.type = 'search'; search.placeholder = 'Filter by name, store or role…'; search.value = state.q;
-    search.addEventListener('input', function () { state.q = search.value; renderRoster();
-      var s2 = document.querySelector('.crew-search'); if (s2) { s2.focus(); s2.setSelectionRange(s2.value.length, s2.value.length); } });
-    tools.appendChild(search);
-    if (state.canEdit) {
-      var em = el('label', 'crew-toggle crew-editmode' + (state.editMode ? ' is-on' : ''));
-      em.innerHTML = '<input type="checkbox"' + (state.editMode ? ' checked' : '') + '> Edit mode';
-      em.querySelector('input').addEventListener('change', function () {
-        state.editMode = this.checked; renderRoster();
-      });
-      tools.appendChild(em);
-    }
-    var lbl = el('label', 'crew-toggle');
-    lbl.innerHTML = '<input type="checkbox"' + (state.showRetired ? ' checked' : '') + '> Show retired' +
-      (state.retiredTotal ? ' (' + state.retiredTotal + ')' : '');
-    lbl.querySelector('input').addEventListener('change', function () {
-      state.showRetired = this.checked; boot(true);
-    });
-    tools.appendChild(lbl);
-    var flagged = state.rows.filter(function (r) { return (r.flags || []).length; }).length;
-    if (flagged) {
-      var fl = el('label', 'crew-toggle');
-      fl.innerHTML = '<input type="checkbox"' + (state.onlyFlagged ? ' checked' : '') +
-        '> Needs attention (' + flagged + ')';
-      fl.querySelector('input').addEventListener('change', function () {
-        state.onlyFlagged = this.checked; renderRoster();
-      });
-      tools.appendChild(fl);
-    }
-    nodes.push(tools);
-
-    var q = state.q.trim().toLowerCase();
-    var base = state.onlyFlagged
-      ? state.rows.filter(function (r) { return (r.flags || []).length; }) : state.rows;
-    var matched = !q ? base : base.filter(function (r) {
-      return (r.name + ' ' + storeName(r.store) + ' ' + r.role + ' ' + r.employee_number).toLowerCase().indexOf(q) >= 0;
-    });
-
-    // Pills are built from `matched` and applied after it, so each one can show how many it WOULD
-    // reveal. Counting the other way round would make every unselected pill read 0.
-    var pillRow = storePills(matched);
-    if (pillRow) nodes.push(pillRow);
-    var rows = filterByStore(matched);
-
-    if (!rows.length) {
-      /* Name the filter that is hiding people. "No employees to show yet" in front of a 75-person
-         roster sent someone looking for a data problem that was a pressed pill. */
-      var why = [];
-      if (q) why.push('matching “' + esc(state.q) + '”');
-      var picked = Object.keys(state.storeFilter);
-      if (picked.length) {
-        why.push('at ' + picked.map(function (id) {
-          return esc(id ? storeName(id) : 'No store'); }).join(' or '));
-      }
-      if (state.onlyFlagged) why.push('needing attention');
-      nodes.push(el('p', 'gx-muted', why.length
-        ? 'No one ' + why.join(' ') + '.'
-        : 'No employees to show yet.'));
-      mount.appendChild(card('Roster', nodes));
-      return;
-    }
-
-    var table = el('table', 'crew-table');
-    var thead = el('thead'); var htr = el('tr');
-    COLUMNS.forEach(function (c) {
-      var th = el('th', 'crew-sort' + (state.sortKey === c.key ? ' is-sorted' : ''),
-        esc(c.label) + '<span class="crew-caret">' +
-        (state.sortKey === c.key ? (state.sortDir === 1 ? '▲' : '▼') : '') + '</span>');
-      th.addEventListener('click', function () {
-        if (state.sortKey === c.key) state.sortDir = -state.sortDir;
-        else { state.sortKey = c.key; state.sortDir = 1; }
-        renderRoster();
-      });
-      htr.appendChild(th);
-    });
-    htr.appendChild(el('th', null, ''));
-    thead.appendChild(htr); table.appendChild(thead);
-    var tbody = el('tbody');
-
-    sortRows(rows).forEach(function (row) {
-      var editing = state.canEdit && state.editMode;
-      var tr = el('tr', (row.retired ? 'is-retired' : '') +
-                        (state.mergeFrom === row.employee_id ? ' is-merge-src' : ''));
-
-      // Read-only here on purpose: employee_number is the canonical key every app joins on.
-      // Changing it is an identity decision, so it lives in the panel.
-      tr.appendChild(el('td', flagCls(row, 'employee_number', 'crew-numcell'),
-        esc(row.employee_number || '—')));
-
-      var tdName = el('td', 'crew-namecell');
-      tdName.appendChild(avatarPuck(row));
-      tdName.appendChild(el('span', null, nameHtml(row) +
-        (row.retired ? ' <span class="crew-tag">retired</span>' : '')));
-      tr.appendChild(tdName);
-      tr.appendChild(el('td', flagCls(row,'store','gx-muted'), esc(row.store ? storeName(row.store) : '—')));
-      /* NO ACCOUNT rides on the Role cell because the role is WHY it is expected — a budtender
-         without a login is normal, the same gap on a manager is a defect. Spelled out as a tag
-         rather than left as red text: red says "something here is wrong", and the person fixing
-         it needs to know it is not the role title itself. */
-      tr.appendChild(el('td', flagCls(row,'role','gx-muted'), esc(row.role) +
-        (row.role_is_default ? '<span title="No role on file — defaulted"> *</span>' : '') +
-        (has(row,'no_account')
-          ? '<span class="crew-tag crew-tag-warn" title="Managers are expected to have a GX account. ' +
-            'This one has no linked login, so Send-to-Managers and every notification skip them ' +
-            'silently — nothing errors. Fix with Create accounts.">no account</span>'
-          : '')));
-      tr.appendChild(el('td', flagCls(row,'hire_date','gx-muted'), esc(row.hire_date || '—')));
-      tr.appendChild(el('td', 'gx-muted', esc(row.time_with_company || '—')));
-
-      var tdW = el('td'); var inW = el('input');
-      inW.type='text'; inW.value=row.wage||''; inW.size=5; inW.placeholder='0.00';
-      inW.className = has(row,'wage') ? 'is-flagged' : '';
-      inW.disabled=!editing; tdW.appendChild(inW); tr.appendChild(tdW);
-
-      var tdShirt = el('td'); var sel = el('select');
-      sel.innerHTML = '<option value="">—</option>' + state.shirtSizes.map(function (x) {
-        return '<option value="'+esc(x)+'"'+(row.shirt_size===x?' selected':'')+'>'+esc(x)+'</option>'; }).join('');
-      sel.disabled = !editing; tdShirt.appendChild(sel); tr.appendChild(tdShirt);
-
-      var tdB = el('td'); var inB = el('input');
-      inB.type='text'; inB.placeholder='MM-DD'; inB.value=row.birthday||''; inB.size=6;
-      inB.disabled=!editing; inB.title='Month and day only — GX Crew does not store birth years.';
-      inB.className = has(row,'birthday') ? 'is-flagged' : '';
-      tdB.appendChild(inB); tr.appendChild(tdB);
-
-      var tdPn = el('td'); var inPn = el('input');
-      inPn.type='text'; inPn.value=row.permit_number||''; inPn.size=8; inPn.placeholder='permit #';
-      inPn.className='crew-permit-no' + (has(row,'permit') ? ' is-flagged' : '');
-      inPn.disabled=!editing; tdPn.appendChild(inPn); tr.appendChild(tdPn);
-
-      tr.appendChild(el('td', null, permitStatusCell(row)));
-
-      var tdPe = el('td'); var inPe = el('input');
-      inPe.type='date'; inPe.value=row.permit_expires||'';
-      inPe.className = (row.permit_days_left != null && row.permit_days_left < 0) ? 'is-flagged' : '';
-      inPe.disabled=!editing; tdPe.appendChild(inPe); tr.appendChild(tdPe);
-
-      var tdS = el('td', 'crew-actions'); var status = el('span', 'crew-save-status');
-      if (editing) {
-        var save = el('button', 'crew-save', 'Save'); save.disabled = true;
-        var dirty = function () { save.disabled = false; status.textContent = ''; };
-        [sel, inB, inW, inPn, inPe].forEach(function (f) { f.addEventListener('input', dirty); f.addEventListener('change', dirty); });
-        save.addEventListener('click', async function () {
-          save.disabled = true; status.textContent = 'Saving…'; status.className = 'crew-save-status';
-          try {
-            var r = await Engine.jsonp('roster_save', { token: token(), employee_id: row.employee_id,
-              shirt_size: sel.value, birthday: inB.value.trim(),
-              wage: inW.value.trim(),
-              permit_number: inPn.value.trim(), permit_expires: inPe.value },
-              { timeoutMs: 45000, retries: 2 });
-            if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
-            row.shirt_size = r.saved.shirt_size; row.birthday = r.saved.birthday;
-            row.wage = r.saved.wage;
-            row.permit_number = r.saved.permit_number; row.permit_expires = r.saved.permit_expires;
-            inB.value = row.birthday; inW.value = row.wage;
-            inPn.value = row.permit_number; inPe.value = row.permit_expires;
-            status.textContent = 'Saved'; status.className = 'crew-save-status ok';
-          } catch (e) {
-            status.textContent = (e && e.message) || 'Save failed';
-            status.className = 'crew-save-status err'; save.disabled = false;
-          }
-        });
-        tdS.appendChild(save);
-
-        var ret = el('button', 'crew-link crew-retire', row.retired ? 'Un-retire' : 'Retire');
-        ret.addEventListener('click', async function () {
-          if (!row.retired && !confirm('Retire ' + row.name + '?\n\nThey drop out of the roster but keep their record, permit history and employee number.')) return;
-          ret.disabled = true; status.textContent = '…';
-          try {
-            var r = await Engine.jsonp('roster_retire', { token: token(),
-              employee_id: row.employee_id, retired: row.retired ? '0' : '1' },
-              { timeoutMs: 45000, retries: 2 });
-            if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
-            boot(true);
-          } catch (e) {
-            status.textContent = (e && e.message) || 'Failed';
-            status.className = 'crew-save-status err'; ret.disabled = false;
-          }
-        });
-        tdS.appendChild(ret);
-
-        /* Celebrations opt-out. A toggle here rather than a table column, because it applies to
-           the handful of people who are on the roster for ACCESS rather than for work — the
-           kiosk should not announce the owner's work anniversary to the whole company. It is
-           deliberately not inferred from role or store: `corporate` and `Admin` both belong to
-           real staff who should be celebrated. */
-        var cel = el('button', 'crew-link crew-celebrate',
-          row.celebrations_opt_out ? 'Celebrations: off' : 'Celebrations: on');
-        cel.title = row.celebrations_opt_out
-          ? 'Hidden from the kiosk birthday / anniversary feed. Click to include them again.'
-          : 'Shown on the kiosk birthday / anniversary feed. Click to hide them.';
-        cel.addEventListener('click', async function () {
-          var turningOff = !row.celebrations_opt_out;
-          cel.disabled = true; status.textContent = '…'; status.className = 'crew-save-status';
-          try {
-            var r = await Engine.jsonp('roster_save', { token: token(), employee_id: row.employee_id,
-              /* 'no', not '' — an empty param can be dropped on the way out, and a dropped field
-                 means "leave alone" to the engine, so turning celebrations back ON would look
-                 like it saved and change nothing. */
-              celebrations_opt_out: turningOff ? 'yes' : 'no' },
-              { timeoutMs: 45000, retries: 2 });
-            if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
-            row.celebrations_opt_out = turningOff;
-            cel.textContent = turningOff ? 'Celebrations: off' : 'Celebrations: on';
-            status.textContent = 'Saved'; status.className = 'crew-save-status ok';
-          } catch (e) {
-            status.textContent = (e && e.message) || 'Failed';
-            status.className = 'crew-save-status err';
-          } finally { cel.disabled = false; }
-        });
-        tdS.appendChild(cel);
-
-        /* Merge is two clicks: mark one row, then pick the row to keep. Duplicates are always
-           two rows in this table, so selecting them here beats typing ids into a form. */
-        var mg = el('button', 'crew-link crew-merge',
-          state.mergeFrom === row.employee_id ? 'Cancel' :
-          state.mergeFrom ? 'Keep this one' : 'Merge…');
-        mg.addEventListener('click', async function () {
-          if (state.mergeFrom === row.employee_id) { state.mergeFrom = null; renderRoster(); return; }
-          if (!state.mergeFrom) { state.mergeFrom = row.employee_id; renderRoster(); return; }
-          var loser = state.rows.filter(function (x) { return x.employee_id === state.mergeFrom; })[0];
-          if (!loser) { state.mergeFrom = null; renderRoster(); return; }
-          if (!confirm('Merge "' + loser.name + '" into "' + row.name + '"?\n\n' +
-                       row.name + ' is kept. Any field they are missing is filled from ' +
-                       loser.name + '. Nothing is deleted, and future imports of "' +
-                       loser.name + '" will resolve to ' + row.name + '.')) return;
-          status.textContent = 'Merging…';
-          try {
-            var r = await Engine.jsonp('roster_merge', { token: token(),
-              keep: row.employee_id, merge: loser.employee_id, confirm: 'yes' },
-              { timeoutMs: 45000, retries: 2 });
-            if (!r || !r.ok) throw new Error((r && r.error) || 'Merge failed');
-            state.mergeFrom = null; boot(true);
-          } catch (e) {
-            status.textContent = (e && e.message) || 'Merge failed';
-            status.className = 'crew-save-status err';
-          }
-        });
-        tdS.appendChild(mg);
-
-        /* Identity lives in GX Core, not Crew, so it gets a deliberate panel rather than another
-           six inline inputs — and the panel says plainly which linking columns are being
-           preserved, because those are the ones a careless write destroys. */
-        var ed = el('button', 'crew-link crew-edit', 'Edit');
-        ed.addEventListener('click', function () {
-          var open = tr.nextSibling && tr.nextSibling.classList &&
-                     tr.nextSibling.classList.contains('crew-editrow');
-          if (open) { tr.nextSibling.remove(); ed.textContent = 'Edit'; return; }
-          ed.textContent = 'Close';
-          var erow = el('tr', 'crew-editrow');
-          var cell = el('td'); cell.colSpan = COLUMNS.length + 1;
-          var form = el('div', 'crew-editform');
-          var storeOpts = ['<option value="">— none —</option>']
-            .concat(Object.keys(state.stores).map(function (sid) {
-              return '<option value="' + esc(sid) + '"' + (row.store === sid ? ' selected' : '') + '>' +
-                     esc(state.stores[sid]) + '</option>'; }))
-            .concat(['<option value="corporate"' + (row.store === 'corporate' ? ' selected' : '') +
-                     '>Corporate</option>']).join('');
-
-          /*
-           * Role is a closed set of four, so it is picked and never typed. A free-text box is how
-           * "Assistant Store Manager" and "Assistant Manager" both ended up in a registry that
-           * Leaderboard groups by, and neither one is a typo anybody would notice.
-           *
-           * The one subtlety: a row may already HOLD a title outside the four, put there by an
-           * older import. Dropping it from the list would mean opening the panel to fix a
-           * birthday and silently re-filing that person as somebody else on save. So an
-           * off-list value is carried as its own option, selected, and labelled — visible, kept,
-           * and one click from being corrected.
-           */
-          var held = row.role_is_default ? '' : String(row.role || '').trim();
-          var offList = held && state.roleTitles.indexOf(held) < 0;
-          var roleOpts = ['<option value="">— none — (shows as Budtender)</option>']
-            .concat(state.roleTitles.map(function (t) {
-              return '<option value="' + esc(t) + '"' + (held === t ? ' selected' : '') + '>' +
-                     esc(t) + '</option>'; }))
-            .concat(offList ? ['<option value="' + esc(held) + '" selected>' + esc(held) +
-                               ' — not a standard role</option>'] : []).join('');
-          form.innerHTML =
-            '<label>Full name<input name="full_name" value="' + esc(row.name) + '"></label>' +
-            '<label>Nickname<input name="preferred_name" value="' + esc(row.preferred_name || '') +
-              '" placeholder="shown on the board"></label>' +
-            '<label>Store<select name="home_store">' + storeOpts + '</select></label>' +
-            '<label>Role<select name="role_title">' + roleOpts + '</select></label>' +
-            '<label>Hire date<input name="hire_date" type="date" value="' + esc(row.hire_date || '') + '"></label>' +
-            /* Shown, never editable. The number is issued by the system and never reused —
-               typing one risks handing a new person a retired employee's history. */
-            '<label>Employee #<input value="' + esc(row.employee_number || 'auto') +
-              '" size="4" disabled title="Assigned automatically — never reused"></label>';
-
-          /* Avatar picker. Lives beside the nickname because they are the same decision —
-             how this person is presented on the kiosk — and Crew is now the only place
-             either is set. */
-          var pickWrap = el('div', 'crew-avapick');
-          var working = parseCfg(row) || null;
-          var preview = el('div', 'crew-avapreview');
-          var seedNote = el('p', 'crew-editnote');
-          function paintPreview() {
-            preview.innerHTML = '';
-            var shown = { name: row.name, avatar_config: working ? JSON.stringify(working) : '',
-                          avatar_seed: row.avatar_seed, employee_id: row.employee_id };
-            preview.appendChild(avatarPuck(shown, 'lg'));
-            seedNote.innerHTML = working
-              ? 'Seed pinned to employee&nbsp;#<b>' + esc(row.avatar_seed || '—') +
-                '</b> — renaming will not change this face.'
-              : 'No avatar set — the kiosk shows initials.';
-          }
-          function paintControls() {
-            controls.innerHTML = '';
-            if (!working) return;
-            OPTION_ORDER.forEach(function (key) {
-              // Only offer a colour when the feature it colours is actually switched on.
-              if (key === 'hatColor' && !HAT_TOPS[working.top]) return;
-              if (key === 'hairColor' && (working.top === '_none' || HAT_TOPS[working.top])) return;
-              if (key === 'facialHairColor' && working.facialHair === '_none') return;
-              if (key === 'accessoriesColor' && working.accessories === '_none') return;
-              // Only graphicShirt has a graphic to choose. Same rule as the colours above: do not
-              // offer a control for something the current clothing does not render.
-              if (key === 'clothingGraphic' && working.clothing !== 'graphicShirt') return;
-              /* A config may not carry every key — Sky's had no hatColor at all, so choosing a
-                 hat rendered a control showing a value the config did not hold, and the avatar
-                 came back with DiceBear's default instead. Adopt the displayed value into the
-                 config so what you see is always what gets saved. */
-              if (working[key] == null) working[key] = AVATAR_OPTIONS[key][0];
-              var wrap = el('label', 'crew-avaopt');
-              var isColor = !!COLOR_KEYS[key];
-              var opts = AVATAR_OPTIONS[key].map(function (v) {
-                var lbl = v === '_none' ? 'none' : v === '_gchat' ? 'GC hat' : v;
-                return '<option value="' + esc(v) + '"' + (working[key] === v ? ' selected' : '') +
-                       '>' + esc(lbl) + '</option>';
-              }).join('');
-              wrap.innerHTML = '<span>' + esc(OPTION_LABEL[key] || key) + '</span>' +
-                '<select>' + opts + '</select>' +
-                (isColor ? '<i class="crew-avaswatch" style="background:#' + esc(working[key] || '000') + '"></i>' : '');
-              wrap.querySelector('select').addEventListener('change', function () {
-                working[key] = this.value;
-                // Controls first: choosing a hat introduces hatColor, and paintControls is what
-                // adopts that default into `working`. Painting the preview first would render
-                // one change behind, silently dropping the new key from the URL.
-                paintControls(); paintPreview();
-              });
-              controls.appendChild(wrap);
-            });
-          }
-          var controls = el('div', 'crew-avacontrols');
-          var avaActs = el('div', 'crew-avaacts');
-          var bStart = el('button', 'crew-save', working ? 'Reset to default' : 'Give them an avatar');
-          bStart.addEventListener('click', function () {
-            working = JSON.parse(JSON.stringify(DEFAULT_AVATAR));
-            bClear.style.display = '';
-            paintControls(); paintPreview();
-          });
-          /* Works again as of GXCore v174: the engine now NAMES avatar_config in a clear= list,
-             because an empty value on its own means "leave alone" in Core's patch path. This
-             button was disabled for one release rather than deleted — it used to clear the
-             preview, report success and let the face come back on reload. */
-          var bClear = el('button', 'crew-save', 'Remove avatar');
-          bClear.style.display = working ? '' : 'none';
-          bClear.addEventListener('click', function () {
-            working = null; bClear.style.display = 'none';
-            paintControls(); paintPreview();
-          });
-          avaActs.appendChild(bStart); avaActs.appendChild(bClear);
-          pickWrap.appendChild(preview);
-          var pickCol = el('div', 'crew-avacol');
-          pickCol.appendChild(controls); pickCol.appendChild(avaActs); pickCol.appendChild(seedNote);
-          pickWrap.appendChild(pickCol);
-          paintControls(); paintPreview();
-          var linked = [];
-          if (row.dutchie_employee_id) linked.push('Dutchie ' + row.dutchie_employee_id);
-          if (row.user_id) linked.push('account ' + row.user_id);
-          if (row.employee_number) linked.push('employee #' + row.employee_number);
-          var note = el('p', 'crew-editnote', linked.length
-            ? 'Linked and preserved on save: ' + esc(linked.join(' · '))
-            : 'No Dutchie id or account linked to this record.');
-          var acts = el('div', 'crew-editacts');
-          var st2 = el('span', 'crew-save-status');
-          var go = el('button', 'crew-save is-primary', 'Save identity');
-          go.addEventListener('click', async function () {
-            go.disabled = true; st2.textContent = 'Saving…'; st2.className = 'crew-save-status';
-            try {
-              var q = { token: token(), employee_id: row.employee_id };
-              ['full_name','preferred_name','home_store','role_title','hire_date'].forEach(function (f) {
-                q[f] = form.querySelector('[name=' + f + ']').value;
-              });
-              q.avatar_config = working ? JSON.stringify(working) : '';
-              var r = await Engine.jsonp('roster_identity', q, { timeoutMs: 45000, retries: 2 });
-              if (!r || !r.ok) throw new Error((r && r.error) || 'Save failed');
-
-              /* A save can partly succeed: GX Core treats an empty value as "leave alone", so a
-                 field the user cleared keeps its old value while everything else lands. Saying
-                 just "✓ updated" there would repeat the exact lie this fixes. */
-              if (r.warning) {
-                st2.textContent = '⚠ ' + r.warning;
-                st2.className = 'crew-save-status err';
-              } else {
-                st2.textContent = '✓ ' + (r.changed.length ? 'updated ' + r.changed.join(', ') : 'no change');
-                st2.className = 'crew-save-status ok';
-              }
-              state.rows = []; state.review = null;
-              setTimeout(function () { boot(true); }, 700);
-            } catch (e) {
-              st2.textContent = (e && e.message) || 'Save failed';
-              st2.className = 'crew-save-status err'; go.disabled = false;
-            }
-          });
-          acts.appendChild(go); acts.appendChild(st2);
-          cell.appendChild(form); cell.appendChild(pickWrap); cell.appendChild(note); cell.appendChild(acts);
-          erow.appendChild(cell);
-          tr.parentNode.insertBefore(erow, tr.nextSibling);
-        });
-        tdS.appendChild(ed);
-      }
-      tdS.appendChild(status); tr.appendChild(tdS);
-      tbody.appendChild(tr);
-    });
-
-    table.appendChild(tbody);
-    var wrap = el('div', 'crew-table-wrap'); wrap.appendChild(table);
-    nodes.push(wrap);
-    nodes.push(el('p', 'crew-hint',
-      (state.canEdit && !state.editMode
-        ? 'Read-only. Turn on <b>Edit mode</b> to change wage, tee, birthday or OLCC details. ' : '') +
-      'Employee numbers are assigned automatically and never reused. ' +
-      'This roster is the system of record — the HR spreadsheet it was built from is now history. ' +
-      'Red marks missing or questionable data — it clears as soon as the value is filled in. ' +
-      'Birthdays are month + day only, no birth year. Permit columns are imported from METRC ' +
-      'and read-only here. Leaderboard receives a derived celebrations flag, never a date.'));
-
-    mount.appendChild(card('Roster <span class="gx-muted crew-count">' + rows.length +
-      (q ? ' of ' + state.rows.length : '') + '</span>', nodes));
-  }
 
   // ─── boot ────────────────────────────────────────────────────────────────────
   async function boot(quiet) {
@@ -1402,8 +1930,12 @@
          ~12s, well past gx-client's 8s default, so every attempt timed out and the view never
          loaded. The engine caches the join for 2 minutes, but the FIRST call still has to pay
          full price — so give it a real budget instead of retrying into the same wall. */
+      /* Retired rows are asked for ONCE and then kept. The Retired scope needs them and the
+         other two do not, but re-reading a ten-second join every time somebody flicks the
+         segmented control back and forth is the kind of cost that teaches people not to look. */
+      var wantRetired = state.scope === 'retired' || state.fetchedRetired;
       var r = await Engine.jsonp('roster',
-        { token: token(), include_retired: state.showRetired ? '1' : '' },
+        { token: token(), include_retired: wantRetired ? '1' : '' },
         { timeoutMs: 45000, retries: 2 });
       if (!r || !r.ok) {
         // An expired/revoked session should drop to the login form, not a dead-end error.
@@ -1420,20 +1952,20 @@
       state.role       = r.role || '';
       state.identity   = r.identity_source || null;
       state.retiredTotal = r.retired_total || 0;
+      state.fetchedRetired = wantRetired;
       state.hrSheetUrl = r.hr_sheet_url || '';
-      renderRoster();
-      initBugReport();
-      // Pull the review count in the background so the tab badge is right without making the
-      // roster wait on a second slow read.
-      if (!state.review) {
-        Engine.jsonp('review', { token: token() }, { timeoutMs: 45000, retries: 1 })
-          .then(function (rv) {
-            if (rv && rv.ok) {
-              state.review = rv.items || []; state.reviewCounts = rv.counts || {};
-              if (state.view === 'roster') renderRoster();
-            }
-          }).catch(function () { /* badge is a nicety */ });
-      }
+
+      /* Rebuild the shell only when there isn't one. A refetch after a merge, a retire or an
+         accepted question repaints the slots in place, so the search box keeps its text and its
+         cursor and the people list keeps its scroll. */
+      if (ui) { paintSubnav(); paintRail(); paintPane(); }
+      else render();
+
+      /* Both of these fill the OVERVIEW, and both are slow reads against the same sheets — so
+         they load behind the roster rather than in front of it, and paint themselves in when
+         they arrive. The roster is usable without either. */
+      if (state.review === null) loadReview();
+      if (state.eom === undefined) loadEom();
     } catch (e) {
       renderStatus('⚠️ Could not load the roster: ' + esc((e && e.message) || 'unknown error'));
     }

@@ -34,6 +34,40 @@ UI before the math has a shared home. Coordinate with `core-admin` (brain note a
 caching discipline over exactly, and never cut over live payroll numbers without a **penny-match** against
 the current Leaderboard incentive output for a full pay period.
 
+## The roster is a two-pane workspace (built 2026-08-24, from Claude Design's handoff)
+`renderRoster` and its 12-column table are **gone**, and so are the Review and EoM **tabs** —
+Roster is Crew's only tab now. The screen is a permanent people list on the left (grouped by
+store, sticky group headers) and a right pane that is either **one person's whole record** or,
+when nobody is selected, the **overview**: stat tiles, the open-questions queue that used to be
+the Review tab, and the Employee-of-the-Month panel that used to be the EoM tab. The attention
+chip in the sub nav is what deselects and goes back.
+
+Three things a future session will otherwise get wrong:
+
+- **There is no Edit mode, and there is no Save button.** Every control is live: text commits on
+  a 600ms pause and again on blur, selects and dates the instant they change, and a toast names
+  what was written and offers an undo. Do not reintroduce an arm-then-save gate — the removal is
+  the design.
+- **One field per write, and that only works because both routes are PATCHES.** `roster_save`
+  and `roster_identity` both treat an absent parameter as "leave alone" and an empty one as
+  "clear", and both read-merge-write. Post a whole record instead and `gxWrite_` blanks whatever
+  you omitted — `dutchie_employee_id` and `user_id`, neither of which this screen shows.
+- **The store pill row has no "All" pill any more.** Deselecting is clicking the lit pill again.
+  `tests/roster_filter_test.js` pins the set, the order, the counts-before-the-store-filter rule
+  and the dim-don't-disappear rule; it also now covers the three stacked filters
+  (`scopedRows` → `searchRows` → `filterByStore`), because every failure in that stack hides
+  people rather than erroring.
+
+The **OLCC permit card is read-only**, per the design — METRC owns it and an import overwrites
+whatever you type. **One exception:** when there is no permit number on file the card shows two
+inputs and an Add button, because the queue raises `missing_permit` at HIGH severity and its only
+offered answer is "Mark handled", which acknowledges rather than fixes. Seven active staff are in
+that state; without the exception the highest-severity item on the board could only be cleared by
+lying about it. `saveRosterAttrs_` has allowed exactly this write since it was written.
+
+The design bundle it was built from is `design_handoff_roster_workspace/` — the `.dc.html` in
+there is a **reference prototype**, not shippable code; its runtime is a preview harness.
+
 ## Layout
 - **Frontend:** `index.html` (shell; loads `gx-theme.css` + `gx-client.js` from gx-theme by URL, and
   `crew.js?v=N`) + `crew.js` (app logic, wired to `window.GX` for GX Core JSONP). The **`?v=N`**

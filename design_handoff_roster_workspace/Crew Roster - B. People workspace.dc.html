@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body { background: #0a0e0d; color: #e6ece9; color-scheme: dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    font-size: 15px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  a { color: #4ade80; text-decoration: none; }
+  a:hover { color: #5ee68f; text-decoration: underline; }
+  input, select, button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #232a27; border-radius: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</helmet>
+<div style="height:100vh;display:flex;flex-direction:column;background:#0a0e0d;overflow:hidden">
+
+  <header style="display:flex;align-items:center;gap:16px;padding:0 18px;background:#121715;border-bottom:1px solid #232a27;min-height:52px;flex:none">
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <img src="https://greencrosscanna.github.io/greencross-gx-theme/gx-logo.png" alt="Green Cross" style="height:22px;width:auto;display:block">
+      <span style="color:#5e6864;font-size:11px;text-transform:uppercase;letter-spacing:1.1px;font-weight:700">Crew</span>
+    </div>
+    <nav style="display:flex;gap:2px;min-width:0">
+      <button type="button" style="flex-shrink:0;height:40px;padding:6px 12px;border:none;background:none;cursor:pointer;font-weight:900;font-size:12px;line-height:1;color:#e6ece9;box-shadow:inset 0 -2px 0 #4ade80">Roster</button>
+      <button type="button" style="flex-shrink:0;height:40px;padding:6px 12px;border:none;background:none;cursor:pointer;font-weight:900;font-size:12px;line-height:1;color:#5e6864">Incentive</button>
+      <button type="button" style="flex-shrink:0;height:40px;padding:6px 12px;border:none;background:none;cursor:pointer;font-weight:900;font-size:12px;line-height:1;color:#5e6864">Payroll</button>
+    </nav>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:12px;flex-shrink:0">
+      <div style="text-align:right;line-height:1.2">
+        <div style="font-weight:700;font-size:14px;color:#e6ece9">2:14 PM</div>
+        <div style="color:#5e6864;font-size:10px;letter-spacing:.8px;text-transform:uppercase">Mon Aug 24</div>
+      </div>
+      <button type="button" style="display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 4px;border-radius:999px;border:1px solid #232a27;background:#121715;color:#e6ece9;font-size:12px;font-weight:500;line-height:1;cursor:pointer">
+        <span style="width:24px;height:24px;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#4ade80,#2f8a52);color:#06210f;font-weight:800;font-size:10px;display:flex;align-items:center;justify-content:center">SP</span>
+        <span style="white-space:nowrap">Sky Pinnick</span>
+      </button>
+    </div>
+  </header>
+
+  <div style="display:flex;flex-wrap:wrap;align-items:center;gap:9px;padding:9px 18px;background:#121715;border-bottom:1px solid #232a27;flex:none">
+    <div style="position:relative;flex:1 1 320px;max-width:460px">
+      <input type="search" value="{{ q }}" onChange="{{ onSearch }}" placeholder="Search people, permits, stores…" style="width:100%;box-sizing:border-box;background:#1a221f;border:1px solid #232a27;border-radius:8px;color:#e6ece9;padding:7px 12px 7px 32px;font-size:13px;outline:none">
+      <span style="position:absolute;left:11px;top:7px;color:#5e6864;font-size:13px">⌕</span>
+    </div>
+    <div style="display:flex;background:#161c1a;border:1px solid #232a27;border-radius:8px;padding:2px">
+      <sc-for list="{{ scopes }}" as="s" hint-placeholder-count="3">
+        <button type="button" onClick="{{ s.go }}" style="border:0;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;background:{{ s.bg }};color:{{ s.color }}">{{ s.label }}</button>
+      </sc-for>
+    </div>
+    <span style="width:1px;height:22px;background:#232a27"></span>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px">
+      <sc-for list="{{ pills }}" as="p" hint-placeholder-count="5">
+        <button type="button" onClick="{{ p.go }}" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid {{ p.border }};border-radius:999px;background:#161c1a;color:{{ p.color }};font-size:11.5px;font-weight:600;cursor:pointer;opacity:{{ p.opacity }}">
+          <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ p.dotColor }}"></span>
+          <span>{{ p.label }}</span>
+          <span style="color:#5e6864;font-variant-numeric:tabular-nums">{{ p.n }}</span>
+        </button>
+      </sc-for>
+    </div>
+    <button type="button" onClick="{{ showOverview }}" style="margin-left:auto;display:inline-flex;align-items:center;gap:8px;background:{{ overviewBg }};border:1px solid {{ overviewBorder }};color:{{ overviewColor }};border-radius:999px;padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap">
+      <span style="width:7px;height:7px;border-radius:50%;background:{{ attnDot }}"></span>
+      <span>{{ attnLabel }}</span>
+    </button>
+  </div>
+
+  <div style="flex:1 1 auto;display:flex;min-height:0">
+
+    <aside style="width:340px;flex:none;border-right:1px solid #232a27;background:#0d1211;display:flex;flex-direction:column;min-height:0">
+      <div style="flex:1 1 auto;overflow-y:auto;min-height:0;padding:6px 0 40px">
+        <sc-for list="{{ groups }}" as="g" hint-placeholder-count="4">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;padding:10px 14px 6px;position:sticky;top:0;background:#0d1211;z-index:1">
+              <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ g.dot }}"></span>
+              <span style="font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#5e6864">{{ g.label }}</span>
+              <span style="margin-left:auto;font-size:10.5px;color:#3d4744;font-variant-numeric:tabular-nums">{{ g.n }}</span>
+            </div>
+            <sc-for list="{{ g.rows }}" as="r" hint-placeholder-count="6">
+              <button type="button" onClick="{{ r.open }}" style="display:flex;align-items:center;gap:10px;width:100%;box-sizing:border-box;text-align:left;border:0;border-left:2px solid {{ r.edge }};background:{{ r.bg }};cursor:pointer;padding:7px 14px 7px 12px;opacity:{{ r.opacity }}">
+                <span style="position:relative;width:28px;height:28px;flex:none;border-radius:50%;overflow:hidden;background:#1a221f;border:1px solid #2e3733;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700;color:#8a958f">
+                  <sc-if value="{{ r.ava }}" hint-placeholder-val="{{ false }}">
+                    <img src="{{ r.ava }}" alt="" style="width:100%;height:100%;display:block">
+                  </sc-if>
+                  <sc-if value="{{ r.noAva }}" hint-placeholder-val="{{ true }}">
+                    <span>{{ r.initials }}</span>
+                  </sc-if>
+                </span>
+                <span style="min-width:0;flex:1 1 auto">
+                  <span style="display:block;font-size:13px;font-weight:600;color:{{ r.nameColor }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.nameText }}</span>
+                  <span style="display:block;font-size:11px;color:#5e6864;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.meta }}</span>
+                </span>
+                <sc-if value="{{ r.isEom }}" hint-placeholder-val="{{ false }}">
+                  <span title="Employee of the Month" style="flex:none;color:#d4a847;font-size:12px">★</span>
+                </sc-if>
+                <sc-if value="{{ r.warn }}" hint-placeholder-val="{{ false }}">
+                  <span title="{{ r.warnTitle }}" style="flex:none;width:7px;height:7px;border-radius:50%;background:{{ r.warnColor }}"></span>
+                </sc-if>
+              </button>
+            </sc-for>
+          </div>
+        </sc-for>
+        <sc-if value="{{ noRows }}" hint-placeholder-val="{{ false }}">
+          <p style="padding:20px 14px;margin:0;font-size:12.5px;color:#5e6864">{{ emptyText }}</p>
+        </sc-if>
+      </div>
+    </aside>
+
+    <main style="flex:1 1 auto;overflow-y:auto;min-height:0;background:#0a0e0d">
+
+      <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:26px 30px 60px;max-width:900px">
+          <h1 style="margin:0;font-size:23px;font-weight:700;letter-spacing:-.3px;color:#e6ece9">Everything that needs a person</h1>
+          <p style="margin:5px 0 22px;font-size:13px;color:#5e6864">{{ overviewSub }}</p>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:0 0 26px">
+            <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+              <div style="background:#121715;border:1px solid #232a27;border-radius:10px;padding:14px 16px">
+                <div style="font-size:23px;font-weight:700;color:{{ s.color }};font-variant-numeric:tabular-nums;letter-spacing:-.4px">{{ s.value }}</div>
+                <div style="font-size:11px;color:#5e6864;margin-top:2px;letter-spacing:.3px">{{ s.label }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex;align-items:baseline;gap:10px;margin:0 0 10px">
+            <h2 style="margin:0;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#8a958f;font-weight:700">Open questions</h2>
+            <span style="font-size:11px;color:#5e6864">nothing here has been applied</span>
+          </div>
+          <sc-for list="{{ queue }}" as="it" hint-placeholder-count="5">
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px 14px;background:#121715;border:1px solid #232a27;border-left:3px solid {{ it.edge }};border-radius:9px;padding:12px 14px;margin:0 0 8px">
+              <button type="button" onClick="{{ it.open }}" style="display:flex;align-items:center;gap:9px;background:none;border:0;padding:0;cursor:pointer;flex:0 1 190px;min-width:150px;text-align:left">
+                <span style="position:relative;width:28px;height:28px;flex:none;border-radius:50%;overflow:hidden;background:#1a221f;border:1px solid #2e3733;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700;color:#8a958f">
+                  <sc-if value="{{ it.ava }}" hint-placeholder-val="{{ false }}">
+                    <img src="{{ it.ava }}" alt="" style="width:100%;height:100%;display:block">
+                  </sc-if>
+                  <sc-if value="{{ it.noAva }}" hint-placeholder-val="{{ true }}">
+                    <span>{{ it.initials }}</span>
+                  </sc-if>
+                </span>
+                <span style="min-width:0">
+                  <span style="display:block;font-size:13px;font-weight:600;color:#e6ece9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ it.name }}</span>
+                  <span style="display:block;font-size:9.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:{{ it.edge }}">{{ it.kind }}</span>
+                </span>
+              </button>
+              <span style="flex:1 1 240px;min-width:180px;font-size:12.5px;color:#8a958f;line-height:1.45">{{ it.detail }}</span>
+              <span style="flex:0 0 auto;margin-left:auto;display:flex;align-items:center;gap:7px;white-space:nowrap">
+                <button type="button" onClick="{{ it.resolve }}" style="background:#4ade80;border:1px solid #4ade80;color:#06210f;font-weight:700;border-radius:6px;padding:5px 11px;font-size:11.5px;cursor:pointer">{{ it.cta }}</button>
+                <button type="button" onClick="{{ it.dismiss }}" style="background:transparent;color:#8a958f;border:1px solid #2e3733;border-radius:6px;padding:5px 11px;font-size:11.5px;cursor:pointer">Not a problem</button>
+              </span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ queueClear }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#121715;border:1px solid #232a27;border-radius:10px;padding:26px;text-align:center;font-size:13.5px;color:#4ade80">✓ Every source agrees. Nothing to review.</div>
+          </sc-if>
+
+          <div style="display:flex;align-items:baseline;gap:10px;margin:26px 0 10px">
+            <h2 style="margin:0;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#8a958f;font-weight:700">Employee of the Month</h2>
+            <span style="font-size:11px;color:#5e6864">picked here, shown on the kiosk</span>
+          </div>
+          <div style="background:#121715;border:1px solid rgba(212,168,71,.45);border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:16px">
+            <span style="position:relative;width:48px;height:48px;flex:none;border-radius:50%;overflow:hidden;background:#1a221f;border:1px solid #d4a847;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#8a958f">
+              <sc-if value="{{ eomAva }}" hint-placeholder-val="{{ false }}">
+                <img src="{{ eomAva }}" alt="" style="width:100%;height:100%;display:block">
+              </sc-if>
+              <sc-if value="{{ eomNoAva }}" hint-placeholder-val="{{ true }}">
+                <span>{{ eomInitials }}</span>
+              </sc-if>
+            </span>
+            <div style="flex:1 1 auto;min-width:0">
+              <div style="font-size:15px;font-weight:700;color:#e6ece9">{{ eomFullName }}</div>
+              <div style="font-size:12px;color:#8a958f;margin-top:1px">{{ eomSince }}</div>
+            </div>
+            <button type="button" onClick="{{ openEom }}" style="flex:none;background:transparent;color:#d4a847;border:1px solid rgba(212,168,71,.6);border-radius:6px;padding:6px 13px;font-size:12px;cursor:pointer">Open record</button>
+          </div>
+          <ol style="list-style:none;margin:10px 0 0;padding:0">
+            <sc-for list="{{ eomLog }}" as="h" hint-placeholder-count="4">
+              <li style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid #1c2320;font-size:12.5px">
+                <span style="color:{{ h.nameColor }};font-style:{{ h.italic }}">{{ h.name }}</span>
+                <span style="margin-left:auto;color:#8a958f">{{ h.when }}</span>
+                <span style="font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#5e6864;width:88px;text-align:right">{{ h.by }}</span>
+              </li>
+            </sc-for>
+          </ol>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPerson }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="padding:24px 30px 18px;border-bottom:1px solid #1c2320;background:#0d1211">
+            <div style="display:flex;align-items:flex-start;gap:16px;max-width:900px">
+              <span style="position:relative;width:62px;height:62px;flex:none;border-radius:50%;overflow:hidden;background:#1a221f;border:1px solid #2e3733;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#8a958f">
+                <sc-if value="{{ p.ava }}" hint-placeholder-val="{{ false }}">
+                  <img src="{{ p.ava }}" alt="" style="width:100%;height:100%;display:block">
+                </sc-if>
+                <sc-if value="{{ p.noAva }}" hint-placeholder-val="{{ true }}">
+                  <span>{{ p.initials }}</span>
+                </sc-if>
+              </span>
+              <div style="flex:1 1 auto;min-width:0">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <input value="{{ p.name }}" onChange="{{ p.onName }}" style="background:transparent;border:1px solid transparent;border-radius:6px;color:#e6ece9;font-size:24px;font-weight:700;letter-spacing:-.4px;padding:2px 6px;margin-left:-6px;outline:none;min-width:200px;width:{{ p.nameWidth }}">
+                  <sc-if value="{{ p.nick }}" hint-placeholder-val="{{ false }}">
+                    <span style="color:#4ade80;font-size:14px">{{ p.nick }}</span>
+                  </sc-if>
+                  <sc-if value="{{ p.retired }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-size:9.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#5e6864;border:1px solid #2e3733;border-radius:4px;padding:2px 6px">retired</span>
+                  </sc-if>
+                </div>
+                <div style="display:flex;align-items:center;gap:9px;margin-top:6px;flex-wrap:wrap;font-size:12.5px;color:#8a958f">
+                  <span style="display:inline-flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:{{ p.storeDot }}"></span>{{ p.storeLabel }}</span>
+                  <span style="color:#2e3733">·</span>
+                  <span>{{ p.role }}</span>
+                  <span style="color:#2e3733">·</span>
+                  <span>{{ p.tenure }}</span>
+                  <span style="color:#2e3733">·</span>
+                  <span style="font-variant-numeric:tabular-nums">#{{ p.employee_number }}</span>
+                </div>
+              </div>
+              <div style="flex:none;display:flex;align-items:center;gap:8px">
+                <button type="button" onClick="{{ toggleEom }}" style="background:{{ p.eomBg }};border:1px solid {{ p.eomBorder }};color:{{ p.eomColor }};border-radius:999px;padding:6px 12px;font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;cursor:pointer">★ EoM</button>
+                <button type="button" style="background:transparent;color:#8a958f;border:1px solid #2e3733;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer">Avatar</button>
+                <button type="button" style="background:transparent;color:#8a958f;border:1px solid #2e3733;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer">···</button>
+              </div>
+            </div>
+          </div>
+
+          <div style="padding:20px 30px 70px;max-width:900px">
+
+            <sc-if value="{{ p.hasQuestions }}" hint-placeholder-val="{{ false }}">
+              <div style="margin:0 0 20px">
+                <sc-for list="{{ p.questions }}" as="it" hint-placeholder-count="1">
+                  <div style="background:#121715;border:1px solid {{ it.border }};border-left:3px solid {{ it.edge }};border-radius:9px;padding:13px 15px;margin:0 0 8px">
+                    <div style="display:flex;align-items:baseline;gap:10px">
+                      <span style="font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:{{ it.edge }}">{{ it.kind }}</span>
+                      <span style="margin-left:auto;font-size:10px;letter-spacing:.9px;text-transform:uppercase;color:#5e6864">{{ it.source }}</span>
+                    </div>
+                    <p style="margin:6px 0 0;font-size:12.5px;color:#8a958f;line-height:1.5">{{ it.detail }}</p>
+                    <sc-if value="{{ it.hasCmp }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;align-items:center;gap:10px;margin:10px 0 0;flex-wrap:wrap">
+                        <span style="font-size:13px;color:#8a958f;background:#1a221f;border:1px solid #232a27;border-radius:6px;padding:5px 10px">{{ it.now }}</span>
+                        <span style="color:#5e6864">→</span>
+                        <span style="font-size:13px;color:#4ade80;background:#1a221f;border:1px solid #2f8a52;border-radius:6px;padding:5px 10px">{{ it.proposed }}</span>
+                      </div>
+                    </sc-if>
+                    <div style="display:flex;align-items:center;gap:8px;margin:12px 0 0">
+                      <button type="button" onClick="{{ it.resolve }}" style="background:#4ade80;border:1px solid #4ade80;color:#06210f;font-weight:700;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer">{{ it.cta }}</button>
+                      <button type="button" onClick="{{ it.dismiss }}" style="background:transparent;color:#8a958f;border:1px solid #2e3733;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer">Keep what we have</button>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin:0 0 22px">
+              <sc-for list="{{ p.fields }}" as="f" hint-placeholder-count="6">
+                <label style="display:flex;flex-direction:column;gap:5px;background:#121715;border:1px solid {{ f.border }};border-radius:9px;padding:11px 13px">
+                  <span style="font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#5e6864">{{ f.label }}</span>
+                  <sc-if value="{{ f.isSelect }}" hint-placeholder-val="{{ false }}">
+                    <select defaultValue="{{ f.value }}" onChange="{{ f.onChange }}" style="background:#1a221f;border:1px solid #232a27;border-radius:6px;color:#e6ece9;padding:7px 9px;font-size:13.5px;outline:none;width:100%;box-sizing:border-box">
+                      <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="4">
+                        <option value="{{ o.v }}">{{ o.l }}</option>
+                      </sc-for>
+                    </select>
+                  </sc-if>
+                  <sc-if value="{{ f.isInput }}" hint-placeholder-val="{{ true }}">
+                    <input type="{{ f.type }}" defaultValue="{{ f.value }}" placeholder="{{ f.placeholder }}" disabled="{{ f.locked }}" onChange="{{ f.onChange }}" style="background:#1a221f;border:1px solid #232a27;border-radius:6px;color:{{ f.color }};padding:7px 9px;font-size:13.5px;outline:none;width:100%;box-sizing:border-box">
+                  </sc-if>
+                  <span style="font-size:10.5px;color:{{ f.noteColor }};min-height:13px">{{ f.note }}</span>
+                </label>
+              </sc-for>
+            </div>
+
+            <div style="display:flex;align-items:baseline;gap:10px;margin:0 0 10px">
+              <h2 style="margin:0;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#8a958f;font-weight:700">OLCC permit</h2>
+              <span style="font-size:11px;color:#5e6864">METRC owns these · read-only here</span>
+            </div>
+            <div style="background:#121715;border:1px solid {{ p.permitBorder }};border-radius:10px;padding:16px 18px">
+              <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;letter-spacing:.5px;color:#e6ece9">{{ p.permitNo }}</span>
+                <span style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:{{ p.permitStatusColor }};border:1px solid {{ p.permitStatusColor }};border-radius:999px;padding:2px 10px">{{ p.permitStatus }}</span>
+                <span style="margin-left:auto;font-size:12.5px;color:{{ p.permitLineColor }}">{{ p.permitLine }}</span>
+              </div>
+              <div style="height:4px;border-radius:999px;background:#1a221f;margin:13px 0 0;overflow:hidden">
+                <div style="height:100%;width:{{ p.permitPct }};background:{{ p.permitStatusColor }}"></div>
+              </div>
+            </div>
+
+            <div style="display:flex;align-items:baseline;gap:10px;margin:22px 0 10px">
+              <h2 style="margin:0;font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#8a958f;font-weight:700">Links &amp; visibility</h2>
+            </div>
+            <div style="background:#121715;border:1px solid #232a27;border-radius:10px;padding:14px 18px">
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                <sc-for list="{{ p.links }}" as="l" hint-placeholder-count="3">
+                  <span style="display:inline-flex;align-items:center;gap:7px;font-size:12px;color:{{ l.color }};background:#1a221f;border:1px solid #232a27;border-radius:999px;padding:4px 11px">
+                    <span style="font-size:9.5px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#5e6864">{{ l.label }}</span>
+                    <span>{{ l.value }}</span>
+                  </span>
+                </sc-for>
+              </div>
+              <p style="margin:11px 0 0;font-size:11.5px;color:#5e6864;line-height:1.55">Every save is read-merge-write, so these links survive it. Blank one and the join to SPIFF, Leaderboard or email breaks silently.</p>
+              <label style="display:flex;align-items:center;gap:9px;margin:13px 0 0;font-size:12.5px;color:#8a958f;cursor:pointer">
+                <input type="checkbox" checked="{{ p.celebrations }}" onChange="{{ toggleCelebrations }}" style="accent-color:#4ade80">
+                <span>Show birthday and work anniversary on the kiosk</span>
+              </label>
+            </div>
+
+            <div style="display:flex;align-items:center;gap:10px;margin:24px 0 0;padding-top:16px;border-top:1px solid #1c2320">
+              <button type="button" style="background:transparent;color:#8a958f;border:1px solid #2e3733;border-radius:6px;padding:7px 13px;font-size:12px;cursor:pointer">Merge duplicate…</button>
+              <button type="button" style="margin-left:auto;background:transparent;color:#ef4444;border:1px solid #2e3733;border-radius:6px;padding:7px 13px;font-size:12px;cursor:pointer">{{ p.retireLabel }}</button>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </main>
+  </div>
+
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:60;background:#161c1a;border:1px solid #2f8a52;border-radius:999px;padding:8px 18px;font-size:12.5px;color:#4ade80;box-shadow:0 12px 32px rgba(0,0,0,.5)">{{ toast }}</div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  state = {
+    data: null, q: '', scope: 'active', storeFilter: {}, selected: null,
+    eom: null, dismissed: {}, celebrations: {}, toast: ''
+  };
+
+  componentDidMount() { import('./crew-data.js').then((d) => this.setState({ data: d, eom: d.EOM_CURRENT })); }
+
+  storeName(id) { const d = this.state.data; return id ? ((d.STORES[id] && d.STORES[id].name) || id) : 'No store'; }
+  storeColor(id) { const d = this.state.data; return (d.STORES[id] && d.STORES[id].color) || '#5e6864'; }
+  has(r, f) { return (r.flags || []).indexOf(f) >= 0; }
+  initials(n) {
+    return String(n || '').trim().split(/\s+/).slice(0, 2).map((w) => w.charAt(0)).join('').toUpperCase() || '?';
+  }
+  avatarUrl(cfgStr, seed) {
+    if (!cfgStr) return '';
+    let cfg; try { cfg = JSON.parse(cfgStr); } catch (e) { return ''; }
+    const HAT = { hat: 1, winterHat1: 1 };
+    const noAcc = cfg.accessories === '_none', noFh = cfg.facialHair === '_none';
+    const gc = cfg.top === '_gchat', noHair = cfg.top === '_none', isHat = !!HAT[cfg.top];
+    const p = ['seed=' + encodeURIComponent(seed || 'x')];
+    Object.keys(cfg).forEach((k) => {
+      const v = cfg[k];
+      if (v == null || v === '_none' || k === 'seed') return;
+      if (k === 'top' && gc) { p.push('top=shortFlat'); return; }
+      if (k === 'accessoriesColor' && noAcc) return;
+      if (k === 'facialHairColor' && noFh) return;
+      if (k === 'hairColor' && (noHair || isHat)) return;
+      if (k === 'hatColor' && !isHat) return;
+      p.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+    });
+    p.push('accessoriesProbability=' + (noAcc ? '0' : '100'));
+    p.push('facialHairProbability=' + (noFh ? '0' : '100'));
+    p.push('topProbability=' + ((noHair && !gc) ? '0' : '100'));
+    return 'https://api.dicebear.com/9.x/avataaars/svg?' + p.join('&');
+  }
+  flash(msg) {
+    this.setState({ toast: msg });
+    clearTimeout(this._t);
+    this._t = setTimeout(() => this.setState({ toast: '' }), 1600);
+  }
+
+  renderVals() {
+    const d = this.state.data;
+    if (!d) return { groups: [], pills: [], scopes: [], queue: [], stats: [], eomLog: [], isOverview: true };
+    const s = this.state;
+    const RED = '#ef4444', GOLD = '#d4a847', GREEN = '#4ade80', DIM = '#8a958f', TXT = '#e6ece9';
+    const GAPS = { wage: 'wage', birthday: 'birthday', permit: 'OLCC permit', hire_date: 'hire date',
+      store: 'store', role: 'role', employee_number: 'employee number', name: 'name',
+      no_account: 'GX account', permit_expired: 'expired permit', permit_status: 'permit status' };
+
+    const pool = s.scope === 'retired' ? d.RETIRED_ROWS
+      : s.scope === 'attention' ? d.ROWS.filter((r) => (r.flags || []).length) : d.ROWS;
+    const q = s.q.trim().toLowerCase();
+    const matched = !q ? pool : pool.filter((r) =>
+      (r.name + ' ' + (r.preferred_name || '') + ' ' + this.storeName(r.store) + ' ' + r.role + ' ' +
+        r.employee_number + ' ' + (r.permit_number || '')).toLowerCase().indexOf(q) >= 0);
+    const picked = Object.keys(s.storeFilter);
+    const rows = picked.length ? matched.filter((r) => !!s.storeFilter[String(r.store || '')]) : matched;
+
+    const counts = {};
+    matched.forEach((r) => { const id = String(r.store || ''); counts[id] = (counts[id] || 0) + 1; });
+    const ids = [];
+    pool.forEach((r) => { const id = String(r.store || ''); if (ids.indexOf(id) < 0) ids.push(id); });
+    ids.sort((a, b) => {
+      if (!a) return 1; if (!b) return -1;
+      const oa = (d.STORES[a] || {}).order, ob = (d.STORES[b] || {}).order;
+      if (oa == null && ob == null) return this.storeName(a).localeCompare(this.storeName(b));
+      if (oa == null) return 1; if (ob == null) return -1;
+      return oa - ob;
+    });
+    const pills = ids.map((id) => {
+      const on = !!s.storeFilter[id], n = counts[id] || 0;
+      return {
+        label: id ? this.storeName(id) : 'No store', n, dotColor: this.storeColor(id),
+        border: on ? this.storeColor(id) : '#232a27', color: on ? TXT : DIM, opacity: n ? 1 : 0.45,
+        go: () => {
+          const f = Object.assign({}, s.storeFilter);
+          if (f[id]) delete f[id]; else f[id] = true;
+          this.setState({ storeFilter: f });
+        }
+      };
+    });
+
+    const attnCount = d.ROWS.filter((r) => (r.flags || []).length).length;
+    const scopes = [['active', 'Active'], ['attention', 'Gaps ' + attnCount], ['retired', 'Retired']]
+      .map(([v, label]) => ({
+        label, bg: s.scope === v ? '#232a27' : 'transparent', color: s.scope === v ? TXT : DIM,
+        go: () => this.setState({ scope: v })
+      }));
+
+    const listRow = (r) => {
+      const url = this.avatarUrl(r.avatar_config, r.avatar_seed);
+      const pd = r.permit_days_left;
+      const gaps = (r.flags || []).map((f) => GAPS[f] || f);
+      const bad = (pd != null && pd < 0) || !r.permit_number ||
+        this.has(r, 'no_account') || this.has(r, 'name');
+      const sel = s.selected === r.employee_id;
+      return {
+        ava: url, noAva: !url, initials: this.initials(r.name),
+        nameText: String(r.name || '').trim() ? r.name : '⚠ Record blanked',
+        nameColor: String(r.name || '').trim() ? TXT : RED,
+        meta: r.role + (r.preferred_name ? ' · “' + r.preferred_name + '”' : ''),
+        isEom: r.employee_id === s.eom,
+        warn: gaps.length ? true : false,
+        warnColor: bad ? RED : GOLD,
+        warnTitle: 'Missing: ' + gaps.join(', '),
+        edge: sel ? GREEN : 'transparent',
+        bg: sel ? '#161c1a' : 'transparent',
+        opacity: r.retired ? 0.6 : 1,
+        open: () => this.setState({ selected: r.employee_id })
+      };
+    };
+
+    const groups = ids.filter((id) => !picked.length || s.storeFilter[id]).map((id) => {
+      const list = rows.filter((r) => String(r.store || '') === id)
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return { label: id ? this.storeName(id) : 'No store', dot: this.storeColor(id),
+        n: list.length, rows: list.map(listRow) };
+    }).filter((g) => g.n);
+
+    // ── overview queue ─────────────────────────────────────────────────
+    const KIND = { duplicate: 'Possible duplicate', retired_with_access: 'Retired, has access',
+      missing_permit: 'No OLCC permit', permit_expired: 'Permit expired',
+      permit_expiring: 'Permit expiring', missing_field: 'Missing data',
+      name_spelling: 'Name spelling differs', role: 'Role differs' };
+    const all = d.ROWS.concat(d.RETIRED_ROWS);
+    const byName = {}; all.forEach((r) => { byName[r.name] = r; });
+    const open = d.REVIEW.filter((it) => !s.dismissed[it.id]);
+    const ctaOf = (it) => it.kind === 'duplicate' ? 'Merge them'
+      : it.kind === 'name_spelling' ? 'Apply METRC spelling'
+      : it.kind === 'role' ? 'Apply Leaderboard role' : 'Open record';
+    const queue = open.map((it) => {
+      const row = byName[it.name];
+      const url = row ? this.avatarUrl(row.avatar_config, row.avatar_seed) : '';
+      return {
+        kind: KIND[it.kind] || it.kind, name: it.name, detail: it.detail,
+        edge: it.severity === 'high' ? RED : it.severity === 'warn' ? GOLD : '#5e6864',
+        ava: url, noAva: !url, initials: this.initials(it.name),
+        cta: ctaOf(it),
+        open: () => this.setState({ selected: row ? row.employee_id : null }),
+        resolve: () => {
+          this.setState({ dismissed: Object.assign({}, s.dismissed, { [it.id]: true }) });
+          this.flash(ctaOf(it) === 'Open record' ? 'Marked handled' : ctaOf(it) + ' — applied');
+        },
+        dismiss: () => {
+          this.setState({ dismissed: Object.assign({}, s.dismissed, { [it.id]: true }) });
+          this.flash('Recorded as not a problem');
+        }
+      };
+    });
+    const expiring = d.ROWS.filter((r) => r.permit_days_left != null && r.permit_days_left <= 90).length;
+    const stats = [
+      { value: d.ROWS.length, label: 'active people', color: TXT },
+      { value: open.length, label: 'open questions', color: open.length ? GOLD : GREEN },
+      { value: expiring, label: 'permits inside 90 days', color: expiring ? RED : GREEN },
+      { value: attnCount, label: 'records with a gap', color: attnCount ? GOLD : GREEN }
+    ];
+
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const mon = (iso) => { const dt = new Date(iso); return iso ? MON[dt.getMonth()] + ' ' + dt.getFullYear() : '—'; };
+    const eomLog = d.EOM_HISTORY.map((h) => {
+      const from = mon(h.started_at), to = h.current ? '' : mon(h.ended_at);
+      return {
+        name: h.nobody ? 'Nobody held it' : h.name,
+        nameColor: h.nobody ? '#5e6864' : TXT, italic: h.nobody ? 'italic' : 'normal',
+        when: h.current ? from + ' — present' : (from === to ? from : from + ' – ' + to),
+        by: h.backfilled ? 'recorded' : (h.set_by ? 'set by ' + h.set_by : '')
+      };
+    });
+    const eomRow = d.ROWS.filter((r) => r.employee_id === s.eom)[0];
+
+    // ── person pane ────────────────────────────────────────────────────
+    const row = all.filter((r) => r.employee_id === s.selected)[0] || null;
+    let p = null;
+    if (row) {
+      const url = this.avatarUrl(row.avatar_config, row.avatar_seed);
+      const pd = row.permit_days_left;
+      const save = (label) => () => this.flash('Saved · ' + label);
+      const isEom = row.employee_id === s.eom;
+      const mine = open.filter((it) => it.name === row.name);
+      const pct = pd == null ? '0%' : pd < 0 ? '100%' : Math.max(4, Math.min(100, Math.round((1 - pd / 730) * 100))) + '%';
+      p = {
+        ava: url, noAva: !url, initials: this.initials(row.name),
+        name: row.name || '', nameWidth: Math.max(200, String(row.name || '').length * 14) + 'px',
+        nick: row.preferred_name ? '“' + row.preferred_name + '”' : false,
+        retired: row.retired,
+        storeLabel: row.store ? this.storeName(row.store) : 'No store',
+        storeDot: row.store ? this.storeColor(row.store) : '#2e3733',
+        role: row.role, employee_number: row.employee_number || '—',
+        tenure: row.time_with_company === '—' ? 'no hire date on file' : row.time_with_company + ' with the company',
+        eomBg: isEom ? 'rgba(212,168,71,.07)' : 'transparent',
+        eomBorder: isEom ? GOLD : '#2e3733', eomColor: isEom ? GOLD : '#5e6864',
+        onName: save('full name'),
+        hasQuestions: mine.length > 0,
+        questions: mine.map((it) => ({
+          kind: KIND[it.kind] || it.kind, source: it.source, detail: it.detail,
+          edge: it.severity === 'high' ? RED : GOLD,
+          border: it.severity === 'high' ? 'rgba(239,68,68,.35)' : 'rgba(212,168,71,.35)',
+          hasCmp: !!(it.current_value && it.proposed_value),
+          now: it.current_value, proposed: it.proposed_value, cta: ctaOf(it),
+          resolve: () => {
+            this.setState({ dismissed: Object.assign({}, s.dismissed, { [it.id]: true }) });
+            this.flash(ctaOf(it) + ' — applied');
+          },
+          dismiss: () => {
+            this.setState({ dismissed: Object.assign({}, s.dismissed, { [it.id]: true }) });
+            this.flash('Kept the current value');
+          }
+        })),
+        fields: [
+          { label: 'Nickname', value: row.preferred_name || '', isInput: true, type: 'text',
+            placeholder: 'shown on the board', border: '#232a27', color: TXT, locked: false,
+            note: 'What the kiosk calls them', noteColor: '#5e6864', onChange: save('nickname') },
+          { label: 'Store', value: row.store, isSelect: true, border: row.store ? '#232a27' : 'rgba(212,168,71,.5)',
+            options: [{ v: '', l: '— none —' }].concat(Object.keys(d.STORES).map((k) => ({ v: k, l: d.STORES[k].name }))),
+            note: row.store ? '' : 'No store on file', noteColor: row.store ? '#5e6864' : GOLD, onChange: save('store') },
+          { label: 'Role', value: row.role, isSelect: true, border: '#232a27',
+            options: [{ v: '', l: '— none — (shows as Budtender)' }].concat(d.ROLE_TITLES.map((t) => ({ v: t, l: t }))),
+            note: this.has(row, 'no_account') ? 'Manager with no GX account' : 'One of four titles',
+            noteColor: this.has(row, 'no_account') ? RED : '#5e6864', onChange: save('role') },
+          { label: 'Hire date', value: row.hire_date, isInput: true, type: 'date',
+            border: row.hire_date ? '#232a27' : 'rgba(212,168,71,.5)', color: TXT, locked: false,
+            note: row.hire_date ? 'Drives tenure and anniversaries' : 'Missing',
+            noteColor: row.hire_date ? '#5e6864' : GOLD, onChange: save('hire date') },
+          { label: 'Wage', value: row.wage, isInput: true, type: 'text', placeholder: '0.00',
+            border: (row.wage || row.wage_hidden) ? '#232a27' : 'rgba(212,168,71,.5)', color: TXT, locked: false,
+            note: row.wage_hidden ? 'Owner — not on payroll' : (row.wage ? 'Hourly' : 'Not set'),
+            noteColor: (row.wage || row.wage_hidden) ? '#5e6864' : GOLD, onChange: save('wage') },
+          { label: 'Birthday', value: row.birthday, isInput: true, type: 'text', placeholder: 'MM-DD',
+            border: row.birthday ? '#232a27' : 'rgba(212,168,71,.5)', color: TXT, locked: false,
+            note: 'Month and day only', noteColor: '#5e6864', onChange: save('birthday') },
+          { label: 'Shirt size', value: row.shirt_size, isSelect: true, border: '#232a27',
+            options: [{ v: '', l: '—' }].concat(d.SHIRT_SIZES.map((x) => ({ v: x, l: x }))),
+            note: '', noteColor: '#5e6864', onChange: save('shirt size') },
+          { label: 'Employee #', value: row.employee_number, isInput: true, type: 'text',
+            border: '#232a27', color: '#5e6864', locked: true,
+            note: 'Issued, never reused', noteColor: '#5e6864', onChange: () => {} }
+        ],
+        permitNo: row.permit_number || 'No permit number on file',
+        permitStatus: row.permit_status ? row.permit_status.toUpperCase() : 'UNKNOWN',
+        permitStatusColor: !row.permit_status ? GOLD
+          : ['active', 'valid'].indexOf(row.permit_status.toLowerCase()) >= 0
+            ? (pd != null && pd <= 90 ? GOLD : GREEN) : RED,
+        permitLine: row.permit_expires
+          ? (pd < 0 ? 'Expired ' + Math.abs(pd) + ' days ago · ' + row.permit_expires
+            : pd + ' days left · expires ' + row.permit_expires)
+          : 'METRC has no matching record under this name',
+        permitLineColor: !row.permit_expires ? GOLD : pd < 0 ? RED : pd <= 90 ? GOLD : DIM,
+        permitBorder: (pd != null && pd < 0) || !row.permit_number ? 'rgba(239,68,68,.4)' : '#232a27',
+        permitPct: pct,
+        links: [
+          { label: 'Dutchie', value: row.dutchie_employee_id || 'not linked',
+            color: row.dutchie_employee_id ? TXT : GOLD },
+          { label: 'GX account', value: row.user_id || 'none',
+            color: row.user_id ? TXT : (this.has(row, 'no_account') ? RED : DIM) },
+          { label: 'Employee', value: '#' + (row.employee_number || '—'), color: TXT }
+        ],
+        celebrations: s.celebrations[row.employee_id] != null
+          ? s.celebrations[row.employee_id] : !row.celebrations_opt_out,
+        retireLabel: row.retired ? 'Un-retire' : 'Retire'
+      };
+    }
+
+    const high = open.filter((it) => it.severity === 'high').length;
+    return {
+      groups, pills, scopes, queue, stats, eomLog,
+      noRows: !groups.length,
+      emptyText: q ? 'Nobody matches “' + s.q + '”.' : 'Nobody in this view.',
+      q: s.q, onSearch: (e) => this.setState({ q: e.target.value }),
+      isOverview: !p, isPerson: !!p, p: p || {},
+      showOverview: () => this.setState({ selected: null }),
+      overviewBg: !p ? 'rgba(212,168,71,.07)' : 'transparent',
+      overviewBorder: !p ? 'rgba(212,168,71,.6)' : '#232a27',
+      overviewColor: !p ? GOLD : DIM,
+      attnDot: high ? RED : open.length ? GOLD : GREEN,
+      attnLabel: open.length ? open.length + ' to look at' : 'All clear',
+      overviewSub: open.length + ' open questions · ' + expiring + ' permits inside 90 days · ' +
+        attnCount + ' records with a gap',
+      queueClear: !open.length,
+      eomFullName: eomRow ? eomRow.name : 'Nobody',
+      eomAva: eomRow ? this.avatarUrl(eomRow.avatar_config, eomRow.avatar_seed) : '',
+      eomNoAva: !eomRow || !eomRow.avatar_config,
+      eomInitials: eomRow ? this.initials(eomRow.name) : '—',
+      eomSince: eomRow ? (eomRow.role + ' · ' + this.storeName(eomRow.store) + ' · since Aug 2026')
+        : 'Nobody holds it right now',
+      openEom: () => this.setState({ selected: s.eom }),
+      toggleEom: () => { this.setState({ eom: s.eom === s.selected ? null : s.selected }); this.flash('Employee of the Month updated'); },
+      toggleCelebrations: (e) => {
+        this.setState({ celebrations: Object.assign({}, s.celebrations, { [s.selected]: e.target.checked }) });
+        this.flash(e.target.checked ? 'Shown on the kiosk feed' : 'Hidden from the kiosk feed');
+      },
+      toast: s.toast || false
+    };
+  }
+}
+</script>
+</body>
+</html>
