@@ -53,7 +53,10 @@ Three things a future session will otherwise get wrong:
   METRC and payroll match on and the exact corruption employee #22 arrived with. Legal name and
   nickname are edited as their own adjacent cards in the field grid. `byName` and `searchRows`
   both work on the displayed name too — a list you cannot scan alphabetically, or a search that
-  misses the string printed on the row, are the two ways this goes wrong quietly.
+  misses the string printed on the row, are the two ways this goes wrong quietly. The **EoM reign
+  log** follows it as well, by looking the person up on the roster; it falls back to the name
+  stored in the log only for somebody no longer on it, who cannot be looked up and whose name at
+  the time is then the only record of who held it.
 - **There is no Edit mode, and there is no Save button.** Every control is live: text commits on
   a 600ms pause and again on blur, selects and dates the instant they change, and a toast names
   what was written and offers an undo. Do not reintroduce an arm-then-save gate — the removal is

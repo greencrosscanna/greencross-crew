@@ -59,7 +59,7 @@ if (cut < 0) throw new Error('crew.js: IIFE tail not found — has the file been
 src = src.slice(0, cut) +
       '\n; return { storesInRoster, filterByStore, storePills, scopedRows, searchRows, byName,\n' +
       '           displayName, legalFirst, needsSetup, arrivedRecently, byArrival, isoDaysAgo,\n' +
-      '           state, storeName };\n' +
+      '           eomLogName, state, storeName };\n' +
       src.slice(cut);
 src = src.replace('(function () {', 'return (function () {');
 
@@ -263,6 +263,26 @@ eq('no nickname, nothing to contrast', M.legalFirst(N('Michael Kettler', '')), '
 eq('a nickname that IS the first name is not worth printing',
    M.legalFirst(N('Michael Kettler', 'Michael')), '');
 eq('and case alone is not a difference', M.legalFirst(N('Michael Kettler', 'michael')), '');
+
+// ── the Employee of the Month reign log ─────────────────────────────────────────────────────────
+/* Same name convention as everywhere else, by looking the person up on the roster — the holder
+   card and the log beneath it were rendering the same person as "Mike Kettler" and "Michael
+   Kettler". The log's stored name stays as the FALLBACK, and that half still earns its place:
+   somebody who has left is not on the roster to look up, and the name they held it under is then
+   the only record there is. */
+M.state.rows = [{ employee_id: 'mike_kettler', name: 'Michael Kettler', preferred_name: 'Mike' }];
+eq('a current employee reads with their nickname, like everywhere else',
+   M.eomLogName({ employee_id: 'mike_kettler', name: 'Michael Kettler' }), 'Mike Kettler');
+/* A spelling corrected since the reign should read corrected — the log records WHO held it, not
+   how we misspelled them that month. */
+M.state.rows = [{ employee_id: 'samantha_bryson', name: 'Samantha Bryson', preferred_name: '' }];
+eq('and a name corrected since then reads corrected',
+   M.eomLogName({ employee_id: 'samantha_bryson', name: 'Samatha Bryson' }), 'Samantha Bryson');
+M.state.rows = [];
+eq('somebody who has left keeps the name they held it under',
+   M.eomLogName({ employee_id: 'gone_person', name: 'Departed Person' }), 'Departed Person');
+eq('and an unknown row with no stored name falls back to the id, not blank',
+   M.eomLogName({ employee_id: 'ghost', name: '' }), 'ghost');
 
 // ── ordering inside a group ─────────────────────────────────────────────────────────────────────
 /* Blanks sink, in every comparison, always. A record with no name is the ABSENCE of a value, not

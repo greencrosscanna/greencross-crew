@@ -790,6 +790,19 @@
   /* The reign log. The face comes from the roster where they are still on it, but the NAME comes
      from the log: someone since renamed or retired held it under the name they held it under, and
      quietly restating the present would not be a record of the past. */
+  /* The reign log writes a person the way every other surface does — nickname + surname — by
+     looking them up on the roster, exactly as the holder card directly above it already did. The
+     two sitting next to each other saying "Mike Kettler" and "Michael Kettler" was the giveaway.
+     
+     The log's OWN stored name survives as the fallback, and that half still matters: somebody who
+     has left is no longer on the roster to look up, and their name at the time is then the only
+     record of who held it. So a current employee reads currently, and a departed one reads as
+     they were — rather than the log freezing a spelling we have since corrected. */
+  function eomLogName(h) {
+    var row = rowById(h.employee_id);
+    return row ? displayName(row) : String(h.name || h.employee_id || '');
+  }
+
   function eomHistoryNodes() {
     if (state.eomHistory === undefined) return [el('p', 'crew-hint', 'Loading the reign log…')];
     if (state.eomHistoryErr) return [el('p', 'crew-hint', esc(state.eomHistoryErr))];
@@ -802,7 +815,7 @@
       /* A deliberate "nobody" is part of the record, not a gap in it — the same distinction
          Core draws by storing an empty value instead of deleting the key. */
       li.appendChild(el('span', 'crew-eomlog-name' + (h.nobody ? ' is-nobody' : ''),
-        h.nobody ? 'Nobody held it' : esc(h.name || h.employee_id)));
+        h.nobody ? 'Nobody held it' : esc(eomLogName(h))));
       li.appendChild(el('span', 'crew-eomlog-when', esc(eomSpan(h))));
       /* Provenance, because the two are not the same claim. An observed reign is what GX Core
          actually held; a backfilled one is somebody's memory of a month that predates the log. */
