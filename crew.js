@@ -469,34 +469,18 @@
    * starter, and putting them in this section would bury the person who actually needs twenty
    * minutes of someone's attention today — which is the entire point of having it.
    */
+  /* Which gaps mean a record was never FINISHED, as opposed to merely imperfect. Kept here only
+     to NAME them on the card; whether somebody counts as new is the engine's answer, below. */
   var SETUP_FLAGS = ['hire_date', 'wage', 'store', 'role', 'employee_number'];
 
-  /* Today, and 90 days before it, as YYYY-MM-DD in the reader's own local date. Compared as
-     STRINGS against the stored value, which is already text — parsing "2026-02-16" into a Date
-     to subtract from another Date is how a comparison picks up a timezone and starts answering
-     differently either side of midnight. */
-  function isoDaysAgo(n) {
-    var d = new Date();
-    d.setDate(d.getDate() - n);
-    var p = function (x) { return (x < 10 ? '0' : '') + x; };
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
-  }
-
-  /* A gap alone is not newness — that was the first cut of this and it put the two OWNERS at the
-     top of the list, because neither is on an hourly wage and "no wage" reads as unfinished.
-     Nobody has been here longer.
-     So a person is NEW only if they also look like a recent arrival: no hire date at all (we
-     cannot tell how long they have been here, which is itself an unfinished record), no employee
-     number yet (they turned up since the last assignment run), or a start date inside 90 days. */
-  function arrivedRecently(row) {
-    if (!String(row.employee_number || '').trim()) return true;
-    if (!row.hire_date) return true;
-    return String(row.hire_date) >= isoDaysAgo(90);
-  }
+  /* THE ENGINE DECIDES, and this reads its answer. The rule lived here for an afternoon and had
+     to move: the Monday digest renders the same list server-side, and two copies of "who is new"
+     would drift the first time either was touched — the same reason `flags` has always been the
+     engine's to compute. needsSetup_ in Code.gs is the definition; row.needs_setup is the result.
+     Guarded so an older engine, which sends no such field, simply shows an empty section rather
+     than throwing. */
   function needsSetup(row) {
-    if (row.retired) return false;
-    if (!SETUP_FLAGS.some(function (f) { return has(row, f); })) return false;
-    return arrivedRecently(row);
+    return !row.retired && !!row.needs_setup;
   }
   /* Newest first, and "newest" is the employee NUMBER: they are issued in order of appearance,
      so the highest number is the most recent arrival. Somebody with no number yet is newer
@@ -1061,12 +1045,11 @@
     var named = !!String(r.name || '').trim();
     txt.appendChild(el('span', 'crew-person-name' + (named ? '' : ' is-blank'),
       named ? esc(displayName(r)) : '⚠ Record blanked'));
-    /* The legal first name rides the sub-line, not the nickname: the nickname is now the name on
-       the line above, and repeating it there would spend the only other line on this row saying
-       nothing. This way both spellings are visible without opening anybody. */
-    var lf = legalFirst(r);
-    txt.appendChild(el('span', 'crew-person-meta',
-      esc(r.role) + (lf ? ' · “' + esc(lf) + '”' : '')));
+    /* Role only. The legal first name lived here briefly and earned its place on the RECORD, not
+       in the list: scanning for somebody you are looking for, "Budtender · “Michael”" is one more
+       thing to read past on every row to answer a question nobody is asking at that moment. It is
+       still on the header the moment you open them. */
+    txt.appendChild(el('span', 'crew-person-meta', esc(r.role)));
     b.appendChild(txt);
 
     if (state.eom && String(state.eom) === String(r.employee_id)) {

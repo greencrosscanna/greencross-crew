@@ -378,6 +378,11 @@ function route_(e) {
         }
         return json_(installNightlyScan_(p), p.callback);
 
+      // The Monday recap. Previews by default; send=yes actually mails it, to= overrides who.
+      case 'digest':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(sendDigest_(p), p.callback);
+
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
@@ -2051,6 +2056,31 @@ function mergeEmployees_(p) {
  * unusual: a genuinely low wage or an odd shirt size is not an error, and crying wolf on those
  * teaches people to ignore the red.
  */
+/* ── "New here": arrived, but the record was never finished ──────────────────────
+ * ONE definition, computed here, exactly like rowFlags_ and for the same reason: the roster, the
+ * Monday digest and anything later must not each carry their own idea of who is new. The client
+ * reads `needs_setup` off the row; it does not re-derive it.
+ *
+ * Both halves are load-bearing. A setup gap ALONE put Sky and Mike at the top of a list headed
+ * "New here" — neither takes an hourly wage, so both carried a permanent `wage` gap, and nobody
+ * has been here longer. So it also takes signs of a recent arrival: no hire date at all (we
+ * cannot tell how long they have been here, which is itself an unfinished record), no employee
+ * number yet (they turned up since the last assignment run), or a start date inside 90 days.
+ */
+var SETUP_FLAGS = ['hire_date', 'wage', 'store', 'role', 'employee_number'];
+function needsSetup_(r, today) {
+  if (r.retired) return false;
+  var gap = false;
+  for (var i = 0; i < SETUP_FLAGS.length; i++) {
+    if ((r.flags || []).indexOf(SETUP_FLAGS[i]) >= 0) { gap = true; break; }
+  }
+  if (!gap) return false;
+  if (!String(r.employee_number || '').trim()) return true;
+  if (!r.hire_date) return true;
+  var d = dateFromIso_(r.hire_date);
+  return !!d && daysBetween_(d, today) <= 90;
+}
+
 function rowFlags_(r) {
   var f = [];
   // Checked BEFORE the retired escape hatch: an incomplete retired record is expected, but a
@@ -2170,7 +2200,7 @@ function rosterJoin_() {
         : '',
       updated_at: a.updated_at || '', updated_by: a.updated_by || ''
     };
-  }).map(function (r) { r.flags = rowFlags_(r); return r; })
+  }).map(function (r) { r.flags = rowFlags_(r); r.needs_setup = needsSetup_(r, today); return r; })
     .filter(function (r) { return !r.merged; })
     .sort(function (x, y) { return x.name.localeCompare(y.name); });
 
@@ -2465,6 +2495,174 @@ function saveRosterAttrs_(p) {
 }
 
 
+// ─── Monday digest: "Everything that needs a person", by email ──────────────────
+/*
+ * The same recap the roster's overview shows, minus Employee of the Month — that is a nice thing
+ * to look at, not a thing that needs doing, and a digest that mixes the two teaches people to
+ * skim it.
+ *
+ * WHY EMAIL AT ALL, given the app already says this. Because the app only says it to somebody
+ * who opens the app. A permit expiring in 36 days is not urgent enough to make anyone open Crew
+ * on a Tuesday, and it stays not-urgent right up until it is expired.
+ *
+ * It reads. It writes nothing, and it is deliberately not the place any of this gets actioned —
+ * every line links back to the roster, because that is where the decisions are recorded.
+ */
+var DIGEST_TO = ['sky@greencrosscanna.com', 'mike@greencrosscanna.com'];
+var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';
+
+function digestData_() {
+  var joined = rosterJoin_();
+  var live = joined.rows.filter(function (r) { return !r.retired; });
+  var items = reviewItems_();
+  var expiring = live.filter(function (r) { return r.permit_days_left != null && r.permit_days_left <= 90; })
+                     .sort(function (a, b) { return a.permit_days_left - b.permit_days_left; });
+  return {
+    active: live.length,
+    questions: items,
+    expiring: expiring,
+    gaps: live.filter(function (r) { return (r.flags || []).length; }).length,
+    fresh: live.filter(function (r) { return r.needs_setup; })
+  };
+}
+
+/* Hex literals, not --gx-* tokens, and this is the one place that is correct: an email client has
+   no stylesheet to read them from. Tables and inline styles for the same reason — Outlook still
+   does not do flexbox. The values are the theme's, copied deliberately. */
+function digestHtml_(d) {
+  var GOLD = '#d4a847', RED = '#ef4444', GREEN = '#4ade80';
+  var TXT = '#e6ece9', DIM = '#8a958f', MUTE = '#5e6864';
+  var BG = '#0a0e0d', CARD = '#121715', LINE = '#232a27';
+  var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); };
+
+  function tile(n, label, colour) {
+    return '<td style="padding:0 6px 0 0;width:25%" valign="top">' +
+      '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-radius:10px;padding:14px 16px">' +
+      '<div style="font:700 23px/1.1 Helvetica,Arial,sans-serif;color:' + colour + '">' + n + '</div>' +
+      '<div style="font:400 11px/1.4 Helvetica,Arial,sans-serif;color:' + MUTE + ';padding-top:4px">' +
+      esc(label) + '</div></div></td>';
+  }
+  function section(title, note) {
+    return '<div style="font:700 11px/1.4 Helvetica,Arial,sans-serif;letter-spacing:1.4px;' +
+      'text-transform:uppercase;color:' + DIM + ';padding:26px 0 10px">' + esc(title) +
+      (note ? '<span style="font-weight:400;letter-spacing:0;text-transform:none;color:' + MUTE +
+              ';padding-left:10px">' + esc(note) + '</span>' : '') + '</div>';
+  }
+  function card(edge, kicker, kickerColour, name, detail) {
+    return '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-left:3px solid ' +
+      edge + ';border-radius:9px;padding:12px 14px;margin:0 0 8px">' +
+      '<div style="font:700 9.5px/1.4 Helvetica,Arial,sans-serif;letter-spacing:.9px;' +
+      'text-transform:uppercase;color:' + kickerColour + '">' + esc(kicker) + '</div>' +
+      '<div style="font:600 14px/1.4 Helvetica,Arial,sans-serif;color:' + TXT + ';padding:2px 0 4px">' +
+      esc(name) + '</div>' +
+      '<div style="font:400 12.5px/1.5 Helvetica,Arial,sans-serif;color:' + DIM + '">' +
+      esc(detail) + '</div></div>';
+  }
+
+  var open = d.questions.length;
+  var h = '<div style="background:' + BG + ';padding:26px 30px;font-family:Helvetica,Arial,sans-serif">' +
+    '<div style="max-width:640px">' +
+    '<div style="font:700 23px/1.2 Helvetica,Arial,sans-serif;color:' + TXT + ';letter-spacing:-.3px">' +
+    'Everything that needs a person</div>' +
+    '<div style="font:400 13px/1.5 Helvetica,Arial,sans-serif;color:' + MUTE + ';padding:6px 0 22px">' +
+    open + ' open question' + (open === 1 ? '' : 's') + ' &middot; ' +
+    d.expiring.length + ' permit' + (d.expiring.length === 1 ? '' : 's') + ' inside 90 days &middot; ' +
+    d.gaps + ' record' + (d.gaps === 1 ? '' : 's') + ' with a gap</div>' +
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:separate"><tr>' +
+    tile(d.active, 'active people', TXT) +
+    tile(open, 'open questions', open ? GOLD : GREEN) +
+    tile(d.expiring.length, 'permits inside 90 days', d.expiring.length ? RED : GREEN) +
+    tile(d.gaps, 'records with a gap', d.gaps ? GOLD : GREEN) +
+    '</tr></table>';
+
+  if (d.fresh.length) {
+    h += section('New here', 'arrived, profile not finished');
+    d.fresh.forEach(function (r) {
+      var missing = SETUP_FLAGS.filter(function (f) { return (r.flags || []).indexOf(f) >= 0; })
+                               .map(function (f) { return FLAG_LABEL_[f] || f; });
+      h += card(GREEN, (r.store || 'no store') + ' \u00b7 ' + (r.role_is_default ? 'no role' : r.role),
+                r.preferred_name ? displayNameOf_(r) : r.name,
+                'Still needs ' + missing.join(', ') + '.');
+    });
+  }
+
+  h += section('Open questions', 'nothing here has been applied');
+  if (!open) {
+    h += '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-radius:10px;' +
+         'padding:22px;text-align:center;font:400 13.5px Helvetica,Arial,sans-serif;color:' + GREEN + '">' +
+         '&#10003; Every source agrees. Nothing to review.</div>';
+  } else {
+    d.questions.forEach(function (it) {
+      var edge = it.severity === 'high' ? RED : it.severity === 'warn' ? GOLD : LINE;
+      h += card(edge, KIND_LABEL_[it.kind] || it.kind, edge, it.name, it.detail);
+    });
+  }
+
+  h += '<div style="padding:28px 0 0">' +
+    '<a href="' + CREW_URL + '" style="display:inline-block;background:' + GREEN + ';color:#06210f;' +
+    'font:700 13px Helvetica,Arial,sans-serif;text-decoration:none;padding:10px 18px;border-radius:6px">' +
+    'Open GX Crew</a></div>' +
+    '<div style="font:400 11px/1.6 Helvetica,Arial,sans-serif;color:' + MUTE + ';padding:20px 0 0">' +
+    'Sent Monday mornings from GX Crew. Nothing in this email has been applied &mdash; every ' +
+    'decision is recorded in the app.</div>' +
+    '</div></div>';
+  return h;
+}
+
+/* Labels shared with the frontend's copies. Duplicated deliberately rather than imported: the
+   email is rendered server-side and has no access to crew.js, and a kind with no label here shows
+   its raw key rather than nothing. */
+var KIND_LABEL_ = { duplicate: 'Possible duplicate', retired_with_access: 'Retired, still has access',
+  missing_permit: 'No OLCC permit on file', permit_expired: 'Permit expired',
+  permit_expiring: 'Permit expiring', missing_field: 'Missing data',
+  name_spelling: 'Name spelling differs', role: 'Role differs',
+  new_hire: 'In Dutchie, not on the roster' };
+var FLAG_LABEL_ = { name: 'name', employee_number: 'employee number', hire_date: 'hire date',
+  store: 'store', role: 'role', no_account: 'GX account', wage: 'wage', birthday: 'birthday',
+  permit: 'OLCC permit', permit_expired: 'expired permit', permit_status: 'permit status' };
+
+/** Nickname + surname, the way every surface writes a person. Mirrors displayName() in crew.js. */
+function displayNameOf_(r) {
+  var full = String(r.name || r.full_name || '').trim();
+  if (!full) return '';
+  var nick = String(r.preferred_name || '').trim();
+  if (!nick) return full;
+  var sp = full.indexOf(' ');
+  return sp < 0 ? nick : nick + full.slice(sp);
+}
+
+function sendDigest_(p) {
+  var to = String(p.to || '').trim();
+  var recipients = to ? to.split(/[,;\s]+/).filter(function (x) { return x; }) : DIGEST_TO;
+  var d = digestData_();
+  var html = digestHtml_(d);
+  var open = d.questions.length;
+  var subject = 'GX Crew — ' + (open ? open + ' open question' + (open === 1 ? '' : 's') : 'all clear') +
+                (d.expiring.length ? ', ' + d.expiring.length + ' permit' +
+                 (d.expiring.length === 1 ? '' : 's') + ' inside 90 days' : '');
+  if (String(p.send || '') !== 'yes') {
+    return { ok: true, mode: 'preview', would_send_to: recipients, subject: subject,
+             active: d.active, open_questions: open, expiring: d.expiring.length,
+             gaps: d.gaps, new_here: d.fresh.length,
+             note: 'Nothing sent. Repeat with send=yes.' };
+  }
+  try {
+    MailApp.sendEmail({ to: recipients.join(','), subject: subject, htmlBody: html,
+                        name: 'GX Crew' });
+  } catch (e) {
+    return { ok: false, needs_authorization: true, error: String((e && e.message) || e),
+             fix: 'MailApp needs the script.send_mail scope. Run sendDigestNow() once from the ' +
+                  'Apps Script editor and grant it when prompted.' };
+  }
+  return { ok: true, mode: 'sent', to: recipients, subject: subject,
+           open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length };
+}
+
+/* Trigger entry point, and the editor-runnable twin for the one-time mail authorisation. */
+function weeklyDigest() { return sendDigest_({ send: 'yes' }); }
+function sendDigestNow() { return sendDigest_({ send: 'yes' }); }
+
 // ─── Nightly: who does Dutchie say works here that Crew has never heard of? ─────
 /*
  * THE GAP THIS CLOSES. Nothing polled anything. A new hire appeared in Crew only when a human
@@ -2577,15 +2775,21 @@ function installNightlyScan() { return installNightlyScanUnsafe_({ enabled: 'yes
 function installNightlyScanUnsafe_(p) {
   var on = String(p.enabled || 'yes') !== 'no';
   var removed = 0;
+  var MINE = ['nightlyDutchieScan', 'weeklyDigest'];
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'nightlyDutchieScan') { ScriptApp.deleteTrigger(t); removed++; }
+    if (MINE.indexOf(t.getHandlerFunction()) >= 0) { ScriptApp.deleteTrigger(t); removed++; }
   });
   if (!on) return { ok: true, enabled: false, removed: removed };
   /* 5am store time: after the last shift's Dutchie writes have settled and before anyone opens
      Crew, so the queue is already right the first time somebody looks at it. */
   ScriptApp.newTrigger('nightlyDutchieScan').timeBased().atHour(5).everyDays(1)
     .inTimezone(STORE_TZ).create();
-  return { ok: true, enabled: true, replaced: removed, hour: 5, timezone: STORE_TZ };
+  /* Monday 07:00, an hour after the nightly scan has already filed anything new — so the digest
+     reports the week including whoever turned up over the weekend, rather than racing it. */
+  ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(7).inTimezone(STORE_TZ).create();
+  return { ok: true, enabled: true, replaced: removed,
+           nightly_scan_hour: 5, digest_day: 'MONDAY', digest_hour: 7, timezone: STORE_TZ };
 }
 
 // ─── HR import (staff sheet + METRC permits → Core identity + Crew attributes) ───

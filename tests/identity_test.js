@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -149,6 +149,37 @@ eq(C.wageExempt_('none', ''),   true,  'the owner takes nothing');
 /* The legacy boolean still has to work — it was written to a live row before pay_type existed. */
 eq(C.wageExempt_('', 'yes'),      true,  'legacy not_on_payroll still exempts');
 eq(C.wageExempt_('hourly', 'yes'), false, 'but an explicit pay_type WINS over the old boolean');
+
+// ── needsSetup_ — arrived, but never finished ────────────────────────────────
+/*
+ * Drives the roster's "New here" section AND the Monday digest, which is why it lives here rather
+ * than in either of them.
+ *
+ * BOTH HALVES ARE LOAD-BEARING. A setup gap alone put Sky and Mike at the top of a list headed
+ * "New here" — neither takes an hourly wage, so both carried a permanent `wage` gap, and nobody
+ * in the company has been here longer. So it also takes a sign of recent arrival.
+ */
+console.log('\n2c. needsSetup_ — who actually just arrived?');
+const TODAY = new Date(2026, 7, 25);
+const NS = (o) => C.needsSetup_(Object.assign(
+  { flags: [], retired: false, employee_number: '42', hire_date: '2019-03-04' }, o), TODAY);
+eq(NS({ flags: [] }), false, 'a complete record is not new');
+eq(NS({ flags: ['hire_date'], hire_date: '' }), true, 'no hire date — we cannot tell, so it needs a person');
+eq(NS({ flags: ['employee_number'], employee_number: '' }), true, 'no number yet — turned up since the last run');
+eq(NS({ flags: ['wage'], hire_date: '2026-08-01' }), true, 'started three weeks ago and has no wage');
+/* THE OWNERS. */
+eq(NS({ flags: ['wage'], hire_date: '2019-03-04' }), false,
+   'a seven-year employee with no wage is NOT new — this is the bug the second half fixes');
+eq(NS({ flags: ['store'], hire_date: '2019-03-04' }), false, 'nor one missing a store since 2019');
+/* Only the gaps that mean "never set up". An imperfect record is not an unfinished one. */
+eq(NS({ flags: ['shirt_size'], hire_date: '2026-08-01' }), false, 'a missing shirt size does not count');
+eq(NS({ flags: ['birthday'], hire_date: '2026-08-01' }), false, 'nor a missing birthday');
+eq(NS({ flags: ['permit'], hire_date: '2026-08-01' }), false, 'nor a missing permit');
+eq(NS({ flags: ['hire_date', 'wage'], hire_date: '', retired: true }), false,
+   'a retired record is never new, whatever it is missing');
+/* The 90-day boundary, from both sides. */
+eq(NS({ flags: ['wage'], hire_date: '2026-05-28' }), true,  '89 days ago is recent');
+eq(NS({ flags: ['wage'], hire_date: '2026-05-26' }), false, '91 days ago is not');
 
 // ── normBirthday_ ────────────────────────────────────────────────────────────
 console.log('\n3. normBirthday_ — must DISCARD the year (PII leaves this app as MM-DD only)');

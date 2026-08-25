@@ -237,13 +237,19 @@
       border-radius: 9px; padding: 12px 14px; margin: 0 0 8px; }
     .crew-q.sev-high { border-left-color: var(--gx-red); }
     .crew-q.sev-warn { border-left-color: var(--gx-gold); }
+    /* Wide enough for the longest store-and-role pairing on one line — "Commercial · Assistant
+       Manager" is 9.5px uppercase with letter-spacing, which is wider than it looks. It wrapped
+       to two lines at the original 190px and pushed the card taller than its neighbours. */
     .crew-q-who { display: flex; align-items: center; gap: 9px; background: none; border: 0;
-      padding: 0; cursor: pointer; flex: 0 1 190px; min-width: 150px; text-align: left; font: inherit; }
+      padding: 0; cursor: pointer; flex: 0 1 260px; min-width: 240px; text-align: left; font: inherit; }
     .crew-q-txt { min-width: 0; }
     .crew-q-name { display: block; font-size: 13px; font-weight: 600; color: var(--gx-text);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .crew-q-kind { display: block; font-size: 9.5px; font-weight: 700; letter-spacing: .9px;
-      text-transform: uppercase; color: var(--gx-border-strong); }
+      text-transform: uppercase; color: var(--gx-border-strong);
+      /* One line, always. If a pairing ever outgrows the column it clips rather than reflowing —
+         a card that changes height on a long store name breaks the rhythm of the whole list. */
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .crew-q.sev-high .crew-q-kind { color: var(--gx-red); }
     .crew-q.sev-warn .crew-q-kind { color: var(--gx-gold); }
     .crew-q-detail { flex: 1 1 240px; min-width: 180px; font-size: 12.5px;
@@ -501,6 +507,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.317"></script>
+  <script src="crew.js?v=1.318"></script>
 </body>
 </html>
