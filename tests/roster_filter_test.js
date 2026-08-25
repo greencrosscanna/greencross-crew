@@ -59,7 +59,7 @@ if (cut < 0) throw new Error('crew.js: IIFE tail not found — has the file been
 src = src.slice(0, cut) +
       '\n; return { storesInRoster, filterByStore, storePills, scopedRows, searchRows, byName,\n' +
       '           displayName, legalFirst, needsSetup, arrivedRecently, byArrival, isoDaysAgo,\n' +
-      '           eomLogName, state, storeName };\n' +
+      '           eomLogName, ctaFor, state, storeName };\n' +
       src.slice(cut);
 src = src.replace('(function () {', 'return (function () {');
 
@@ -181,6 +181,21 @@ eq('permit number', found('OLCC-100004'), ['4']);
 eq('the DISPLAYED name, which is in neither stored field', found('mari vega'), ['31']);
 eq('an empty search passes everything through', found(''), ['11', '25', '31', '4']);
 M.state.q = '';
+
+// ── what accepting a question actually DOES ─────────────────────────────────────────────────────
+/* The label has to name the write, because the four kinds do genuinely different things: two
+   change GX Core identity, one merges two records, one CREATES a person, and the rest only record
+   that a human handled something this app cannot action. "Apply" on all of them would promise a
+   write that never happens. */
+eq('a duplicate merges',            M.ctaFor('duplicate'), 'Merge them');
+eq('a spelling applies METRC',      M.ctaFor('name_spelling'), 'Apply METRC spelling');
+eq('a role applies Leaderboard',    M.ctaFor('role'), 'Apply Leaderboard role');
+eq('a Dutchie hire gets ADDED — this one creates a registry row every app reads',
+   M.ctaFor('new_hire'), 'Add to the roster');
+/* Compliance items are actioned outside this app; accepting records that somebody dealt with it
+   and must not claim to have renewed a permit itself. */
+eq('an expired permit is only acknowledged', M.ctaFor('permit_expired'), 'Mark handled');
+eq('and so is anything unrecognised',        M.ctaFor('something_new'), 'Mark handled');
 
 // ── who is "new here" ───────────────────────────────────────────────────────────────────────────
 const RECENT = M.isoDaysAgo(10), OLD = '2019-03-04';

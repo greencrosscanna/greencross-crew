@@ -267,6 +267,28 @@ Note also that accepting a `name_spelling` item writes `full_name` **only**. Set
 (`preferred_name`) so the roster reads *Michael Kettler "Mike"* like the other 18 people is a separate
 edit in the identity panel.
 
+## Nightly Dutchie scan — it REPORTS, it never writes (built 2026-08-25)
+Nothing polled anything until now: a new hire reached Crew only when somebody remembered to run a
+seed or an import, which is how Andrew Roberts sat in METRC for three days unnoticed. A time
+trigger runs `nightlyDutchieScan()` at **05:00 store time**; it compares Dutchie's active people
+against the GX Core registry and parks anyone it cannot match in **`crew_pending_hires`**.
+
+- **It creates nobody.** `seed_commit`'s own comment is the reason — writing the registry every
+  app reads "is not something that should ever fire as a side effect", and a 5am cron is exactly
+  that. Each find surfaces as a **`new_hire`** item in the review queue; accepting it (*"Add to
+  the roster"*) is the only path to a write, and a human presses it.
+- **Matching is `hrImport_`'s ladder**, not a second opinion — exact `employee_id`, then a merge
+  alias, then `samePerson_` fuzzy. Two detectors disagreeing about whether somebody is already on
+  the roster would either hide a real hire or propose a duplicate of an existing one.
+- **A failed Dutchie read changes nothing.** Writing "no new hires" because the source was
+  unreachable looks exactly like good news, so an empty read returns an error instead.
+- **Its own tab, deliberately not `crew_reviews`** — `reportConflicts_` replaces that one
+  wholesale, so a nightly writer sharing it would delete every hand-filed item every night.
+- Routes: `new_hires` (run the scan on demand) and `install_triggers` (`confirm=yes`), both
+  deploy-secret. `ScriptApp.newTrigger` needs the `script.scriptapp` scope this project did not
+  previously use, so the first install may need the owner to run `installNightlyScan()` once from
+  the editor and grant it.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.

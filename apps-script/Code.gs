@@ -83,6 +83,12 @@ var REVIEW_TAB      = 'crew_reviews';      // items reported by an import (HR/ME
 var REVIEW_HEADERS  = ['review_id', 'kind', 'employee_id', 'name', 'field',
                        'current_value', 'proposed_value', 'source', 'detail', 'reported_at'];
 var DECISION_TAB     = 'crew_decisions';   // what a human already ruled on
+/* People Dutchie says work here that the registry has never heard of. Its OWN tab, deliberately
+   not crew_reviews: reportConflicts_ replaces that one wholesale, so a nightly writer sharing it
+   would delete every hand-filed item each time it ran. */
+var PENDING_TAB      = 'crew_pending_hires';
+var PENDING_HEADERS  = ['name_key', 'full_name', 'home_store', 'role_title',
+                        'dutchie_employee_id', 'first_seen', 'last_seen'];
 var DECISION_HEADERS = ['decision_key', 'kind', 'employee_id', 'field', 'chose',
                         'value', 'decided_by', 'decided_at', 'note'];
 
@@ -356,6 +362,21 @@ function route_(e) {
       case 'props':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(propsInspect_(), p.callback);
+
+      // Who does Dutchie say works here that the registry has never heard of? Read-only against
+      // the registry — it writes nothing but its own pending tab. Safe to call any time.
+      case 'new_hires':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(dutchieNewHireScan_(), p.callback);
+
+      // Install or remove the nightly schedule. confirm=yes because a trigger is a standing
+      // arrangement that keeps running long after whoever set it up has forgotten.
+      case 'install_triggers':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        if (String(p.confirm || '') !== 'yes') {
+          return json_({ ok: false, error: 'refusing to change a schedule without confirm=yes' }, p.callback);
+        }
+        return json_(installNightlyScan_(p), p.callback);
 
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
       case 'permit_coverage':
@@ -1596,6 +1617,24 @@ function reviewItems_() {
     }
   });
 
+  // ── 3b. In Dutchie, not on the roster. Parked by the nightly scan; only a human adds them.
+  readTab_(PENDING_TAB, PENDING_HEADERS).forEach(function (h) {
+    var key = String(h.name_key || '').trim();
+    if (!key) return;
+    if (byId[key]) return;          // added since the scan ran — the item has answered itself
+    var id = decisionKey_('new_hire', key, 'identity', h.full_name);
+    if (decided[id]) return;
+    items.push({
+      id: id, kind: 'new_hire', employee_id: key, name: h.full_name,
+      field: 'identity', current_value: '', proposed_value: h.full_name,
+      source: 'Dutchie',
+      detail: 'Active in Dutchie' + (h.home_store ? ' at ' + h.home_store : '') +
+              ' since ' + String(h.first_seen || '').slice(0, 10) +
+              ', with no record in Crew. Adding them creates the identity row every app reads.',
+      severity: 'warn'
+    });
+  });
+
   // ── 4. Anything an import reported that the engine cannot see for itself (HR sheet, METRC
   //       exports — neither is reachable from Apps Script, so imports post their findings here).
   //
@@ -1746,6 +1785,23 @@ function resolveReview_(p) {
       merged[field] = value;
       GXCore.gxUpsertEmployee(merged);
       applied = field + ' → ' + value;
+    } else if (item.kind === 'new_hire') {
+      /* THE ONE PLACE THE NIGHTLY SCAN'S FINDING BECOMES A WRITE, and it takes a human pressing
+         a button to get here. Read the pending row rather than trusting the item: the item was
+         built from a scan that may be hours old, and this creates a row every app in the suite
+         reads. */
+      var pend = null;
+      readTab_(PENDING_TAB, PENDING_HEADERS).forEach(function (x) {
+        if (String(x.name_key || '').trim() === item.employee_id) pend = x;
+      });
+      if (!pend) return { ok: false, error: 'no pending hire with that key — already added, or the scan has moved on' };
+      var rt = normRole_(pend.role_title) || '';
+      GXCore.gxUpsertEmployee({
+        employee_id: pend.name_key, full_name: pend.full_name,
+        home_store: pend.home_store || '', role_title: rt,
+        dutchie_employee_id: pend.dutchie_employee_id || '', status: 'active'
+      });
+      applied = 'added ' + pend.full_name + ' to the roster';
     } else {
       // Compliance items (renew a permit, revoke access, fill a gap) are actioned OUTSIDE this
       // app. Accepting records that it was handled; it does not pretend to have done it.
@@ -2408,6 +2464,129 @@ function saveRosterAttrs_(p) {
   return { ok: true, employee_id: id, saved: rec };
 }
 
+
+// ─── Nightly: who does Dutchie say works here that Crew has never heard of? ─────
+/*
+ * THE GAP THIS CLOSES. Nothing polled anything. A new hire appeared in Crew only when a human
+ * remembered to run a seed or an import — Andrew Roberts sat in METRC for three days and surfaced
+ * only because somebody exported a spreadsheet by hand (2026-08-25).
+ *
+ * IT REPORTS, IT DOES NOT WRITE. seed_commit already says this in its own comment: writing the
+ * canonical registry every other app reads "is not something that should ever fire as a side
+ * effect". A cron that created people would be exactly that side effect, and it would do it at
+ * 5am with nobody watching. So the scan finds candidates, parks them, and a human accepts each
+ * one from the review queue — which is the same shape every other cross-source disagreement in
+ * this app already has.
+ *
+ * MATCHING IS hrImport_'S LADDER, not a second opinion: exact employee_id, then a merge alias,
+ * then samePerson_ fuzzy. Two detectors that disagree about whether somebody is already on the
+ * roster would either hide a real hire or propose a duplicate of an existing one.
+ */
+function dutchieNewHireScan_() {
+  var b = buildIdentityRows_();
+  /* A failed Dutchie read must not empty the tab. Same rule as the roster cache: writing "no new
+     hires" because the source was unreachable is a worse answer than saying nothing, because it
+     looks exactly like good news. */
+  if (!b.rows.length) {
+    return { ok: false, error: 'Dutchie returned no usable rows — nothing scanned, nothing changed',
+             store_errors: b.errors, dutchie_rows_seen: b.seen };
+  }
+
+  var existing = [];
+  try { existing = GXCore.getEmployees() || []; }
+  catch (e) { return { ok: false, error: 'could not read GX Core identity: ' + String((e && e.message) || e) }; }
+
+  var byId = Object.create(null);
+  existing.forEach(function (r) { byId[String(r.employee_id || '').trim()] = r; });
+  var aliases = readAliases_();
+
+  var unknown = [];
+  b.rows.forEach(function (r) {
+    var key = String(r.employee_id || '').trim();
+    if (!key) return;
+    if (aliases[key] && byId[aliases[key]]) return;      // merged away — resolves to a real person
+    if (byId[key]) return;                               // already on the roster
+    for (var i = 0; i < existing.length; i++) {
+      if (samePerson_(r.full_name, existing[i].full_name)) return;   // spelled differently, same human
+    }
+    unknown.push(r);
+  });
+
+  /* first_seen survives a re-scan so "in Dutchie since the 4th, still not on the roster" is
+     answerable; last_seen is what proves the finding is still true rather than stale. */
+  var now = new Date().toISOString();
+  var was = {};
+  readTab_(PENDING_TAB, PENDING_HEADERS).forEach(function (x) { was[x.name_key] = x; });
+
+  var rows = unknown.map(function (r) {
+    var prior = was[r.employee_id];
+    return PENDING_HEADERS.map(function (h) {
+      if (h === 'name_key')   return r.employee_id;
+      if (h === 'first_seen') return (prior && prior.first_seen) || now;
+      if (h === 'last_seen')  return now;
+      return String(r[h] == null ? '' : r[h]);
+    });
+  });
+
+  /* Replace only THIS tab's rows. Anyone who has since been added to the roster simply is not in
+     `unknown` any more, so they drop out without needing a delete path of their own. */
+  var sh = sheetOf_(PENDING_TAB, PENDING_HEADERS);
+  if (sh.getLastRow() > 1) sh.deleteRows(2, sh.getLastRow() - 1);
+  if (rows.length) sh.getRange(2, 1, rows.length, PENDING_HEADERS.length).setValues(rows);
+
+  var fresh = unknown.filter(function (r) { return !was[r.employee_id]; })
+                     .map(function (r) { return r.full_name; });
+  return { ok: true, scanned_at: now, dutchie_active_people: b.rows.length,
+           on_the_roster: b.rows.length - unknown.length,
+           pending: unknown.length, new_since_last_scan: fresh,
+           names: unknown.map(function (r) {
+             return r.full_name + (r.home_store ? ' (' + r.home_store + ')' : ' (no store)');
+           }),
+           store_errors: b.errors };
+}
+
+/* The trigger's entry point. A plain global name because that is what ScriptApp binds to, and it
+   does nothing but call the scan so the schedule and the work stay separable. */
+function nightlyDutchieScan() {
+  var out = dutchieNewHireScan_();
+  Logger.log(JSON.stringify(out));
+  return out;
+}
+
+/* Installs (or removes) the nightly schedule. Idempotent by construction — it clears its own
+   handler first, so running it twice leaves ONE trigger rather than two firing an hour apart. */
+function installNightlyScan_(p) {
+  /* ScriptApp.newTrigger needs the script.scriptapp OAuth scope, which this project did not
+     previously use. Apps Script detects scopes from the code, so the requirement appears the
+     moment this ships — and a web app deployed as USER_DEPLOYING cannot grant itself a scope the
+     owner has not consented to. Caught and NAMED rather than thrown, so the answer is "the owner
+     has to authorise this once" instead of a stack trace from a 5am cron nobody is watching. */
+  try {
+    return installNightlyScanUnsafe_(p);
+  } catch (e) {
+    return { ok: false, needs_authorization: true,
+             error: String((e && e.message) || e),
+             fix: 'Open the Apps Script project and run installNightlyScan() once from the editor, ' +
+                  'granting the trigger permission when prompted. Everything else keeps working.' };
+  }
+}
+
+/** Editor-runnable wrapper, for the one-time authorisation described above. */
+function installNightlyScan() { return installNightlyScanUnsafe_({ enabled: 'yes' }); }
+
+function installNightlyScanUnsafe_(p) {
+  var on = String(p.enabled || 'yes') !== 'no';
+  var removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'nightlyDutchieScan') { ScriptApp.deleteTrigger(t); removed++; }
+  });
+  if (!on) return { ok: true, enabled: false, removed: removed };
+  /* 5am store time: after the last shift's Dutchie writes have settled and before anyone opens
+     Crew, so the queue is already right the first time somebody looks at it. */
+  ScriptApp.newTrigger('nightlyDutchieScan').timeBased().atHour(5).everyDays(1)
+    .inTimezone(STORE_TZ).create();
+  return { ok: true, enabled: true, replaced: removed, hour: 5, timezone: STORE_TZ };
+}
 
 // ─── HR import (staff sheet + METRC permits → Core identity + Crew attributes) ───
 /*

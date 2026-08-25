@@ -537,7 +537,8 @@
     permit_expiring:     'Permit expiring',
     missing_field:       'Missing data',
     name_spelling:       'Name spelling differs',
-    role:                'Role differs'
+    role:                'Role differs',
+    new_hire:            'In Dutchie, not on the roster'
   };
 
   /* Tabs live in the shared header (#navTabs), not in the page body, so Crew matches every other app.
@@ -670,6 +671,7 @@
     return kind === 'duplicate'     ? 'Merge them'
          : kind === 'name_spelling' ? 'Apply METRC spelling'
          : kind === 'role'          ? 'Apply Leaderboard role'
+         : kind === 'new_hire'      ? 'Add to the roster'
          : 'Mark handled';
   }
 
@@ -689,7 +691,7 @@
             : '✓ Recorded as not a problem');
       /* Accepting a name, a role or a merge CHANGES the roster, so the rows in hand are stale.
          Refetch quietly rather than patching a guess into them. */
-      if (choice === 'accept' && ['duplicate', 'name_spelling', 'role'].indexOf(it.kind) >= 0) {
+      if (choice === 'accept' && ['duplicate', 'name_spelling', 'role', 'new_hire'].indexOf(it.kind) >= 0) {
         if (it.kind === 'duplicate' && String(state.selected) === String(it.merge_from)) {
           state.selected = it.employee_id;      // the record they were reading no longer exists
         }
@@ -1252,6 +1254,9 @@
     var who = el('button', 'crew-q-who');
     who.type = 'button';
     var row = rowById(it.employee_id);
+    /* A new_hire has no record to open yet — that is the whole point of the item. The button
+       stays a plain label rather than a control that would select nobody. */
+    if (!row) { who.disabled = true; who.style.cursor = 'default'; }
     who.appendChild(avatarPuck(row || { name: it.name, employee_id: it.employee_id }));
     var txt = el('span', 'crew-q-txt');
     /* The person label follows the roster's spelling like everywhere else. Where the LEGAL name
