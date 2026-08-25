@@ -1880,6 +1880,31 @@
     lbl.appendChild(cb);
     lbl.appendChild(el('span', null, 'Show birthday and work anniversary on the kiosk'));
     box.appendChild(lbl);
+
+    /* The Monday recap, as this person's own preference rather than a list in the engine.
+       Needs a GX account, because that is where the address comes from — so when there is no
+       account the control says why instead of storing a wish that can never be honoured. */
+    var hasAccount = String(row.user_id || '').indexOf('@') > 0;
+    var dl = el('label', 'crew-celeb');
+    var dcb = el('input');
+    dcb.type = 'checkbox';
+    dcb.checked = !!row.digest_opt_in;
+    dcb.disabled = !state.canEdit || !hasAccount;
+    dcb.addEventListener('change', function () {
+      var on = dcb.checked;
+      dcb.disabled = true;
+      saveField(row, 'attr', 'digest_opt_in', on ? 'yes' : 'no',
+        on ? 'Monday recap on' : 'Monday recap off', null, function (r, err) {
+          dcb.disabled = false;
+          if (err) dcb.checked = !on;
+          else row.digest_opt_in = on;
+        }).catch(function () {});
+    });
+    dl.appendChild(dcb);
+    dl.appendChild(el('span', null, hasAccount
+      ? 'Email them the Monday recap — everything that needs a person'
+      : 'Email them the Monday recap — needs a GX account first, so there is nowhere to send it'));
+    box.appendChild(dl);
     return box;
   }
 

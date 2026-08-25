@@ -290,9 +290,15 @@ against the GX Core registry and parks anyone it cannot match in **`crew_pending
   the editor and grant it.
 
 ## Monday digest — and the Apps Script auth trap it walked into
-The nightly scan's findings, plus the permit and gap counts, mailed **Mondays 07:00 store time**
-to **Sky and Mike** (`DIGEST_TO` in `Code.gs`). Same content as the roster's overview minus
-Employee of the Month. `?action=digest` previews, `&send=yes` sends, `&to=` overrides. Every
+The nightly scan's findings, plus the permit and gap counts, mailed **Mondays 07:00 store time**.
+Same content as the roster's overview minus Employee of the Month.
+
+**Who receives it is a per-person setting, not a list in the source** — `digest_opt_in`, ticked on
+their own record under *Links & visibility*. It needs a **GX account** too, because `user_id` is
+where the address comes from; with no account the control says so rather than storing a preference
+that could never be honoured. There is deliberately **no fallback list**: "if nobody opted in, send
+to these people" would mail somebody who had just switched it off, which is the one thing a
+preference must never do. Nobody opted in means the send reports that it went to nobody. `?action=digest` previews, `&send=yes` sends, `&to=` overrides. Every
 attempt records its outcome and its **source** (`editor` / `webapp` / `trigger`) to a script
 property, readable via `?action=mail_check`, which also lists the live triggers.
 

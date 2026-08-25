@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, digestHtml_, displayNameOf_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, digestHtml_, displayNameOf_, digestRecipients_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -180,6 +180,33 @@ eq(NS({ flags: ['hire_date', 'wage'], hire_date: '', retired: true }), false,
 /* The 90-day boundary, from both sides. */
 eq(NS({ flags: ['wage'], hire_date: '2026-05-28' }), true,  '89 days ago is recent');
 eq(NS({ flags: ['wage'], hire_date: '2026-05-26' }), false, '91 days ago is not');
+
+// ── who receives the digest ──────────────────────────────────────────────────
+/*
+ * A per-person setting, not a list in the source. Two conditions and BOTH matter: opted in, and
+ * has a GX account — the account is where the address comes from, so a preference without one
+ * cannot be honoured and must not be treated as if it could.
+ *
+ * There is deliberately NO fallback list. "If nobody opted in, send to these people instead" would
+ * mail somebody who had just switched it off, which is the one thing a preference must never do.
+ */
+console.log('\n2e. digestRecipients_ — a setting, not a list');
+{
+  const R = (o) => Object.assign({ retired: false, digest_opt_in: false, user_id: '' }, o);
+  const rows = [
+    R({ digest_opt_in: true,  user_id: 'sky@greencrosscanna.com' }),
+    R({ digest_opt_in: false, user_id: 'mike@greencrosscanna.com' }),
+    R({ digest_opt_in: true,  user_id: '' }),
+    R({ digest_opt_in: true,  user_id: 'gone@greencrosscanna.com', retired: true }),
+    R({ digest_opt_in: true,  user_id: 'not-an-email' })
+  ];
+  eq(JSON.stringify(C.digestRecipients_(rows)), '["sky@greencrosscanna.com"]',
+     'only the opted-in, contactable, still-employed person');
+  eq(C.digestRecipients_(rows.filter((r) => !r.digest_opt_in)).length, 0,
+     'nobody opted in means nobody gets it — no fallback list');
+  eq(C.digestRecipients_([]).length, 0, 'an empty roster does not throw');
+  eq(C.digestRecipients_(null).length, 0, 'nor does a missing one');
+}
 
 // ── the Monday digest's HTML ─────────────────────────────────────────────────
 /*
@@ -306,6 +333,9 @@ console.log('\n6. attrFields_ — derived from the schema, so no writer can drop
   ok2(f.indexOf('not_on_payroll') >= 0,
       'not_on_payroll IS carried — superseded by pay_type, but still read as a fallback, and '
       + 'writeAttrs_ writes the FULL row so dropping it would blank the rows that still hold it');
+  ok2(f.indexOf('digest_opt_in') >= 0,
+      'digest_opt_in IS carried — it is who receives the Monday recap, and writeAttrs_ writes the '
+      + 'FULL row, so dropping it here silently unsubscribes everybody');
   ok2(f.indexOf('pay_type') >= 0,
       'pay_type IS carried — it decides whether an empty wage is a gap or a fact, so losing it '
       + 'puts a permanent false gap back on every salaried person and the owner');

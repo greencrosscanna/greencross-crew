@@ -34,7 +34,7 @@ var ATTR_TAB           = 'crew_attributes';
 var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'birthday', 'work_anniversary', 'employee_number', 'wage',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
-                          'celebrations_opt_out', 'not_on_payroll', 'pay_type',
+                          'celebrations_opt_out', 'not_on_payroll', 'pay_type', 'digest_opt_in',
                           'updated_at', 'updated_by'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
@@ -2183,6 +2183,7 @@ function rosterJoin_() {
       shirt_size: normShirt_(a.shirt_size), birthday: normBirthday_(a.birthday),
       work_anniversary: anniv, anniversary_is_override: !!normDate_(a.work_anniversary),
       celebrations_opt_out: isTruthyFlag_(a.celebrations_opt_out),
+      digest_opt_in: isTruthyFlag_(a.digest_opt_in),
       pay_type: normPayType_(a.pay_type) || (isTruthyFlag_(a.not_on_payroll) ? 'none' : 'hourly'),
       /* Derived once here so the UI and rowFlags_ cannot disagree about it. */
       wage_exempt: wageExempt_(a.pay_type, a.not_on_payroll),
@@ -2491,6 +2492,9 @@ function saveRosterAttrs_(p) {
                         ? (existing.not_on_payroll || '')
                         : (isTruthyFlag_(p.not_on_payroll) ? 'yes' : ''),
     pay_type:           p.pay_type == null ? (existing.pay_type || '') : normPayType_(p.pay_type),
+    digest_opt_in:      p.digest_opt_in == null
+                        ? (existing.digest_opt_in || '')
+                        : (isTruthyFlag_(p.digest_opt_in) ? 'yes' : ''),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };
@@ -2513,9 +2517,21 @@ function saveRosterAttrs_(p) {
  * It reads. It writes nothing, and it is deliberately not the place any of this gets actioned —
  * every line links back to the roster, because that is where the decisions are recorded.
  */
-/* Sky and Mike (Sky, 2026-08-25 — Mike added back once the digest was verified rendering
-   correctly, having been held off while it was still being fixed). */
-var DIGEST_TO = ['sky@greencrosscanna.com', 'mike@greencrosscanna.com'];
+/* WHO GETS IT IS A PER-PERSON SETTING, not a list in this file (Sky, 2026-08-25).
+ *
+ * `digest_opt_in` on the employee record, ticked from their own record in the app. Two conditions,
+ * and the second is not a formality: they must have opted in, AND have a `user_id` — the GX
+ * account, which is where the address comes from. Somebody with no account has nowhere to receive
+ * it, so the control says so rather than storing a preference that can never be honoured.
+ *
+ * NO FALLBACK LIST. An "if nobody opted in, send to these people" default would mail somebody who
+ * had just turned it off, which is the one thing a preference must never do. Nobody opted in means
+ * nobody gets it, and the send records that it sent to nobody. */
+function digestRecipients_(rows) {
+  return (rows || []).filter(function (r) {
+    return !r.retired && r.digest_opt_in && String(r.user_id || '').indexOf('@') > 0;
+  }).map(function (r) { return String(r.user_id).trim(); });
+}
 var LAST_DIGEST_PROP = 'CREW_LAST_DIGEST';
 var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';
 
@@ -2538,7 +2554,7 @@ function digestData_() {
     expiring: expiring,
     gaps: live.filter(function (r) { return (r.flags || []).length; }).length,
     fresh: live.filter(function (r) { return r.needs_setup; }),
-    byId: byId, stores: stores
+    byId: byId, stores: stores, all: joined.rows
   };
 }
 
@@ -2672,6 +2688,9 @@ function mailCheck_() {
   var quota = null, mailErr = '';
   try { quota = MailApp.getRemainingDailyQuota(); }
   catch (e) { mailErr = String((e && e.message) || e); }
+  var subscribers = [];
+  try { subscribers = digestRecipients_(rosterJoin_().rows); }
+  catch (e) { subscribers = ['(could not read the roster: ' + String((e && e.message) || e) + ')']; }
   var last = null;
   try {
     var raw = PropertiesService.getScriptProperties().getProperty(LAST_DIGEST_PROP);
@@ -2691,7 +2710,7 @@ function mailCheck_() {
            remaining_daily_quota: quota, mail_error: mailErr, triggers: triggers,
            /* What the LAST attempt did, from wherever it was run. This is the only window into an
               editor execution from out here. */
-           last_attempt: last, configured_recipients: DIGEST_TO,
+           last_attempt: last, configured_recipients: subscribers,
            note: quota === null
              ? 'The account above is the one that must grant the mail scope — open the script ' +
                'signed in AS THAT ACCOUNT, run sendDigestNow(), accept the prompt.'
@@ -2700,13 +2719,18 @@ function mailCheck_() {
 
 function sendDigest_(p) {
   var to = String(p.to || '').trim();
-  var recipients = to ? to.split(/[,;\s]+/).filter(function (x) { return x; }) : DIGEST_TO;
   var d = digestData_();
+  var recipients = to ? to.split(/[,;\s]+/).filter(function (x) { return x; })
+                      : digestRecipients_(d.all);
   var html = digestHtml_(d);
   var open = d.questions.length;
   var subject = 'GX Crew — ' + (open ? open + ' open question' + (open === 1 ? '' : 's') : 'all clear') +
                 (d.expiring.length ? ', ' + d.expiring.length + ' permit' +
                  (d.expiring.length === 1 ? '' : 's') + ' inside 90 days' : '');
+  if (!recipients.length) {
+    return { ok: false, error: 'nobody has the Monday recap switched on', mode: 'no recipients',
+             fix: 'Tick "Email me the Monday recap" on a person who has a GX account.' };
+  }
   if (String(p.send || '') !== 'yes') {
     return { ok: true, mode: 'preview', source: source, would_send_to: recipients, subject: subject,
              active: d.active, open_questions: open, expiring: d.expiring.length,
