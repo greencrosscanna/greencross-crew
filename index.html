@@ -360,10 +360,12 @@
 
     /* A trailer under a field's note — today only the wage card's "Not on payroll". Deliberately
        quiet: it is the exception, not the control you reach for every time. */
-    .crew-field-toggle { display: flex; align-items: center; gap: 7px; margin-top: 1px;
-      font-size: 10.5px; color: var(--gx-text-mute); cursor: pointer; }
-    .crew-field-toggle input { accent-color: var(--gx-green); margin: 0; width: 12px; height: 12px; }
-    .crew-field-toggle:hover { color: var(--gx-text-dim); }
+    .crew-field-toggle { display: flex; align-items: center; gap: 7px; margin-top: 1px; }
+    .crew-field-toggle select { background: transparent; border: 0; color: var(--gx-text-mute);
+      font: inherit; font-size: 10.5px; padding: 0; outline: none; cursor: pointer;
+      color-scheme: dark; }
+    .crew-field-toggle select:hover:not(:disabled) { color: var(--gx-text-dim); }
+    .crew-field-toggle select:focus { color: var(--gx-text); }
     .crew-permit { background: var(--gx-surface); border: 1px solid var(--gx-border);
       border-radius: var(--gx-radius-lg); padding: 16px 18px; }
     .crew-permit.is-bad { border-color: rgba(239, 68, 68, .4); }
@@ -499,6 +501,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.314"></script>
+  <script src="crew.js?v=1.315"></script>
 </body>
 </html>

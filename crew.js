@@ -1613,35 +1613,41 @@
     return box;
   }
 
-  /* "An empty wage is correct for this person." Sits ON the wage card rather than in Links &
-     visibility, because it is a statement about this field and nowhere else — and because the
-     gold border it clears is the thing that prompts somebody to reach for it. */
-  function payrollToggle(row, repaintNote) {
-    var lbl = el('label', 'crew-field-toggle');
-    var cb = el('input');
-    cb.type = 'checkbox';
-    cb.checked = !!row.not_on_payroll;
-    cb.disabled = !state.canEdit;
-    cb.addEventListener('change', function () {
-      var on = cb.checked;
-      cb.disabled = true;
-      /* 'no', not '' — an empty value is an explicit clear on this route. Same reason the
-         celebrations toggle spells it out. */
-      saveField(row, 'attr', 'not_on_payroll', on ? 'yes' : 'no',
-        on ? 'not on payroll' : 'on payroll', null, function (r, err) {
-          cb.disabled = false;
-          if (err) { cb.checked = !on; return; }
-          row.not_on_payroll = on;
-          /* The gap is the engine's to declare, but it cannot re-answer without a reload, and
-             the whole point of the toggle is that the gold border goes away as you press it. */
-          retagFlag(row, 'wage', !on && !row.wage);
-          repaintNote();
-          paintRail();
-        }).catch(function () {});
+  /* HOW this person is paid, which is what decides whether an empty wage is a gap or a fact.
+     Sits ON the wage card rather than in Links & visibility, because it is a statement about this
+     field and nowhere else — and because the gold border it clears is what prompts somebody to
+     reach for it. A select rather than a checkbox: the first version was "not on payroll", which
+     collapsed salaried managers and the owner into one claim, and the salaried ones are very much
+     on payroll. */
+  var PAY_TYPES = [['hourly', 'Paid hourly'], ['salary', 'Salaried'], ['none', 'Not on payroll']];
+  function payTypeControl(row, repaintNote) {
+    var wrap = el('div', 'crew-field-toggle');
+    var sel = el('select');
+    sel.innerHTML = PAY_TYPES.map(function (t) {
+      return '<option value="' + t[0] + '"' +
+             ((row.pay_type || 'hourly') === t[0] ? ' selected' : '') + '>' + esc(t[1]) + '</option>';
+    }).join('');
+    sel.disabled = !state.canEdit;
+    sel.setAttribute('aria-label', 'How this person is paid');
+    var last = row.pay_type || 'hourly';
+    sel.addEventListener('change', function () {
+      var v = sel.value, prev = last;
+      last = v;
+      sel.disabled = true;
+      saveField(row, 'attr', 'pay_type', v, 'pay basis', prev, function (r, err) {
+        sel.disabled = false;
+        if (err) { last = prev; sel.value = prev; return; }
+        row.pay_type = v;
+        row.wage_exempt = v !== 'hourly';
+        /* The gap is the engine's to declare, but it cannot re-answer without a reload, and the
+           point of the control is that the gold border goes as you change it. */
+        retagFlag(row, 'wage', !row.wage_exempt && !row.wage);
+        repaintNote();
+        paintRail();
+      }).catch(function () {});
     });
-    lbl.appendChild(cb);
-    lbl.appendChild(el('span', null, 'Not on payroll'));
-    return lbl;
+    wrap.appendChild(sel);
+    return wrap;
   }
 
   function fieldGrid(row) {
@@ -1708,11 +1714,12 @@
 
       { label: 'Wage', route: 'attr', field: 'wage', value: row.wage, placeholder: '0.00',
         note: function (r) {
-          if (r.not_on_payroll) return { text: 'Not on payroll', kind: '' };
-          return r.wage ? { text: 'Hourly', kind: '' } : { text: 'Not set', kind: 'gap' };
+          if (r.pay_type === 'none')   return { text: 'Owner — not on payroll', kind: '' };
+          if (r.pay_type === 'salary') return { text: 'Salaried — no hourly rate', kind: '' };
+          return r.wage ? { text: 'Hourly rate', kind: '' } : { text: 'Not set', kind: 'gap' };
         },
         read: function (r) { return r.wage || ''; },
-        extra: payrollToggle },
+        extra: payTypeControl },
 
       { label: 'Birthday', route: 'attr', field: 'birthday', value: row.birthday, placeholder: 'MM-DD',
         title: 'Month and day only — GX Crew does not store birth years.',

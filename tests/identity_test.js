@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -119,6 +119,36 @@ eq(C.normDate_('2026-02-32'), '', 'day 32 refused');
   eq(!!d && d.getFullYear() === 2029 && d.getMonth() === 4 && d.getDate() === 19, true,
      'normDate_ then dateFromIso_ gives a real date, so days-left can be counted');
 }
+
+// ── pay_type ─────────────────────────────────────────────────────────────────
+/*
+ * Decides whether an empty `wage` is a GAP or a FACT, so getting it wrong is visible on the
+ * roster as a permanent red mark on a complete record — which is exactly what happened before it
+ * existed, on the two owners.
+ *
+ * The fallback matters as much as the parsing: `not_on_payroll` shipped hours earlier and was
+ * written to at least one live row, so a person carrying only the old boolean must still come out
+ * exempt. Empty means HOURLY, not "unknown" — hourly is what almost everyone is, and a third
+ * unknown state would just be a gap wearing a different hat.
+ */
+console.log('\n2b. pay_type — is an empty wage a gap, or a fact?');
+eq(C.normPayType_('hourly'), 'hourly', 'hourly');
+eq(C.normPayType_('SALARY'), 'salary', 'case is normalised');
+eq(C.normPayType_('  none '), 'none',  'whitespace trimmed');
+eq(C.normPayType_(''),     '', 'empty stays empty — and empty MEANS hourly downstream');
+eq(C.normPayType_(null),   '', 'null does not throw');
+/* Closed set, like role_title, and for the same reason: a free-text pay basis is how a column
+   payroll will one day group by ends up holding Salary, salaried and SAL. */
+eq(C.normPayType_('Salaried'), '', 'an off-list value is refused, not stored');
+eq(C.normPayType_('contractor'), '', 'and so is a plausible-sounding one');
+
+eq(C.wageExempt_('hourly', ''), false, 'hourly staff SHOULD have a wage — an empty one is a gap');
+eq(C.wageExempt_('', ''),       false, 'and so should someone with no pay type set');
+eq(C.wageExempt_('salary', ''), true,  'salaried: there is no hourly rate to hold');
+eq(C.wageExempt_('none', ''),   true,  'the owner takes nothing');
+/* The legacy boolean still has to work — it was written to a live row before pay_type existed. */
+eq(C.wageExempt_('', 'yes'),      true,  'legacy not_on_payroll still exempts');
+eq(C.wageExempt_('hourly', 'yes'), false, 'but an explicit pay_type WINS over the old boolean');
 
 // ── normBirthday_ ────────────────────────────────────────────────────────────
 console.log('\n3. normBirthday_ — must DISCARD the year (PII leaves this app as MM-DD only)');
@@ -197,8 +227,11 @@ console.log('\n6. attrFields_ — derived from the schema, so no writer can drop
   ok2(f.indexOf('celebrations_opt_out') >= 0,
       'celebrations_opt_out IS carried — omitting it re-exposed people in the kiosk feed');
   ok2(f.indexOf('not_on_payroll') >= 0,
-      'not_on_payroll IS carried — it says an empty wage is CORRECT for the owner, so dropping it '
-      + 'puts a permanent false gap back on the two records it exists for');
+      'not_on_payroll IS carried — superseded by pay_type, but still read as a fallback, and '
+      + 'writeAttrs_ writes the FULL row so dropping it would blank the rows that still hold it');
+  ok2(f.indexOf('pay_type') >= 0,
+      'pay_type IS carried — it decides whether an empty wage is a gap or a fact, so losing it '
+      + 'puts a permanent false gap back on every salaried person and the owner');
   ok2(f.indexOf('employee_id') === -1, 'identity keys are excluded');
   ok2(f.indexOf('name_key') === -1,    'name_key excluded');
   ok2(f.indexOf('full_name') === -1,   'full_name excluded');

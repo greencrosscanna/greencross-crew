@@ -68,11 +68,15 @@ Three things a future session will otherwise get wrong:
   employee number yet, or a start date inside 90 days). Both halves are load-bearing. The first
   cut used the gap alone and put **Sky and Mike at the top of a list headed "New here"** — neither
   takes an hourly wage, so both carry a permanent `wage` gap, and nobody has been here longer.
-- **`not_on_payroll` says an empty wage is CORRECT for this person.** Same shape as
-  `celebrations_opt_out`, same reason, same two people: `rowFlags_` raised a permanent `wage`
-  gap on the owners, which is a red mark on a complete record. It cannot be inferred — `Admin`
-  and `corporate` both belong to waged staff too, and a rule keyed on either would stop flagging
-  a genuinely missing wage. It is a per-person checkbox on the wage card.
+- **`pay_type` decides whether an empty wage is a gap or a fact.** A closed set checked
+  server-side (`hourly` / `salary` / `none`; empty means hourly), picked from a select on the
+  wage card. `rowFlags_` raised a permanent `wage` gap on anyone without an hourly rate, which is
+  a red mark on a complete record — **Sky** takes nothing as owner, and **Mike, Tawny and Shawn
+  are salaried** (Sky, 2026-08-25). It cannot be inferred: `Admin` and `corporate` both belong to
+  hourly staff too, and a rule keyed on either would stop flagging a wage that really is missing.
+  It supersedes the `not_on_payroll` boolean shipped hours earlier, which collapsed "salaried"
+  and "not on payroll" into one claim — salaried people are very much on payroll. The old column
+  is still read as a fallback meaning `none`, and `ATTR_HEADERS` only appends, so it stays.
 - **Nothing in the sub nav says how many open questions there are.** The attention chip that
   used to sit there was removed 2026-08-25; the overview opens on its own and states the count
   in its title and its stat tiles, so the chip was a second scoreboard to keep in agreement with

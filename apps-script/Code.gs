@@ -34,7 +34,7 @@ var ATTR_TAB           = 'crew_attributes';
 var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'birthday', 'work_anniversary', 'employee_number', 'wage',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
-                          'celebrations_opt_out', 'not_on_payroll',
+                          'celebrations_opt_out', 'not_on_payroll', 'pay_type',
                           'updated_at', 'updated_by'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
@@ -100,7 +100,36 @@ var EOM_HEADERS = ['employee_id', 'name', 'started_at', 'set_by', 'recorded_at',
 /** Attributes a manager may edit from the roster UI. Everything else is import-owned. */
 var EDITABLE_ATTRS = ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage'];
 
-/* not_on_payroll: 'yes' means an empty `wage` is CORRECT for this person, not missing.
+/* pay_type: how this person is paid, and therefore whether an empty `wage` is a GAP or a FACT.
+ *
+ *   ''  / 'hourly'  the default. `wage` is their hourly rate and its absence is a real gap.
+ *   'salary'        salaried. There is no hourly rate to hold, so an empty wage is correct.
+ *   'none'          not on payroll at all — the owner.
+ *
+ * A CLOSED SET, checked server-side like role_title, for the same reason: a free-text pay basis
+ * is how you end up with 'Salary', 'salaried' and 'SAL' in a column that payroll will one day
+ * group by. Empty means hourly rather than "unknown", because hourly is what almost everyone is
+ * and an unknown third state would just be a gap wearing a different hat.
+ *
+ * This REPLACES the not_on_payroll boolean shipped hours earlier, which was too blunt: it made
+ * "no hourly wage" and "not on payroll" the same statement, and they are not. Mike, Tawny and
+ * Shawn are salaried — very much ON payroll — while Sky the owner takes nothing (Sky, 2026-08-25).
+ * The old column is still read as a fallback meaning 'none' so the one row that used it keeps
+ * working; ATTR_HEADERS only ever appends, so it stays in the sheet either way. */
+var PAY_TYPES = ['hourly', 'salary', 'none'];
+function normPayType_(v) {
+  var t = String(v == null ? '' : v).trim().toLowerCase();
+  if (!t) return '';
+  return PAY_TYPES.indexOf(t) >= 0 ? t : '';
+}
+/** True when an empty wage is CORRECT for this person rather than missing. */
+function wageExempt_(payType, legacyNotOnPayroll) {
+  var t = normPayType_(payType);
+  if (t) return t !== 'hourly';
+  return isTruthyFlag_(legacyNotOnPayroll);
+}
+
+/* not_on_payroll (LEGACY, superseded by pay_type above): 'yes' meant an empty `wage` is correct.
  *
  * Same shape of problem as celebrations_opt_out above, same answer, and for the same person. Sky
  * is the owner and takes no hourly wage; Mike is the other. rowFlags_ raised a `wage` gap on both
@@ -1990,8 +2019,9 @@ function rowFlags_(r) {
      counts. Two detectors that answer differently are worse than one. Admin is excluded there
      and so here: notifications target managers. Retired rows never reach this line. */
   if (MANAGER_ROLE_RE.test(r.role) && !String(r.user_id || '').trim()) f.push('no_account');
-  /* Not "has no wage" — "has no wage AND is supposed to". See the not_on_payroll note above. */
-  if (!r.wage && !r.not_on_payroll) f.push('wage');
+  /* Not "has no wage" — "has no wage AND is supposed to have one". A salaried manager and the
+     owner both hold an empty wage correctly; see pay_type above. */
+  if (!r.wage && !r.wage_exempt) f.push('wage');
   if (!r.birthday)                 f.push('birthday');
   if (!r.permit_number)            f.push('permit');
   else if (r.permit_days_left != null && r.permit_days_left < 0) f.push('permit_expired');
@@ -2062,7 +2092,9 @@ function rosterJoin_() {
       shirt_size: normShirt_(a.shirt_size), birthday: normBirthday_(a.birthday),
       work_anniversary: anniv, anniversary_is_override: !!normDate_(a.work_anniversary),
       celebrations_opt_out: isTruthyFlag_(a.celebrations_opt_out),
-      not_on_payroll: isTruthyFlag_(a.not_on_payroll),
+      pay_type: normPayType_(a.pay_type) || (isTruthyFlag_(a.not_on_payroll) ? 'none' : 'hourly'),
+      /* Derived once here so the UI and rowFlags_ cannot disagree about it. */
+      wage_exempt: wageExempt_(a.pay_type, a.not_on_payroll),
       permit_number: a.permit_number || '',
       /* NORMALISED, like hire_date two lines up — this was the one date on the row that was not,
          and the omission was silent in the worst way. readAttrs_ does String() over the cell, so
@@ -2329,6 +2361,10 @@ function saveRosterAttrs_(p) {
   if (p.employee_number != null) {
     return { ok: false, error: 'employee_number is assigned automatically and cannot be edited' };
   }
+  var payType = String(p.pay_type == null ? '' : p.pay_type).trim();
+  if (payType && !normPayType_(payType)) {
+    return { ok: false, error: 'invalid pay_type: ' + payType + ' (expected one of ' + PAY_TYPES.join(', ') + ')' };
+  }
   var shirt = String(p.shirt_size == null ? '' : p.shirt_size).trim();
   if (shirt && !normShirt_(shirt)) return { ok: false, error: 'invalid shirt_size: ' + shirt + ' (expected one of ' + SHIRT_SIZES.join(', ') + ')' };
   var bday = String(p.birthday == null ? '' : p.birthday).trim();
@@ -2363,6 +2399,7 @@ function saveRosterAttrs_(p) {
     not_on_payroll:     p.not_on_payroll == null
                         ? (existing.not_on_payroll || '')
                         : (isTruthyFlag_(p.not_on_payroll) ? 'yes' : ''),
+    pay_type:           p.pay_type == null ? (existing.pay_type || '') : normPayType_(p.pay_type),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };
