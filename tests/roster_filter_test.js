@@ -28,6 +28,13 @@
  *                    retired staff as current employees; getting `retired` wrong shows nobody at
  *                    all on a scope whose whole job is to find somebody who left.
  *
+ *   needsSetup /     who lands in the overview's "New here" list. It has to stay a SUBSET of the
+ *   byArrival        flagged rows -- a ten-year employee with no shirt size is not a new starter,
+ *                    and listing them buries the person who arrived on Tuesday with no wage. The
+ *                    ordering is by employee NUMBER descending, because numbers are issued in
+ *                    order of appearance, so the highest is the most recent arrival and someone
+ *                    with no number yet is newer still.
+ *
  *   displayName      the roster LEADS with the name people use -- nickname joined to the legal
  *                    surname -- and it is a RENDERING, never a stored value. If this ever leaked
  *                    into a write it would put "Mike" in the column METRC and payroll match on,
@@ -51,7 +58,8 @@ const cut = src.lastIndexOf(TAIL);
 if (cut < 0) throw new Error('crew.js: IIFE tail not found — has the file been restructured?');
 src = src.slice(0, cut) +
       '\n; return { storesInRoster, filterByStore, storePills, scopedRows, searchRows, byName,\n' +
-      '           displayName, legalFirst, state, storeName };\n' +
+      '           displayName, legalFirst, needsSetup, arrivedRecently, byArrival, isoDaysAgo,\n' +
+      '           state, storeName };\n' +
       src.slice(cut);
 src = src.replace('(function () {', 'return (function () {');
 
@@ -173,6 +181,67 @@ eq('permit number', found('OLCC-100004'), ['4']);
 eq('the DISPLAYED name, which is in neither stored field', found('mari vega'), ['31']);
 eq('an empty search passes everything through', found(''), ['11', '25', '31', '4']);
 M.state.q = '';
+
+// ── who is "new here" ───────────────────────────────────────────────────────────────────────────
+const RECENT = M.isoDaysAgo(10), OLD = '2019-03-04';
+/* employee_number set + an old hire date = an established person, so only the GAP varies. */
+const P = (o) => Object.assign({ name: 'X Y', flags: [], retired: false,
+                                 employee_number: '42', hire_date: OLD }, o);
+eq('a record with no gaps is not new',    M.needsSetup(P({ flags: [] })), false);
+eq('no hire date means unfinished',       M.needsSetup(P({ flags: ['hire_date'], hire_date: '' })), true);
+eq('no store, recently arrived',          M.needsSetup(P({ flags: ['store'], hire_date: RECENT })), true);
+eq('no role, recently arrived',           M.needsSetup(P({ flags: ['role'], hire_date: RECENT })), true);
+eq('no employee number at all',           M.needsSetup(P({ flags: ['employee_number'], employee_number: '' })), true);
+eq('no wage, recently arrived',           M.needsSetup(P({ flags: ['wage'], hire_date: RECENT })), true);
+
+/* THE OWNERS. Neither takes an hourly wage, so rowFlags_ raised a permanent `wage` gap on both,
+   and the first cut of this rule put the two longest-serving people in the company at the top of
+   a list headed "New here". Two independent guards now: a gap is not newness (here), and
+   not_on_payroll stops the gap being raised at all (rowFlags_ in Code.gs). Either alone fixes
+   the symptom; both are worth keeping, because the flag has to be SET per person and this rule
+   holds for anyone nobody has got round to setting it on. */
+eq('a seven-year employee with no wage is NOT new',
+   M.needsSetup(P({ flags: ['wage'], hire_date: OLD })), false);
+eq('nor one missing a store after seven years',
+   M.needsSetup(P({ flags: ['store'], hire_date: OLD })), false);
+
+eq('recent means inside 90 days',  M.arrivedRecently(P({ hire_date: M.isoDaysAgo(89) })), true);
+eq('and 91 days is not recent',    M.arrivedRecently(P({ hire_date: M.isoDaysAgo(91) })), false);
+/* No number yet means they turned up since the last assignment run — newer than anyone holding
+   one, however old their hire date happens to be. */
+eq('no employee number beats any hire date',
+   M.arrivedRecently(P({ hire_date: OLD, employee_number: '' })), true);
+/* The whole point of the section is that it is SMALLER than "records with a gap". A long-serving
+   employee missing a shirt size or a birthday has an imperfect record, not an unfinished one, and
+   putting them here buries the person who actually started this week. */
+eq('a missing shirt size does NOT make someone new',
+   M.needsSetup(P({ flags: ['shirt_size'], hire_date: RECENT })), false);
+eq('nor a missing birthday', M.needsSetup(P({ flags: ['birthday'], hire_date: RECENT })), false);
+eq('nor an expired permit',
+   M.needsSetup(P({ flags: ['permit', 'permit_expired'], hire_date: RECENT })), false);
+eq('a retired record is never new, whatever it is missing',
+   M.needsSetup(P({ flags: ['hire_date', 'wage'], hire_date: '', retired: true })), false);
+
+/* Newest first: numbers are issued in order of appearance, so the highest is the most recent —
+   and somebody with no number at all turned up since the last assignment run, so they are newer
+   than anyone holding one. */
+eq('highest employee number first, un-numbered ahead of everyone',
+   [P({ name: 'Old Hand', employee_number: '04' }),
+    P({ name: 'Just Arrived', employee_number: '' }),
+    P({ name: 'Recent', employee_number: '117' })].sort(M.byArrival).map(r => r.name),
+   ['Just Arrived', 'Recent', 'Old Hand']);
+/* "00" is the owner and sits outside the sequence — it must not read as un-numbered and jump to
+   the head of the newest-arrivals list. */
+eq('employee 00 is numbered, not blank',
+   [P({ name: 'Owner', employee_number: '00' }),
+    P({ name: 'Unnumbered', employee_number: '' })].sort(M.byArrival).map(r => r.name),
+   ['Unnumbered', 'Owner']);
+/* Numeric, not lexical: "9" is a lower number than "117" but sorts after it as a string, which
+   would file the newest arrival at the bottom of the list they exist to head. */
+eq('compared as numbers, not strings',
+   [P({ name: 'Nine', employee_number: '9' }),
+    P({ name: 'OneSeventeen', employee_number: '117' })].sort(M.byArrival).map(r => r.name),
+   ['OneSeventeen', 'Nine']);
 
 // ── how a person's name is written ──────────────────────────────────────────────────────────────
 const N = (name, nick) => ({ name, preferred_name: nick });

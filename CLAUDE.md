@@ -62,6 +62,17 @@ Three things a future session will otherwise get wrong:
   and `roster_identity` both treat an absent parameter as "leave alone" and an empty one as
   "clear", and both read-merge-write. Post a whole record instead and `gxWrite_` blanks whatever
   you omitted — `dutchie_employee_id` and `user_id`, neither of which this screen shows.
+- **"New here" is a SUBSET of "records with a gap", and the difference is the point.** The
+  overview lists people who arrived but were never set up: a setup gap (`hire_date`, `wage`,
+  `store`, `role`, `employee_number`) **and** signs of a recent arrival (no hire date at all, no
+  employee number yet, or a start date inside 90 days). Both halves are load-bearing. The first
+  cut used the gap alone and put **Sky and Mike at the top of a list headed "New here"** — neither
+  takes an hourly wage, so both carry a permanent `wage` gap, and nobody has been here longer.
+- **`not_on_payroll` says an empty wage is CORRECT for this person.** Same shape as
+  `celebrations_opt_out`, same reason, same two people: `rowFlags_` raised a permanent `wage`
+  gap on the owners, which is a red mark on a complete record. It cannot be inferred — `Admin`
+  and `corporate` both belong to waged staff too, and a rule keyed on either would stop flagging
+  a genuinely missing wage. It is a per-person checkbox on the wage card.
 - **Nothing in the sub nav says how many open questions there are.** The attention chip that
   used to sit there was removed 2026-08-25; the overview opens on its own and states the count
   in its title and its stat tiles, so the chip was a second scoreboard to keep in agreement with

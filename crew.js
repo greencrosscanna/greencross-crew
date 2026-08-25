@@ -460,6 +460,56 @@
     return 'Missing: ' + (row.flags || []).map(function (f) { return FLAG_LABEL[f] || f; }).join(', ');
   }
 
+  /* ── New here ─────────────────────────────────────────────────────────────────
+   * The gaps that mean a record was never FINISHED, as opposed to merely imperfect. Somebody
+   * turning up from a METRC or Dutchie import arrives with a name and a permit and nothing else;
+   * these five are what a human still has to supply before the person is set up.
+   *
+   * Deliberately NOT the full flag list. A ten-year employee missing a shirt size is not a new
+   * starter, and putting them in this section would bury the person who actually needs twenty
+   * minutes of someone's attention today — which is the entire point of having it.
+   */
+  var SETUP_FLAGS = ['hire_date', 'wage', 'store', 'role', 'employee_number'];
+
+  /* Today, and 90 days before it, as YYYY-MM-DD in the reader's own local date. Compared as
+     STRINGS against the stored value, which is already text — parsing "2026-02-16" into a Date
+     to subtract from another Date is how a comparison picks up a timezone and starts answering
+     differently either side of midnight. */
+  function isoDaysAgo(n) {
+    var d = new Date();
+    d.setDate(d.getDate() - n);
+    var p = function (x) { return (x < 10 ? '0' : '') + x; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+
+  /* A gap alone is not newness — that was the first cut of this and it put the two OWNERS at the
+     top of the list, because neither is on an hourly wage and "no wage" reads as unfinished.
+     Nobody has been here longer.
+     So a person is NEW only if they also look like a recent arrival: no hire date at all (we
+     cannot tell how long they have been here, which is itself an unfinished record), no employee
+     number yet (they turned up since the last assignment run), or a start date inside 90 days. */
+  function arrivedRecently(row) {
+    if (!String(row.employee_number || '').trim()) return true;
+    if (!row.hire_date) return true;
+    return String(row.hire_date) >= isoDaysAgo(90);
+  }
+  function needsSetup(row) {
+    if (row.retired) return false;
+    if (!SETUP_FLAGS.some(function (f) { return has(row, f); })) return false;
+    return arrivedRecently(row);
+  }
+  /* Newest first, and "newest" is the employee NUMBER: they are issued in order of appearance,
+     so the highest number is the most recent arrival. Somebody with no number yet is newer
+     still — they turned up since the last time numbers were assigned. */
+  function byArrival(a, b) {
+    var an = parseInt(a.employee_number, 10), bn = parseInt(b.employee_number, 10);
+    var ab = isNaN(an), bb = isNaN(bn);
+    if (ab && !bb) return -1;
+    if (!ab && bb) return 1;
+    if (ab && bb)  return byName(a, b);
+    return bn - an;
+  }
+
   /* Alphabetical within a store group, on the name the list actually SHOWS. Sorting on the legal
      name instead would file Rebeka Perez under R while the row in front of you reads "Bekah
      Perez" — an alphabetical list you cannot scan alphabetically is worse than an unsorted one.
@@ -1085,6 +1135,18 @@
     });
     wrap.appendChild(stats);
 
+    /* FIRST, above the open questions. A cross-source disagreement can wait for someone to think
+       about it; a person who started this week and has no wage on file cannot. */
+    var fresh = live.filter(needsSetup).sort(byArrival);
+    if (fresh.length) {
+      var ns = el('div', 'crew-sect');
+      ns.style.marginTop = '0';
+      ns.appendChild(el('h2', null, 'New here'));
+      ns.appendChild(el('span', null, 'arrived, profile not finished'));
+      wrap.appendChild(ns);
+      fresh.forEach(function (r) { wrap.appendChild(newcomerCard(r)); });
+    }
+
     var sect = el('div', 'crew-sect');
     sect.appendChild(el('h2', null, 'Open questions'));
     sect.appendChild(el('span', null, 'nothing here has been applied'));
@@ -1133,6 +1195,40 @@
       card.appendChild(b);
     }
     return card;
+  }
+
+  /* One newcomer. Names the missing fields rather than saying "incomplete", because the whole
+     value of this row is knowing whether it is two minutes of typing or a conversation. */
+  function newcomerCard(r) {
+    var box = el('div', 'crew-q crew-new');
+
+    var who = el('button', 'crew-q-who');
+    who.type = 'button';
+    who.appendChild(avatarPuck(r));
+    var txt = el('span', 'crew-q-txt');
+    txt.appendChild(el('span', 'crew-q-name', esc(displayName(r) || r.employee_id)));
+    txt.appendChild(el('span', 'crew-q-kind',
+      esc(r.store ? storeName(r.store) : 'no store') + ' · ' +
+      esc(r.role_is_default ? 'no role' : r.role)));
+    who.appendChild(txt);
+    who.addEventListener('click', function () {
+      state.selected = r.employee_id; paintRail(); paintPane();
+    });
+    box.appendChild(who);
+
+    var missing = SETUP_FLAGS.filter(function (f) { return has(r, f); })
+                             .map(function (f) { return FLAG_LABEL[f] || f; });
+    box.appendChild(el('span', 'crew-q-detail', 'Still needs ' + esc(missing.join(', ')) + '.'));
+
+    var acts = el('div', 'crew-q-acts');
+    var go = el('button', 'crew-btn', 'Open record');
+    go.type = 'button';
+    go.addEventListener('click', function () {
+      state.selected = r.employee_id; paintRail(); paintPane();
+    });
+    acts.appendChild(go);
+    box.appendChild(acts);
+    return box;
   }
 
   /* One open question, on the overview. Severity rides the left edge only — a queue of ten
@@ -1276,9 +1372,17 @@
      change, because there is no half-typed state to wait out. The three fields a careless write
      damages worst — name, store and role — ask once before overwriting a value that is already
      there; the rest just save. */
+  var fieldSeq = 0;
   function fieldCard(row, o) {
-    var card = el('label', 'crew-field');
-    card.appendChild(el('span', 'crew-field-label', esc(o.label)));
+    /* A DIV wrapping a real <label for>, not a <label> wrapping everything. The wage card carries
+       its own "Not on payroll" checkbox, and a <label> nested inside a <label> is invalid — the
+       parser re-homes it, which broke the layout and, worse, pointed the inner label's clicks at
+       the outer card's control. Explicit for/id keeps the association without the nesting. */
+    var card = el('div', 'crew-field');
+    var id = 'crewf' + (++fieldSeq);
+    var lab = el('label', 'crew-field-label', esc(o.label));
+    lab.setAttribute('for', id);
+    card.appendChild(lab);
 
     var input;
     if (o.options) {
@@ -1295,10 +1399,12 @@
     }
     if (o.disabled || !state.canEdit) input.disabled = true;
     if (o.title) input.title = o.title;
+    input.id = id;
     card.appendChild(input);
 
     var note = el('span', 'crew-field-note');
     card.appendChild(note);
+    if (o.extra) card.appendChild(o.extra(row, function () { paintNote(); }));
 
     function paintNote() {
       var n = o.note(row);
@@ -1507,6 +1613,37 @@
     return box;
   }
 
+  /* "An empty wage is correct for this person." Sits ON the wage card rather than in Links &
+     visibility, because it is a statement about this field and nowhere else — and because the
+     gold border it clears is the thing that prompts somebody to reach for it. */
+  function payrollToggle(row, repaintNote) {
+    var lbl = el('label', 'crew-field-toggle');
+    var cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = !!row.not_on_payroll;
+    cb.disabled = !state.canEdit;
+    cb.addEventListener('change', function () {
+      var on = cb.checked;
+      cb.disabled = true;
+      /* 'no', not '' — an empty value is an explicit clear on this route. Same reason the
+         celebrations toggle spells it out. */
+      saveField(row, 'attr', 'not_on_payroll', on ? 'yes' : 'no',
+        on ? 'not on payroll' : 'on payroll', null, function (r, err) {
+          cb.disabled = false;
+          if (err) { cb.checked = !on; return; }
+          row.not_on_payroll = on;
+          /* The gap is the engine's to declare, but it cannot re-answer without a reload, and
+             the whole point of the toggle is that the gold border goes away as you press it. */
+          retagFlag(row, 'wage', !on && !row.wage);
+          repaintNote();
+          paintRail();
+        }).catch(function () {});
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(el('span', null, 'Not on payroll'));
+    return lbl;
+  }
+
   function fieldGrid(row) {
     var grid = el('div', 'crew-fields');
 
@@ -1570,9 +1707,12 @@
           : { text: 'Missing — no tenure, no anniversary', kind: 'gap' }; } },
 
       { label: 'Wage', route: 'attr', field: 'wage', value: row.wage, placeholder: '0.00',
-        note: function (r) { return r.wage ? { text: 'Hourly', kind: '' }
-                                           : { text: 'Not set', kind: 'gap' }; },
-        read: function (r) { return r.wage || ''; } },
+        note: function (r) {
+          if (r.not_on_payroll) return { text: 'Not on payroll', kind: '' };
+          return r.wage ? { text: 'Hourly', kind: '' } : { text: 'Not set', kind: 'gap' };
+        },
+        read: function (r) { return r.wage || ''; },
+        extra: payrollToggle },
 
       { label: 'Birthday', route: 'attr', field: 'birthday', value: row.birthday, placeholder: 'MM-DD',
         title: 'Month and day only — GX Crew does not store birth years.',
@@ -1607,10 +1747,15 @@
   function permitCard(row) {
     var pd = row.permit_days_left;
     var expired = pd != null && pd < 0;
-    var box = el('div', 'crew-permit' + ((expired || !row.permit_number) ? ' is-bad' : ''));
+    /* An expiry the engine could not parse counts as damage too: nobody is watching that permit,
+       because every compliance check downstream gates on permit_days_left being a number. */
+    var unreadable = !!row.permit_expires && pd == null;
+    var box = el('div', 'crew-permit' +
+      ((expired || unreadable || !row.permit_number) ? ' is-bad' : ''));
 
     var top = el('div', 'crew-permit-top');
-    var statusCls = !row.permit_status ? 'is-warn'
+    var statusCls = unreadable ? 'is-bad-t'
+      : !row.permit_status ? 'is-warn'
       : ['active', 'valid'].indexOf(String(row.permit_status).toLowerCase()) >= 0
         ? (pd != null && pd <= 90 ? 'is-warn' : 'is-ok') : 'is-bad-t';
 
@@ -1618,11 +1763,21 @@
       top.appendChild(el('span', 'crew-permit-no', esc(row.permit_number || 'No permit number on file')));
       top.appendChild(el('span', 'crew-permit-pill ' + statusCls,
         esc(row.permit_status ? String(row.permit_status).toUpperCase() : 'UNKNOWN')));
-      var line = row.permit_expires
-        ? (expired ? 'Expired ' + Math.abs(pd) + ' days ago · ' + row.permit_expires
-                   : pd + ' days left · expires ' + row.permit_expires)
-        : 'METRC has no matching record under this name';
-      var lineCls = !row.permit_expires ? 'is-warn' : expired ? 'is-bad-t' : pd <= 90 ? 'is-warn' : '';
+      /* THREE states, not two. The engine returns permit_days_left = null when it could not read
+         the stored expiry, and the old arithmetic here ran anyway — printing the literal
+         "null days left" next to a date, which is how this was noticed. A date it cannot count
+         from is a defect in the record, so it says so rather than quietly showing a number. */
+      var line, lineCls;
+      if (!row.permit_expires) {
+        line = 'METRC has no matching record under this name'; lineCls = 'is-warn';
+      } else if (pd == null) {
+        line = 'Expiry on file cannot be read: ' + row.permit_expires; lineCls = 'is-bad-t';
+      } else if (expired) {
+        line = 'Expired ' + Math.abs(pd) + ' days ago · ' + row.permit_expires; lineCls = 'is-bad-t';
+      } else {
+        line = pd + ' days left · expires ' + row.permit_expires;
+        lineCls = pd <= 90 ? 'is-warn' : '';
+      }
       top.appendChild(el('span', 'crew-permit-line ' + lineCls, esc(line)));
     } else {
       var noIn = el('input', 'crew-permit-in is-no');
@@ -1665,6 +1820,7 @@
     var fill = el('div', 'crew-permit-fill');
     fill.style.width = pd == null ? '0%'
       : expired ? '100%' : Math.max(4, Math.min(100, Math.round((1 - pd / 730) * 100))) + '%';
+    if (unreadable) fill.style.width = '100%';
     fill.style.background = statusCls === 'is-ok' ? 'var(--gx-green)'
       : statusCls === 'is-warn' ? 'var(--gx-gold)' : 'var(--gx-red)';
     bar.appendChild(fill);

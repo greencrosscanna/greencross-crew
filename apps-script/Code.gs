@@ -34,7 +34,7 @@ var ATTR_TAB           = 'crew_attributes';
 var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'birthday', 'work_anniversary', 'employee_number', 'wage',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
-                          'celebrations_opt_out',
+                          'celebrations_opt_out', 'not_on_payroll',
                           'updated_at', 'updated_by'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
@@ -99,6 +99,20 @@ var EOM_HEADERS = ['employee_id', 'name', 'started_at', 'set_by', 'recorded_at',
 
 /** Attributes a manager may edit from the roster UI. Everything else is import-owned. */
 var EDITABLE_ATTRS = ['shirt_size', 'birthday', 'work_anniversary', 'employee_number', 'wage'];
+
+/* not_on_payroll: 'yes' means an empty `wage` is CORRECT for this person, not missing.
+ *
+ * Same shape of problem as celebrations_opt_out above, same answer, and for the same person. Sky
+ * is the owner and takes no hourly wage; Mike is the other. rowFlags_ raised a `wage` gap on both
+ * of them forever — a permanent red mark on a record that is complete, counted in "records with a
+ * gap", and (until this flag) enough to put the two longest-serving people in the company at the
+ * top of a list headed "New here".
+ *
+ * WHY A FLAG AND NOT A RULE, again. Every property that could be used to infer it belongs to real
+ * waged staff too: `Admin` is a role people hold and `corporate` is a home_store people work at.
+ * A rule keyed on either would silently stop flagging a missing wage for staff who should have
+ * one, which is a worse failure than the one it fixes — it hides a real gap instead of showing a
+ * false one. Somebody has to say it, per person, once. */
 
 /*
  * The HR workbook is NO LONGER THE SOURCE OF TRUTH (Sky, 2026-08-18). GX Crew — backed by the
@@ -1976,7 +1990,8 @@ function rowFlags_(r) {
      counts. Two detectors that answer differently are worse than one. Admin is excluded there
      and so here: notifications target managers. Retired rows never reach this line. */
   if (MANAGER_ROLE_RE.test(r.role) && !String(r.user_id || '').trim()) f.push('no_account');
-  if (!r.wage)                     f.push('wage');
+  /* Not "has no wage" — "has no wage AND is supposed to". See the not_on_payroll note above. */
+  if (!r.wage && !r.not_on_payroll) f.push('wage');
   if (!r.birthday)                 f.push('birthday');
   if (!r.permit_number)            f.push('permit');
   else if (r.permit_days_left != null && r.permit_days_left < 0) f.push('permit_expired');
@@ -2047,10 +2062,21 @@ function rosterJoin_() {
       shirt_size: normShirt_(a.shirt_size), birthday: normBirthday_(a.birthday),
       work_anniversary: anniv, anniversary_is_override: !!normDate_(a.work_anniversary),
       celebrations_opt_out: isTruthyFlag_(a.celebrations_opt_out),
-      permit_number: a.permit_number || '', permit_expires: a.permit_expires || '',
+      not_on_payroll: isTruthyFlag_(a.not_on_payroll),
+      permit_number: a.permit_number || '',
+      /* NORMALISED, like hire_date two lines up — this was the one date on the row that was not,
+         and the omission was silent in the worst way. readAttrs_ does String() over the cell, so
+         a permit_expires that Sheets stored as a real Date comes back as
+         "Sat May 19 2029 00:00:00 GMT-0700 (Pacific Daylight Time)". dateFromIso_ cannot read
+         that, so permit_days_left was null -- and EVERY compliance check downstream gates on it
+         being a number: rowFlags_ skips permit_expired, and reviewItems_ raises neither
+         permit_expired nor permit_expiring. The roster showed a permit with an unreadable date
+         and no warning attached, and the queue reported all clear. normDate_ has tolerated a
+         real Date since it was written; it just was not being called here. */
+      permit_expires: normDate_(a.permit_expires),
       permit_status: a.permit_status || '',
-      permit_days_left: a.permit_expires && dateFromIso_(a.permit_expires)
-        ? daysBetween_(today, dateFromIso_(a.permit_expires)) : null,
+      permit_days_left: normDate_(a.permit_expires)
+        ? daysBetween_(today, dateFromIso_(normDate_(a.permit_expires))) : null,
       permit_active: a.permit_status
         ? (['active', 'valid'].indexOf(String(a.permit_status).toLowerCase()) >= 0 ? 'Yes' : 'No')
         : '',
@@ -2334,6 +2360,9 @@ function saveRosterAttrs_(p) {
     celebrations_opt_out: p.celebrations_opt_out == null
                         ? (existing.celebrations_opt_out || '')
                         : (isTruthyFlag_(p.celebrations_opt_out) ? 'yes' : ''),
+    not_on_payroll:     p.not_on_payroll == null
+                        ? (existing.not_on_payroll || '')
+                        : (isTruthyFlag_(p.not_on_payroll) ? 'yes' : ''),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };

@@ -251,6 +251,12 @@
     .crew-q-acts { flex: 0 0 auto; margin-left: auto; display: flex; align-items: center;
       gap: 7px; white-space: nowrap; }
     .crew-q.is-done { opacity: .35; }
+    /* A newcomer reuses the question card's shape — same row, same reading order — but carries a
+       green edge rather than a severity colour. Nothing is wrong with these records; they are
+       simply unfinished, and colouring them like a problem would spend the queue's alarm budget
+       on paperwork. */
+    .crew-q.crew-new { border-left-color: var(--gx-green); }
+    .crew-q.crew-new .crew-q-kind { color: var(--gx-text-mute); }
     .crew-clear { background: var(--gx-surface); border: 1px solid var(--gx-border);
       border-radius: var(--gx-radius-lg); padding: 26px; text-align: center;
       font-size: 13.5px; color: var(--gx-green); }
@@ -339,7 +345,7 @@
       border: 1px solid var(--gx-border); border-radius: 9px; padding: 11px 13px; }
     .crew-field.is-gap { border-color: var(--gx-gold-line); }
     .crew-field-label { font-size: 9.5px; font-weight: 700; letter-spacing: 1px;
-      text-transform: uppercase; color: var(--gx-text-mute); }
+      text-transform: uppercase; color: var(--gx-text-mute); cursor: pointer; }
     .crew-field input, .crew-field select { background: var(--gx-surface-3);
       border: 1px solid var(--gx-border); border-radius: var(--gx-radius); color: var(--gx-text);
       padding: 7px 9px; font: inherit; font-size: 13.5px; outline: none; width: 100%;
@@ -352,6 +358,12 @@
     .crew-field-note.is-bad { color: var(--gx-red); }
     .crew-field-note.is-saved { color: var(--gx-green); }
 
+    /* A trailer under a field's note — today only the wage card's "Not on payroll". Deliberately
+       quiet: it is the exception, not the control you reach for every time. */
+    .crew-field-toggle { display: flex; align-items: center; gap: 7px; margin-top: 1px;
+      font-size: 10.5px; color: var(--gx-text-mute); cursor: pointer; }
+    .crew-field-toggle input { accent-color: var(--gx-green); margin: 0; width: 12px; height: 12px; }
+    .crew-field-toggle:hover { color: var(--gx-text-dim); }
     .crew-permit { background: var(--gx-surface); border: 1px solid var(--gx-border);
       border-radius: var(--gx-radius-lg); padding: 16px 18px; }
     .crew-permit.is-bad { border-color: rgba(239, 68, 68, .4); }
@@ -487,6 +499,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.313"></script>
+  <script src="crew.js?v=1.314"></script>
 </body>
 </html>

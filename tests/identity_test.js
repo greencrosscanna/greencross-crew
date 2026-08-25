@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -95,6 +95,29 @@ eq(C.normDate_('2026-02-32'), '', 'day 32 refused');
   // timezone-shift corruption the TEXT rule exists to prevent.
   const got = C.normDate_(new Date(2026, 7, 22));
   eq(got, '2026-08-22', 'a real Date is normalised to TEXT on the SAME day');
+}
+
+/*
+ * The exact string readAttrs_ produces from a date-formatted cell. It does String() over every
+ * value, so a permit_expires Sheets stored as a real Date arrives looking like this — and the
+ * roster row builder used to hand it to dateFromIso_ RAW. dateFromIso_ cannot read it, so
+ * permit_days_left came back null, the UI printed "null days left" beside a date, and every
+ * compliance check downstream went quiet: rowFlags_ skips permit_expired and reviewItems_ raises
+ * neither permit_expired nor permit_expiring, because all three gate on days_left being a number.
+ * A permit nobody is watching, reported as all clear.
+ *
+ * normDate_ has tolerated this since it was written; it simply was not being called. These pin
+ * the whole chain rather than just the first link, because reading the value was never the part
+ * that was broken -- COUNTING FROM IT was.
+ */
+{
+  const SHEETS = 'Sat May 19 2029 00:00:00 GMT-0700 (Pacific Daylight Time)';
+  eq(C.normDate_(SHEETS), '2029-05-19', "a date-formatted cell's String() form is normalised");
+  eq(C.dateFromIso_(SHEETS) === null || C.dateFromIso_(SHEETS) === undefined, true,
+     'and dateFromIso_ still cannot read it raw — which is why normDate_ has to run first');
+  const d = C.dateFromIso_(C.normDate_(SHEETS));
+  eq(!!d && d.getFullYear() === 2029 && d.getMonth() === 4 && d.getDate() === 19, true,
+     'normDate_ then dateFromIso_ gives a real date, so days-left can be counted');
 }
 
 // ── normBirthday_ ────────────────────────────────────────────────────────────
@@ -173,6 +196,9 @@ console.log('\n6. attrFields_ — derived from the schema, so no writer can drop
 
   ok2(f.indexOf('celebrations_opt_out') >= 0,
       'celebrations_opt_out IS carried — omitting it re-exposed people in the kiosk feed');
+  ok2(f.indexOf('not_on_payroll') >= 0,
+      'not_on_payroll IS carried — it says an empty wage is CORRECT for the owner, so dropping it '
+      + 'puts a permanent false gap back on the two records it exists for');
   ok2(f.indexOf('employee_id') === -1, 'identity keys are excluded');
   ok2(f.indexOf('name_key') === -1,    'name_key excluded');
   ok2(f.indexOf('full_name') === -1,   'full_name excluded');
