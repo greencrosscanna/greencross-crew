@@ -56,7 +56,7 @@ const names = Object.keys(stubs);
 let C;
 try {
   C = new Function(...names, fs.readFileSync(__dirname + '/../apps-script/Code.gs','utf8') +
-    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
+    '\n; return { nameToKey_, normDate_, dateFromIso_, normBirthday_, statusToken_, mapPermissionLocation_, attrFields_, normPayType_, wageExempt_, PAY_TYPES, needsSetup_, SETUP_FLAGS, digestHtml_, displayNameOf_, ATTR_HEADERS, EDITABLE_ATTRS };')(...names.map(n=>stubs[n]));
 } catch (e) {
   console.error('LOAD FAILED: Code.gs did not evaluate under stubs — ' + e.message);
   console.error('Add the missing global to `stubs`. Do not let this pass quietly.');
@@ -180,6 +180,52 @@ eq(NS({ flags: ['hire_date', 'wage'], hire_date: '', retired: true }), false,
 /* The 90-day boundary, from both sides. */
 eq(NS({ flags: ['wage'], hire_date: '2026-05-28' }), true,  '89 days ago is recent');
 eq(NS({ flags: ['wage'], hire_date: '2026-05-26' }), false, '91 days ago is not');
+
+// ── the Monday digest's HTML ─────────────────────────────────────────────────
+/*
+ * WHY THIS IS TESTED AT ALL, given it is "just an email". The first version shipped with the
+ * newcomer card called with FOUR arguments instead of five, so every value slid one place left:
+ * the person's name landed in the kickerColour slot and rendered as an invalid CSS colour (black
+ * on a black card), and the line where the name belonged printed "Still needs wage." Six cards
+ * went out, not one of them naming the person it was about, and nothing failed — a wrong-arity
+ * call in JavaScript is a silent success.
+ *
+ * The colour assertion below is the general form of that bug: any CSS colour that is not a hex
+ * literal means a value reached a slot meant for one.
+ */
+console.log('\n2d. digestHtml_ — the email says who it is about');
+{
+  const wes = { employee_id: 'wes_tanaka', name: 'Wes Tanaka', preferred_name: '',
+                store: 'portland-rd', role: 'Budtender', role_is_default: false, flags: ['wage'] };
+  const mari = { employee_id: 'marisol_vega', name: 'Marisol Vega', preferred_name: 'Mari',
+                 store: 'bend', role: 'Budtender', role_is_default: false, flags: ['hire_date'] };
+  const shawn = { employee_id: 'shawn_todd', name: 'Shawn Todd', preferred_name: '' };
+  const html = C.digestHtml_({
+    active: 43, gaps: 14, expiring: [1, 2, 3, 4, 5],
+    questions: [{ kind: 'permit_expiring', severity: 'warn', employee_id: 'shawn_todd',
+                  name: 'Shawn Todd', detail: 'Permit expires in 36 days.' }],
+    fresh: [wes, mari],
+    byId: { shawn_todd: shawn },
+    stores: { 'portland-rd': 'Portland', bend: 'Century' }
+  });
+
+  eq(html.indexOf('Wes Tanaka') >= 0, true, 'a newcomer is NAMED — this is the bug that shipped');
+  eq(html.indexOf('Still needs wage.') >= 0, true, 'and what they still need is stated');
+  /* Nickname + surname, the same convention every other surface uses. */
+  eq(html.indexOf('Mari Vega') >= 0, true, 'a nickname is used, like everywhere else');
+  eq(html.indexOf('Marisol Vega') >= 0, false, 'and the legal name is not ALSO printed beside it');
+  /* Store LABELS, not slugs. "PORTLAND-RD" is what the roster calls a database key. */
+  eq(html.indexOf('Portland') >= 0, true, 'stores read as labels');
+  eq(html.indexOf('portland-rd') >= 0, false, 'never as slugs');
+  eq(html.indexOf('Shawn Todd') >= 0, true, 'an open question names its person too');
+
+  /* THE GENERAL GUARD. Every CSS colour in this document is a hex literal; anything else means a
+     value landed in a slot meant for a colour, which is precisely how the name went invisible. */
+  const colours = html.match(/[^-a-z]color:\s*[^;"']+/g) || [];
+  const bad = colours.filter((c) => !/color:\s*#[0-9a-fA-F]{3,8}$/.test(c.trim()));
+  eq(bad.length, 0, 'every CSS colour is a hex literal' + (bad.length ? ' — GOT: ' + bad.join(' | ') : ''));
+  eq(colours.length > 10, true, 'and there are colours to check, so the regex is not vacuous');
+}
 
 // ── normBirthday_ ────────────────────────────────────────────────────────────
 console.log('\n3. normBirthday_ — must DISCARD the year (PII leaves this app as MM-DD only)');

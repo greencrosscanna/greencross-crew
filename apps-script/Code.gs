@@ -2527,12 +2527,20 @@ function digestData_() {
   var items = reviewItems_();
   var expiring = live.filter(function (r) { return r.permit_days_left != null && r.permit_days_left <= 90; })
                      .sort(function (a, b) { return a.permit_days_left - b.permit_days_left; });
+  var byId = {};
+  joined.rows.forEach(function (r) { byId[String(r.employee_id)] = r; });
+  var stores = {};
+  try {
+    (GXCore.getStores() || []).forEach(function (x) { stores[x.store_id] = x.display_name || x.store_id; });
+  } catch (e) { /* labels are a nicety; the slug still reads */ }
+  stores.corporate = stores.corporate || 'Corporate';
   return {
     active: live.length,
     questions: items,
     expiring: expiring,
     gaps: live.filter(function (r) { return (r.flags || []).length; }).length,
-    fresh: live.filter(function (r) { return r.needs_setup; })
+    fresh: live.filter(function (r) { return r.needs_setup; }),
+    byId: byId, stores: stores
   };
 }
 
@@ -2547,8 +2555,11 @@ function digestHtml_(d) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); };
 
   function tile(n, label, colour) {
+    /* min-height so a label that wraps ("permits inside 90 days") does not leave one tile taller
+       than the other three. Outlook ignores it and falls back to ragged, which is survivable. */
     return '<td style="padding:0 6px 0 0;width:25%" valign="top">' +
-      '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-radius:10px;padding:14px 16px">' +
+      '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-radius:10px;' +
+      'padding:14px 16px;min-height:62px">' +
       '<div style="font:700 23px/1.1 Helvetica,Arial,sans-serif;color:' + colour + '">' + n + '</div>' +
       '<div style="font:400 11px/1.4 Helvetica,Arial,sans-serif;color:' + MUTE + ';padding-top:4px">' +
       esc(label) + '</div></div></td>';
@@ -2591,8 +2602,15 @@ function digestHtml_(d) {
     d.fresh.forEach(function (r) {
       var missing = SETUP_FLAGS.filter(function (f) { return (r.flags || []).indexOf(f) >= 0; })
                                .map(function (f) { return FLAG_LABEL_[f] || f; });
-      h += card(GREEN, (r.store || 'no store') + ' \u00b7 ' + (r.role_is_default ? 'no role' : r.role),
-                r.preferred_name ? displayNameOf_(r) : r.name,
+      /* FIVE arguments. The first cut passed four, so the person's NAME slid into the
+         kickerColour slot — every card rendered its kicker in an invalid colour (black on black)
+         and printed "Still needs wage." where the name belonged. Six cards, not one of them
+         naming the person they were about. */
+      h += card(GREEN,
+                (r.store ? (d.stores[r.store] || r.store) : 'no store') + ' \u00b7 ' +
+                  (r.role_is_default ? 'no role' : r.role),
+                MUTE,
+                displayNameOf_(r) || r.employee_id,
                 'Still needs ' + missing.join(', ') + '.');
     });
   }
@@ -2605,7 +2623,9 @@ function digestHtml_(d) {
   } else {
     d.questions.forEach(function (it) {
       var edge = it.severity === 'high' ? RED : it.severity === 'warn' ? GOLD : LINE;
-      h += card(edge, KIND_LABEL_[it.kind] || it.kind, edge, it.name, it.detail);
+      var row = d.byId[String(it.employee_id)];
+      h += card(edge, KIND_LABEL_[it.kind] || it.kind, edge,
+                (row && displayNameOf_(row)) || it.name, it.detail);
     });
   }
 
