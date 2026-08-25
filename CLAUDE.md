@@ -19,8 +19,12 @@ Center; Incentive was formerly a Leaderboard view). Its app key in GX Core is **
   shared registry Leaderboard + SPIFF + Crew all read (one writer, many readers).
 - **GX Crew owns the rich attributes** (above) and **writes the shared identity slice + celebrations +
   perks up to GX Core**.
-- **Reads from GX Core:** identity, the sales cache (`GXCore.getSalesDaily`), and **SPIFF payouts**
-  (`spiff_payouts`) for the bonus calc.
+- **Reads from GX Core:** identity and the sales cache (`GXCore.getSalesDaily`).
+- **SPIFF payouts do NOT reach Crew.** *Corrected 2026-08-25: this used to list `spiff_payouts` as a read
+  "for the bonus calc". No such tab exists — not in `GX_TABS`, nothing writes it, nothing reads it. The
+  claim was invented in documentation and repeated across six files until it read as fact.* This matters
+  more here than anywhere else: the bonus calc is the thing that would consume it, so believing the pipe
+  already exists means building on a data source that was never there.
 
 ## Extract-first sequencing (important)
 The bonus math needs **per-employee, per-transaction** data *with discretionary-discount classification*.
