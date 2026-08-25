@@ -204,12 +204,25 @@ Two more things the real exports show that the connector's field list does not:
 - **`Employee Role` is empty for everyone, and `Home` is a METRC landing page** (`Sales`,
   `Packages`, `Reports`), not a store. Neither maps to `role_title` or `home_store`.
 
-**Reconciled once by hand, 2026-08-25.** Six exports → 42 unique people → `hr_import` fill-only
-(permit fields only, no `hire_date`). 41 matched existing records; Andrew Roberts was created.
-Fill-only is the right mode for this even though CLAUDE.md warns against routing METRC through
-`hr_import` — that warning is about **`full_name`**, which is guarded and always populated, so a
-spelling correction is silently skipped. Permit columns are usually *empty*, which is exactly
-what fill-only exists to complete.
+**Reconciled once by hand, 2026-08-25.** Six exports → 42 unique people → `hr_import` fill-only.
+Permit fields for all 42 (41 matched existing records; **Andrew Roberts was created** — permit
+`R106Y7`, Portland Rd, employee **#117**, Budtender). Then `hire_date` for exactly **three**
+people whose METRC date passed the single-licence, non-bulk test: Andrew Roberts 2026-08-22,
+Nathaniel Schneider 2026-03-07, Sierra Martin 2026-08-11. The other 39 were left alone.
+
+Fill-only is the right mode for this even though the paragraph above warns against routing METRC
+through `hr_import` — that warning is about **`full_name`**, which is guarded and always
+populated, so a spelling correction is silently skipped. Permit columns are usually *empty*,
+which is exactly what fill-only exists to complete.
+
+**The export files do not name a store, and the registry has no licence column.** `getStores()`
+returns `store_id, display_name, dutchie_name, short_code, color, region, sort_order, timezone,
+is_dc, aliases` — nothing to join an OLCC licence on. Known so far: **050-16892 → `portland-rd`**
+(Sky, 2026-08-25). The other five (050-12997 / 13000 / 13003 / 13006 / 13009 — a consecutive block
+registered together, with 16892 added later) are unmapped. To identify one, take the people who
+appear on **that licence only**: six staff have company-wide access and sit on all six exports
+(Samantha Bryson, Michael Kettler, Andrew Phillips, Skyler Pinnick, Shawn Todd, Tawny Vierra), so
+whoever remains is that store's own crew and names it on sight.
 
 **Why METRC and not Dutchie, which is where the roster's names actually came from.** Dutchie is
 *supposed* to mirror METRC, so it looks like an equivalent source — but a Dutchie admin (Mike) can
