@@ -2799,22 +2799,41 @@ function installNightlyScan() { return installNightlyScanUnsafe_({ enabled: 'yes
 
 function installNightlyScanUnsafe_(p) {
   var on = String(p.enabled || 'yes') !== 'no';
+
+  /* CAN THIS CONTEXT SEND MAIL? A trigger runs under the authority of whoever created it, so one
+     created from the web app inherits the deployment's authorisation and one created from the
+     editor inherits the signed-in user's. Those differ here: the deployment has never been
+     granted script.send_mail, the owner's account has.
+     
+     Which makes this route a footgun without the check below. Re-running it from the web app
+     would delete a working, editor-created digest trigger and replace it with one that cannot
+     send — silently, and not discovered until the following Monday. So when mail is unavailable
+     the digest trigger is LEFT ALONE rather than reinstalled badly. */
+  var canMail = true;
+  try { MailApp.getRemainingDailyQuota(); } catch (e) { canMail = false; }
+
+  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest'] : ['nightlyDutchieScan'];
   var removed = 0;
-  var MINE = ['nightlyDutchieScan', 'weeklyDigest'];
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (MINE.indexOf(t.getHandlerFunction()) >= 0) { ScriptApp.deleteTrigger(t); removed++; }
+    if (handlers.indexOf(t.getHandlerFunction()) >= 0) { ScriptApp.deleteTrigger(t); removed++; }
   });
-  if (!on) return { ok: true, enabled: false, removed: removed };
+  if (!on) return { ok: true, enabled: false, removed: removed, touched: handlers };
   /* 5am store time: after the last shift's Dutchie writes have settled and before anyone opens
      Crew, so the queue is already right the first time somebody looks at it. */
   ScriptApp.newTrigger('nightlyDutchieScan').timeBased().atHour(5).everyDays(1)
     .inTimezone(STORE_TZ).create();
   /* Monday 07:00, an hour after the nightly scan has already filed anything new — so the digest
      reports the week including whoever turned up over the weekend, rather than racing it. */
-  ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(7).inTimezone(STORE_TZ).create();
+  if (canMail) {
+    ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY)
+      .atHour(7).inTimezone(STORE_TZ).create();
+  }
   return { ok: true, enabled: true, replaced: removed,
-           nightly_scan_hour: 5, digest_day: 'MONDAY', digest_hour: 7, timezone: STORE_TZ };
+           nightly_scan_hour: 5, timezone: STORE_TZ,
+           digest_trigger: canMail ? 'installed, MONDAY 07:00' :
+             'LEFT UNTOUCHED — this context cannot send mail, so reinstalling it here would ' +
+             'replace a working trigger with one that fails silently. Run installNightlyScan() ' +
+             'from the Apps Script editor instead.' };
 }
 
 // ─── HR import (staff sheet + METRC permits → Core identity + Crew attributes) ───
