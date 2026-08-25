@@ -2719,11 +2719,17 @@ function sendDigest_(p) {
 /* Trigger entry point, and the editor-runnable twin for the one-time mail authorisation. */
 function weeklyDigest() { return sendDigest_({ send: 'yes', source: 'trigger' }); }
 
-/* RUN THIS ONE FROM THE EDITOR to authorise mail. The first run shows "Authorization required" ->
-   Review permissions -> choose your account -> "Google hasn't verified this app" -> **Advanced**
-   -> "Go to GX Crew (unsafe)" -> Allow. That last screen is where people stop, and closing it
-   fails the run in a way indistinguishable from never having tried. */
-function sendDigestNow() { return sendDigest_({ send: 'yes', source: 'editor' }); }
+/* RUN THIS ONE FROM THE EDITOR to send a digest by hand.
+ *
+ * It THROWS on a failed send, and that is deliberate. sendDigest_ catches the authorisation error
+ * so the web app can answer with a useful object rather than a 500 — but from the editor that
+ * turned a refused send into an execution logged as **Completed**, which is a lie told in the one
+ * place somebody goes to check. A run that did not send should read Failed. */
+function sendDigestNow() {
+  var r = sendDigest_({ send: 'yes', source: 'editor' });
+  if (!r.ok) throw new Error((r.error || 'digest failed') + (r.fix ? ' — ' + r.fix : ''));
+  return r;
+}
 
 // ─── Nightly: who does Dutchie say works here that Crew has never heard of? ─────
 /*
