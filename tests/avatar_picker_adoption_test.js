@@ -45,12 +45,21 @@ function t(name, fn) {
 
 console.log('\nThe shared picker is loaded, from gx-theme, by URL\n');
 
-t('index.html loads gx-avatar-picker.js AND its stylesheet', () => {
-  assert.ok(/<script src="https:\/\/greencrosscanna\.github\.io\/greencross-gx-theme\/gx-avatar-picker\.js"><\/script>/.test(HTML),
-    'the picker script tag is missing');
-  assert.ok(/<link rel="stylesheet" href="https:\/\/greencrosscanna\.github\.io\/greencross-gx-theme\/gx-avatar-picker\.css">/.test(HTML),
-    'the picker CSS needs its own <link> — the js does not pull it in, and without it the ' +
-    'controls render as an unstyled list of divs');
+t('the picker is NOT loaded eagerly — it is fetched when someone opens one', () => {
+  /* Inverted 2026-08-26. This used to require both tags in index.html, which is what the adoption
+     originally did — and it cost EVERY Crew page load two blocking cross-origin requests (~29KB,
+     ~185ms warm, over a second on a cold CDN edge) for a builder most sessions never open.
+     GXAvatar.loadPicker() (in gx-avatar.js, already loaded here for the roster pucks) injects both
+     on first use, so on-demand loading added no request of its own. */
+  assert.ok(!/<script src="[^"]*gx-avatar-picker\.js"><\/script>/.test(HTML),
+    'gx-avatar-picker.js is back to being loaded on every page');
+  assert.ok(!/<link rel="stylesheet" href="[^"]*gx-avatar-picker\.css">/.test(HTML),
+    'gx-avatar-picker.css is back to being loaded on every page');
+  assert.ok(/GXAvatar\.loadPicker\(\)/.test(JS),
+    'nothing fetches the picker — the circle would open an empty box');
+  // The CSS must still arrive somehow; loadPicker is the only thing that brings it now.
+  assert.ok(/loadPicker/.test(JS) && !/gx-avatar-picker\.css/.test(stripComments(JS)),
+    'the css comes from loadPicker, not a hand-rolled injection here');
 });
 
 t('gx-avatar.js is still loaded — the picker is useless without it', () => {
@@ -69,8 +78,14 @@ console.log('\nMounted as a PANEL, with the options the HR screen needs\n');
 
 t('the picker is mounted through GXAvatarPicker.mount, not re-implemented', () => {
   assert.ok(/GXAvatarPicker\.mount\(/.test(JS), 'nothing calls GXAvatarPicker.mount');
-  assert.ok(/window\.GXAvatarPicker/.test(JS),
-    'guard for the component failing to load — an empty box reads as a bug in Crew');
+  /* The load-failure guard moved from a `window.GXAvatarPicker` truth-test to loadPicker()'s
+     rejection handler, which is strictly better: it fires on a failed FETCH rather than only on a
+     tag that silently never arrived, and it can say "try again" because a retry now actually
+     retries. What must not regress is that SOME failure path shows a human a message. */
+  assert.ok(/loadPicker\(\)\.then\([\s\S]{0,400}?function \(\)/.test(JS),
+    'loadPicker has no rejection handler — a failed fetch would leave a silent empty box');
+  assert.ok(/did not load/.test(JS),
+    'no human-readable message on load failure');
 });
 
 t('showLeaderboardPreview is explicitly OFF', () => {

@@ -20,7 +20,6 @@
        gx-theme.css, so only the apps that link it are affected by it. Crew and Leaderboard both do.
        Do NOT copy these rules into the block below to "fix" a colour — a local override of a shared
        component is how the suite grew six different login screens. Send core-admin a note instead. -->
-  <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-avatar-picker.css">
   <!-- GX dev-guard bootstrap. Canonical source: greencross-gx-theme/gx-dev-boot.html.
      Paste this ONCE in <head>, before the app's own scripts. It replaces the old
      <script src="gx-dev.js"></script> tag, which had two problems in production:
@@ -51,7 +50,6 @@
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-changelog.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-stores.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-avatar.js"></script>
-<script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-avatar-picker.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-bugreport.js"></script>
 <script>
   // Dev guard: non-mutating actions. Anything NOT listed is blocked when this page is served
@@ -487,6 +485,11 @@
     .crew-avabtn[disabled]:hover .crew-ava { border-color: var(--gx-border-strong); }
     .crew-avamount { margin: 12px 0 0; background: var(--gx-surface);
       border: 1px solid var(--gx-border); border-radius: var(--gx-radius-lg); overflow: hidden; }
+/* Shown while GXAvatar.loadPicker() fetches the builder. The picker is no longer on the page at
+   load, so there IS a moment between the click and the editor — say so rather than showing an
+   empty box, which reads as a broken button. */
+.crew-avaloading { padding: 28px 20px; color: var(--text-dim, #a8aba6); font-size: 13px; }
+
 
     /* Desktop only, per the brief. Below ~1100px the sub nav wraps; the rail stays 340px so
        the two panes never fight over the same space. */

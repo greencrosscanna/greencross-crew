@@ -2058,15 +2058,32 @@
     if (avatarHandle) { try { avatarHandle.destroy(); } catch (e) {} avatarHandle = null; }
   }
 
+  /* THE BUILDER IS FETCHED ON DEMAND, when someone actually clicks an avatar circle.
+   * Its js+css were two blocking cross-origin tags in index.html until 2026-08-26 — ~29KB and about
+   * 185ms warm, over a second on a cold CDN edge — paid by every Crew page load whether or not
+   * anybody opened a picker. GXAvatar.loadPicker() lives in gx-avatar.js, which this app already
+   * loads for the roster pucks, so moving to on-demand added no request of its own.
+   *
+   * This still returns its host SYNCHRONOUSLY, because the caller appends it directly
+   * (paintPane -> body.appendChild). The host is filled in when the load resolves. */
   function avatarMount(row) {
     var host = el('div', 'crew-avamount');
-    if (!window.GXAvatarPicker) {
-      /* gx-theme is loaded by URL from Pages. If that request failed, say so — an empty box where
+    host.appendChild(el('div', 'crew-avaloading', 'Loading the avatar builder…'));
+
+    GXAvatar.loadPicker().then(function () {
+      host.innerHTML = '';
+      mountInto(host, row);
+    }, function () {
+      /* gx-theme is fetched by URL from Pages. If that request failed, say so — an empty box where
          an editor should be reads as a bug in Crew. */
+      host.innerHTML = '';
       host.appendChild(banner('warn',
-        'The avatar builder did not load (gx-avatar-picker.js from gx-theme). Reload the page.'));
-      return host;
-    }
+        'The avatar builder did not load (gx-avatar-picker.js from gx-theme). Check your connection and try again.'));
+    });
+    return host;
+  }
+
+  function mountInto(host, row) {
     destroyAvatarPicker();
     avatarHandle = GXAvatarPicker.mount(host, {
       name:   displayName(row) || row.name || '',
@@ -2092,7 +2109,6 @@
       },
       close: function () { state.avatarOpen = false; paintPane(); }
     });
-    return host;
   }
 
 
