@@ -16,6 +16,11 @@
   <title>GX Crew</title>
   <!-- Shared GX runtime (theme + resilient GX Core client) — same-origin org Pages -->
   <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-theme.css">
+  <!-- The shared avatar builder. OPT-IN by design: it is its own css/js pair rather than part of
+       gx-theme.css, so only the apps that link it are affected by it. Crew and Leaderboard both do.
+       Do NOT copy these rules into the block below to "fix" a colour — a local override of a shared
+       component is how the suite grew six different login screens. Send core-admin a note instead. -->
+  <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-avatar-picker.css">
   <!-- GX dev-guard bootstrap. Canonical source: greencross-gx-theme/gx-dev-boot.html.
      Paste this ONCE in <head>, before the app's own scripts. It replaces the old
      <script src="gx-dev.js"></script> tag, which had two problems in production:
@@ -46,6 +51,7 @@
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-changelog.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-stores.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-avatar.js"></script>
+<script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-avatar-picker.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-bugreport.js"></script>
 <script>
   // Dev guard: non-mutating actions. Anything NOT listed is blocked when this page is served
@@ -464,25 +470,23 @@
        record, not a field somebody has not filled in yet. */
     .crew-noname { color: var(--gx-red); }
 
-    /* ── Avatar picker ────────────────────────────────────────────────────── */
-    .crew-avapick { display: flex; gap: 20px; margin: 12px 0 0; background: var(--gx-surface);
-      border: 1px solid var(--gx-border); border-radius: var(--gx-radius-lg);
-      padding: 16px 18px; flex-wrap: wrap; }
-    .crew-avapreview { flex: none; }
-    .crew-avacol { flex: 1 1 420px; min-width: 280px; }
-    .crew-avacontrols { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-      gap: 9px; }
-    .crew-avaopt { display: flex; flex-direction: column; gap: 3px; position: relative;
-      font-size: 9.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
-      color: var(--gx-text-mute); }
-    .crew-avaopt select { background: var(--gx-surface-3); border: 1px solid var(--gx-border);
-      border-radius: var(--gx-radius); color: var(--gx-text); padding: 6px 26px 6px 9px;
-      font-size: 12px; font-family: inherit; letter-spacing: normal; text-transform: none;
-      outline: none; color-scheme: dark; width: 100%; }
-    .crew-avaswatch { position: absolute; right: 8px; bottom: 8px; width: 12px; height: 12px;
-      border-radius: 3px; border: 1px solid var(--gx-border-strong); pointer-events: none; }
-    .crew-avaacts { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; flex-wrap: wrap; }
-    .crew-editnote { font-size: 11px; color: var(--gx-text-mute); margin: 12px 0 0; }
+    /* ── Avatar picker ──────────────────────────────────────────────────────
+       Crew's own 105-line picker was RETIRED on 2026-08-25, not merged — the Leaderboard one is
+       the one Sky wants everywhere ("the current, simplified version in Crew is efficient but not
+       intuitive and just adds noise"). What is left here is the two things that are genuinely
+       Crew's: the button that WRAPS the record's avatar circle, and the box the shared component
+       mounts into. Everything inside it is .gxava-*, styled by gx-avatar-picker.css.
+
+       NOTE the mount host does NOT carry .gxava-full — that class assumes it owns the viewport
+       (min-height:100vh) and this is a panel inside a record. */
+    .crew-avabtn { background: none; border: 0; padding: 0; margin: 0; cursor: pointer;
+      border-radius: 50%; line-height: 0; flex: none; }
+    .crew-avabtn:hover .crew-ava { border-color: var(--gx-green); }
+    .crew-avabtn:focus-visible { outline: 2px solid var(--gx-green); outline-offset: 2px; }
+    .crew-avabtn[disabled] { cursor: default; }
+    .crew-avabtn[disabled]:hover .crew-ava { border-color: var(--gx-border-strong); }
+    .crew-avamount { margin: 12px 0 0; background: var(--gx-surface);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius-lg); overflow: hidden; }
 
     /* Desktop only, per the brief. Below ~1100px the sub nav wraps; the rail stays 340px so
        the two panes never fight over the same space. */
@@ -507,6 +511,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.320"></script>
+  <script src="crew.js?v=1.321"></script>
 </body>
 </html>

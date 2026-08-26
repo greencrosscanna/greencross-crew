@@ -355,6 +355,35 @@ Two consequences for this repo:
   release without a single face rendering wrong. `tests/avatar_write_test.js` pins all of it,
   including that the dead routes do not come back.
 
+### …and the PICKER is gx-theme's too (2026-08-25, same day)
+Crew's own `avatarPanel` — 105 lines, a grid of fourteen `<select>`s — is **retired, not merged**.
+Sky: *"I like the LB picker better… the current, simplified version in Crew is efficient but not
+intuitive and just adds noise."* The one builder for the suite is `GXAvatarPicker` in gx-theme
+(`gx-avatar-picker.js` + `.css`, loaded **by URL** alongside `gx-avatar.js`), promoted out of
+Leaderboard. Crew mounts it; it does not own it.
+
+- **The avatar circle in the record header IS the control.** A real `<button>` (`.crew-avabtn`)
+  wrapping the puck, so it is reachable by Tab — it is now the *only* way in, which is why the
+  redundant "Avatar" text button in the actions row was deleted rather than left as a second door.
+- **Crew passes a real `seed`, and that is the thing Crew can do that Leaderboard cannot.**
+  `row.avatar_seed` — the engine's own `avatarSeedFrom_` answer (attrs `employee_number`, then the
+  Core row's, then `employee_id` for anyone not yet numbered). Leaderboard's `getavatardata` carries
+  no employee number and falls back to a **name-derived** seed, which is precisely what pinning
+  exists to stop mattering. Do not "simplify" this to `row.employee_number`: that is the attrs value
+  only and is blank for the unnumbered, who would silently get DiceBear's `unknown` face.
+- **`showLeaderboardPreview: false`, and never `.gxava-full`.** The mock is a sales standings row
+  ("Jordan M. $4,820") and this is an employee record; `.gxava-full` sets `min-height:100vh` and
+  assumes it owns the viewport, but here it is a panel inside a person. Both are the component's
+  defaults — the point is that they are stated, not relied on.
+- **One attribute was lost in the swap: `clothingGraphic`.** Crew's table pinned the design on a
+  graphic shirt because it was the last thing the seed still chose. The shared picker does not offer
+  it, so a config **re-saved** through the picker drops the key and DiceBear picks the design from
+  the seed again. Stored configs keep rendering theirs until re-saved. Requested back from
+  `core-admin` — it belongs in the shared component, and a local table would diverge on day one.
+- `tests/avatar_picker_adoption_test.js` pins the contract a push gate can hold: both files loaded,
+  no vendored copy, no local `.gxava-*` override, `avatarPanel` and the option tables gone. The
+  behaviour (click → save → reload → remove) needs a browser and is not in the gate.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.

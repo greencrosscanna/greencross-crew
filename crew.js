@@ -279,40 +279,18 @@
     return 'https://api.dicebear.com/9.x/avataaars/svg?' + params.join('&');
   }
 
-  var AVATAR_OPTIONS = {
-    skinColor:    ['ffdbb4','f8d25c','fd9841','edb98a','d08b5b','ae5d29','614335'],
-    top: ['_none','_gchat','hat','winterHat1','bigHair','bob','bun','curly','curvy','dreads','dreads01','dreads02','frida','frizzle','fro','froBand','longButNotTooLong','miaWallace','shaggy','shaggyMullet','shavedSides','shortCurly','shortFlat','shortRound','shortWaved','sides','straight01','straight02','straightAndStrand','theCaesar','theCaesarAndSidePart'],
-    hairColor:    ['2c1b18','4a312c','724133','a55728','b58143','c93305','d6b370','e8e1e1','ecdcbf','f59797'],
-    hatColor:     ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff'],
-    eyes:         ['default','eyeRoll','happy','hearts','side','squint','surprised','wink'],
-    eyebrows:     ['default','defaultNatural','flatNatural','frownNatural','raisedExcited','raisedExcitedNatural','upDown','upDownNatural'],
-    mouth:        ['default','smile','twinkle','tongue','serious','disbelief'],
-    facialHair:      ['_none','beardLight','beardMajestic','beardMedium','moustacheFancy','moustacheMagnum'],
-    facialHairColor: ['2c1b18','4a312c','724133','a55728','b58143','c93305','d6b370','e8e1e1','ecdcbf','f59797'],
-    clothing:     ['blazerAndShirt','blazerAndSweater','collarAndSweater','graphicShirt','hoodie','shirtCrewNeck','shirtScoopNeck','shirtVNeck'],
-    clothesColor: ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff'],
-    /* The design printed on a graphic shirt. It is here because it was the LAST attribute the
-       seed still chose: everything else in a config is pinned, so once the seed was fixed to
-       employee_number this was the only thing that could still differ between apps — and it did,
-       because each app passed a different seed. Two people wore a shirt nobody had picked. */
-    clothingGraphic: ['bat','bear','cumbia','deer','diamond','hola','pizza','resist','skull','skullOutline'],
-    accessories:  ['_none','prescription01','prescription02','round','sunglasses','wayfarers'],
-    accessoriesColor: ['3c4f5c','65c9ff','262e33','5199e4','25557c','929598','a7ffc4','b1e2ff','e6e6e6','ff5c5c','ff488e','ffafb9','ffdeb5','ffffb1','ffffff']
-  };
-  var COLOR_KEYS = { skinColor:1, hairColor:1, hatColor:1, facialHairColor:1, clothesColor:1, accessoriesColor:1 };
-  var OPTION_ORDER = ['top','hairColor','hatColor','skinColor','eyes','eyebrows','mouth',
-                      'facialHair','facialHairColor','clothing','clothesColor','clothingGraphic',
-                      'accessories','accessoriesColor'];
-  var OPTION_LABEL = { top:'Hair / hat', hairColor:'Hair colour', hatColor:'Hat colour',
-    skinColor:'Skin', eyes:'Eyes', eyebrows:'Brows', mouth:'Mouth', facialHair:'Facial hair',
-    facialHairColor:'Facial hair colour', clothing:'Clothing', clothesColor:'Clothing colour',
-    clothingGraphic:'Shirt graphic',
-    accessories:'Glasses', accessoriesColor:'Glasses colour' };
+  /* THE OPTION TABLES ARE GONE — gx-theme's GXAvatarPicker owns them now (2026-08-25). It carries
+     its own OPTIONS / DEFAULT_CONFIG, and a second copy here would be a second answer to "what can
+     an avatar be": add an option in one place and half the suite never offers it.
 
-  var DEFAULT_AVATAR = { skinColor:'ffdbb4', top:'shortFlat', hairColor:'4a312c', hatColor:'262e33',
-    eyes:'default', eyebrows:'default', mouth:'default', facialHair:'_none',
-    facialHairColor:'2c1b18', clothing:'shirtCrewNeck', clothesColor:'262e33',
-    clothingGraphic:'bat', accessories:'_none', accessoriesColor:'3c4f5c' };
+     ONE ATTRIBUTE WENT WITH THEM AND IS WORTH NAMING: `clothingGraphic`, the design printed on a
+     graphic shirt. Crew pinned it because it was the LAST thing the seed still chose — everything
+     else in a config is fixed, so once the seed was pinned to employee_number this was the only
+     attribute that could still differ between apps, and it did. The shared picker does not offer
+     it, so a config re-saved through the picker loses the key and DiceBear picks the design from
+     the seed again. Stored configs that still carry it keep rendering it (buildAvatarUrl below
+     emits whatever the config holds); only a re-save drops it. Requested back from core-admin —
+     it belongs in the shared component, not in a local table that would diverge on day one. */
 
   function parseCfg(row) {
     if (!row.avatar_config) return null;
@@ -943,6 +921,10 @@
     if (e.key !== 'Escape' || !state.selected || !ui) return;
     var t = e.target && e.target.tagName;
     if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+    /* One layer at a time. With the avatar builder open, Escape closes THAT — deselecting the
+       person out from under it would throw away an unsaved face and drop you two levels in one
+       keystroke, when the picker is plainly the thing on screen. Press it again to go back. */
+    if (state.avatarOpen) { state.avatarOpen = false; paintPane(); return; }
     state.selected = null; paintRail(); paintPane();
   });
 
@@ -1081,9 +1063,16 @@
      that one heading. Cleared on every repaint: a stale closure would write the previous person's
      name into the pane. */
   var repaintName = null;
+  /* Same idea for the record's avatar circle: a save has to move the face without repainting the
+     pane, because the pane is what the open picker is sitting in. */
+  var repaintHeadPuck = null;
   function paintPane() {
     if (!ui) return;
     repaintName = null;
+    repaintHeadPuck = null;
+    /* The picker binds a click listener to its own root. That root is about to be thrown away with
+       the rest of the pane, so let the component take its listener with it. */
+    destroyAvatarPicker();
     /* Panels belong to the person you opened them on. Carrying an open avatar picker or a
        half-typed merge search across a selection change would show one person's editor over
        another person's record. */
@@ -1464,7 +1453,7 @@
 
     var body = el('div', 'crew-pbody');
 
-    if (state.avatarOpen) body.appendChild(avatarPanel(row));
+    if (state.avatarOpen) body.appendChild(avatarMount(row));
 
     /* This person's open questions come FIRST, above their own fields: a disagreement should be
        answered where the record is being read, not on a screen you have to remember to visit. */
@@ -1494,7 +1483,36 @@
   function personHeader(row) {
     var head = el('div', 'crew-phead');
     var inner = el('div', 'crew-phead-in');
-    inner.appendChild(avatarPuck(row, 'xl'));
+
+    /* THE CIRCLE IS THE CONTROL. Sky, 2026-08-25: "if in Crew, you just click on the user Avatar
+       circle to pull up the LB version that'd be great." It replaces a text button that sat over
+       in the actions row — two affordances for one action, and the noise he was complaining about.
+
+       A real <button>, not a div with a click handler: this is the only way into the avatar editor
+       now, so it has to be reachable by Tab and operable by Enter/Space. The title and the pointer
+       cursor are load-bearing too — an avatar that silently does nothing on click is worse than no
+       affordance at all, and nothing else on this header is clickable. */
+    var puckBtn = el('button', 'crew-avabtn');
+    puckBtn.type = 'button';
+    puckBtn.disabled = !state.canEdit;
+    function paintHeadPuck() {
+      puckBtn.innerHTML = '';
+      puckBtn.appendChild(avatarPuck(row, 'xl'));
+      puckBtn.title = !state.canEdit ? 'Avatar — read-only'
+        : state.avatarOpen ? 'Close the avatar builder'
+        : (parseCfg(row) ? 'Change this avatar' : 'Give them an avatar');
+      puckBtn.setAttribute('aria-label', puckBtn.title);
+      puckBtn.setAttribute('aria-expanded', state.avatarOpen ? 'true' : 'false');
+    }
+    paintHeadPuck();
+    /* Held for the picker's onSaved, so a new face lands in the circle without repainting the pane
+       the picker is mounted in. Cleared by paintPane, like repaintName. */
+    repaintHeadPuck = paintHeadPuck;
+    puckBtn.addEventListener('click', function () {
+      state.avatarOpen = !state.avatarOpen;
+      paintPane();
+    });
+    inner.appendChild(puckBtn);
 
     var txt = el('div', 'crew-phead-txt');
     var nameRow = el('div', 'crew-pnamerow');
@@ -1556,15 +1574,8 @@
       setEom(isEom ? '' : String(row.employee_id), row.name);
     });
     acts.appendChild(eomBtn);
-
-    var avaBtn = el('button', 'crew-btn', state.avatarOpen ? 'Close avatar' : 'Avatar');
-    avaBtn.type = 'button';
-    avaBtn.disabled = !state.canEdit;
-    avaBtn.addEventListener('click', function () {
-      state.avatarOpen = !state.avatarOpen;
-      paintPane();
-    });
-    acts.appendChild(avaBtn);
+    /* The "Avatar" / "Close avatar" button used to live here. It is gone — the circle at the front
+       of this header opens the picker now. */
     inner.appendChild(acts);
 
     head.appendChild(inner);
@@ -2010,118 +2021,78 @@
   }
 
 
-  /* ── Avatar picker ────────────────────────────────────────────────────────────
-   * Lives beside the nickname because they are the same decision — how this person is presented
-   * on the kiosk — and Crew is now the only place either is set.
+  /* ── Avatar picker — gx-theme's, mounted here ─────────────────────────────────
+   * Crew's own 105-line panel is RETIRED, not merged (2026-08-25). It lost on the merits:
+   * Sky — "I like the LB picker better... the current, simplified version in Crew is efficient
+   * but not intuitive and just adds noise." The one builder for the suite now lives in
+   * gx-theme as GXAvatarPicker, promoted from Leaderboard; both apps mount the same component,
+   * so a face is built the same way whichever screen you are standing in front of.
    *
-   * The one compound control on a screen of single-field saves, so it debounces harder (900ms)
-   * and serialises: a config is fourteen dropdowns describing ONE value, and two writes in
-   * flight at once would land in whichever order Apps Script finished them.
+   * FOUR THINGS THIS FUNCTION IS RESPONSIBLE FOR, and each is the reason it is not one line:
+   *
+   *   THE SEED. GXAvatarPicker generates its preview from `seed`, and Leaderboard cannot pass a
+   *   real one — its getavatardata carries no employee_number, so it falls back to a name-derived
+   *   string, which is exactly what pinning exists to stop mattering. Crew CAN: `row.avatar_seed`
+   *   is the engine's read-side answer (avatarSeedFrom_ — attrs employee_number, then the Core
+   *   row's, then employee_id for somebody not yet numbered) and it is the same value avatarPuck
+   *   renders beside the picker, so the preview and the circle above it agree by construction.
+   *   Do not pass employee_number directly: it is the attrs value only, and it is blank for the
+   *   unnumbered, which would silently hand them DiceBear's 'unknown' face.
+   *
+   *   SAVE IS ONE PATH. save(cfg) with cfg === null means REMOVE, and both land on
+   *   roster_identity -> saveAvatarOnly_ -> GXCore.setAvatar, which pins the seed, retries lock
+   *   contention, NAMES avatar_config in clear= and then verifies the clear landed. postField
+   *   throws on !ok AND on a warning, so a refused clear surfaces in the picker's status line
+   *   rather than being reported as a save.
+   *
+   *   NO LEADERBOARD MOCK, NO .gxava-full. showLeaderboardPreview is off: that mock is a sales
+   *   standings row and this is an HR record. .gxava-full sets min-height:100vh, which assumes
+   *   the component owns the viewport; here it is a panel inside a person.
+   *
+   *   REPAINTING WITHOUT UNMOUNTING. A save has to move the circle in the header and the face in
+   *   the rail, and repainting the pane would tear the picker out from under whoever is still
+   *   choosing a hat. onSaved touches only those two, via the closure personHeader leaves behind.
    */
-  function avatarPanel(row) {
-    var pick = el('div', 'crew-avapick');
-    var working = parseCfg(row);
-    var preview = el('div', 'crew-avapreview');
-    var seedNote = el('p', 'crew-editnote');
-    var controls = el('div', 'crew-avacontrols');
-    var timer = null, inFlight = false, queued = null;
+  var avatarHandle = null;
+  function destroyAvatarPicker() {
+    if (avatarHandle) { try { avatarHandle.destroy(); } catch (e) {} avatarHandle = null; }
+  }
 
-    function push() {
-      var payload = working ? JSON.stringify(working) : '';
-      if (inFlight) { queued = payload; return; }
-      inFlight = true;
-      postField(row, 'identity', 'avatar_config', payload)
-        .then(function () {
+  function avatarMount(row) {
+    var host = el('div', 'crew-avamount');
+    if (!window.GXAvatarPicker) {
+      /* gx-theme is loaded by URL from Pages. If that request failed, say so — an empty box where
+         an editor should be reads as a bug in Crew. */
+      host.appendChild(banner('warn',
+        'The avatar builder did not load (gx-avatar-picker.js from gx-theme). Reload the page.'));
+      return host;
+    }
+    destroyAvatarPicker();
+    avatarHandle = GXAvatarPicker.mount(host, {
+      name:   displayName(row) || row.name || '',
+      seed:   row.avatar_seed || row.employee_id,
+      config: parseCfg(row),
+      showLeaderboardPreview: false,
+      save: function (cfg) {
+        /* '' is not "leave alone" here — postField names the field, and the engine reads a named
+           empty avatar_config as a clear. That is the whole reason Remove works. */
+        var payload = cfg ? JSON.stringify(cfg) : '';
+        return postField(row, 'identity', 'avatar_config', payload).then(function (res) {
           row.avatar_config = payload;
-          toast('Saved · avatar');
-          paintRail();
-        })
-        .catch(function (e) { toast((e && e.message) || 'Could not save the avatar', true); })
-        .then(function () {
-          inFlight = false;
-          if (queued != null) { var q = queued; queued = null; if (q !== payload) push(); }
+          /* setAvatar stamps the seed and hands it back. Adopt it so the puck and the picker keep
+             agreeing without waiting for the next roster read to re-derive it. */
+          if (res && res.seed) row.avatar_seed = String(res.seed);
+          return res;
         });
-    }
-    function schedule() { clearTimeout(timer); timer = setTimeout(push, 900); }
-
-    function paintPreview() {
-      preview.innerHTML = '';
-      preview.appendChild(avatarPuck({ name: row.name, employee_id: row.employee_id,
-        avatar_seed: row.avatar_seed,
-        avatar_config: working ? JSON.stringify(working) : '' }, 'lg'));
-      seedNote.innerHTML = working
-        ? 'Seed pinned to employee&nbsp;#<b>' + esc(row.avatar_seed || '—') +
-          '</b> — renaming will not change this face.'
-        : 'No avatar set — the kiosk shows initials.';
-    }
-    function paintControls() {
-      controls.innerHTML = '';
-      if (!working) return;
-      OPTION_ORDER.forEach(function (key) {
-        // Only offer a colour when the feature it colours is actually switched on.
-        if (key === 'hatColor' && !HAT_TOPS[working.top]) return;
-        if (key === 'hairColor' && (working.top === '_none' || HAT_TOPS[working.top])) return;
-        if (key === 'facialHairColor' && working.facialHair === '_none') return;
-        if (key === 'accessoriesColor' && working.accessories === '_none') return;
-        // Only graphicShirt has a graphic to choose. Same rule as the colours above.
-        if (key === 'clothingGraphic' && working.clothing !== 'graphicShirt') return;
-        /* A config may not carry every key — Sky's had no hatColor at all, so choosing a hat
-           rendered a control showing a value the config did not hold, and the avatar came back
-           with DiceBear's default instead. Adopt the displayed value into the config so what you
-           see is always what gets saved. */
-        if (working[key] == null) working[key] = AVATAR_OPTIONS[key][0];
-        var wrap = el('label', 'crew-avaopt');
-        var isColor = !!COLOR_KEYS[key];
-        var opts = AVATAR_OPTIONS[key].map(function (v) {
-          var lbl = v === '_none' ? 'none' : v === '_gchat' ? 'GC hat' : v;
-          return '<option value="' + esc(v) + '"' + (working[key] === v ? ' selected' : '') +
-                 '>' + esc(lbl) + '</option>';
-        }).join('');
-        wrap.innerHTML = '<span>' + esc(OPTION_LABEL[key] || key) + '</span>' +
-          '<select>' + opts + '</select>' +
-          (isColor ? '<i class="crew-avaswatch" style="background:#' + esc(working[key] || '000') + '"></i>' : '');
-        wrap.querySelector('select').addEventListener('change', function () {
-          working[key] = this.value;
-          // Controls first: choosing a hat introduces hatColor, and paintControls is what adopts
-          // that default into `working`. Painting the preview first would render one change
-          // behind, silently dropping the new key from the URL.
-          paintControls(); paintPreview(); schedule();
-        });
-        controls.appendChild(wrap);
-      });
-    }
-
-    var acts = el('div', 'crew-avaacts');
-    var bStart = el('button', 'crew-btn', working ? 'Reset to default' : 'Give them an avatar');
-    bStart.type = 'button';
-    var bClear = el('button', 'crew-btn', 'Remove avatar');
-    bClear.type = 'button';
-    bClear.style.display = working ? '' : 'none';
-    bStart.addEventListener('click', function () {
-      working = JSON.parse(JSON.stringify(DEFAULT_AVATAR));
-      bStart.textContent = 'Reset to default';
-      bClear.style.display = '';
-      paintControls(); paintPreview(); push();
+      },
+      onSaved: function (cfg) {
+        toast(cfg ? 'Saved · avatar' : 'Saved · avatar removed');
+        if (repaintHeadPuck) repaintHeadPuck();
+        paintRail();
+      },
+      close: function () { state.avatarOpen = false; paintPane(); }
     });
-    /* Clearing works because the write NAMES avatar_config rather than sending it empty — an
-       empty value on its own means "leave alone" in Core's patch path. Since GXCore v225 the
-       naming AND the check that the blank actually landed live in GXCore.setAvatar, which
-       roster_identity hands avatar-only saves to. This button spent a release disabled rather
-       than deleted — it used to clear the preview, report success and let the face come back on
-       reload, which is why the engine verifies instead of assuming. */
-    bClear.addEventListener('click', function () {
-      working = null;
-      bStart.textContent = 'Give them an avatar';
-      bClear.style.display = 'none';
-      paintControls(); paintPreview(); push();
-    });
-    acts.appendChild(bStart); acts.appendChild(bClear);
-
-    var col = el('div', 'crew-avacol');
-    col.appendChild(controls); col.appendChild(acts); col.appendChild(seedNote);
-    pick.appendChild(preview); pick.appendChild(col);
-    paintControls(); paintPreview();
-    return pick;
+    return host;
   }
 
 
