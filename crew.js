@@ -2148,6 +2148,109 @@
   });
 
 
+  /* ── Incentive: the bonus math ─────────────────────────────────────────────────
+     Ported from Leaderboard (index.html `incentive` module) on 2026-08-26, which in turn
+     is an exact port of the "Green Cross Incentive Program" Google Sheet. These numbers
+     PAY PEOPLE, so `tests/incentive_math_test.js` runs a frozen copy of Leaderboard's
+     originals against this port over every threshold boundary and asserts they agree to
+     the cent. Change nothing here without re-running it.
+
+     Leaderboard's versions read closure state (_T, _inp, _d). These take the same values as
+     explicit arguments — the only intentional difference, and the reason they are testable.
+
+     Five things that look like tidying but change what people get paid:
+
+       • THE TIER ARRAYS ARE ORDERED, AND MATCH ON THE FIRST HIT. `salesTiers` and `admin.tiers`
+         run high-to-low with a `break`, so 112% of goal must land on the 110 tier. Re-sorting
+         them ascending silently pays everyone the lowest tier they clear instead of the highest.
+
+       • A MANAGER'S DISCOUNT TIERS ARE DERIVED, NOT STORED. Only the two DOLLAR amounts come
+         from `T.manager.discountTiers`; the cut-offs are computed from the budtender discount
+         goal — meet it for the lower bonus, beat it by a third (≤ goal × ⅔) for the higher.
+         The `maxPct` fields sitting on the stored tiers are ignored on purpose. Reading them
+         instead is the single easiest way to silently mis-pay every manager.
+
+       • SPIFF IS NOT PAYROLL. Vendors fund SPIFF; the company funds payroll, and only the
+         payroll figure goes to Capstone. So a budtender's `payroll` subtracts the SPIFF back
+         out (`bonus - spiff`) and a manager's `bonus` adds it on top of payroll. Same rule,
+         built from opposite ends — which is exactly why both are pinned by tests.
+
+       • QUALIFYING GATES THE PERFORMANCE BONUSES ONLY. Missing the transaction bar costs the
+         AOV and discount bonuses, never the attendance one — showing up is not a volume metric.
+
+       • DISCOUNT COMPARES `<=`, AOV COMPARES `>=`. Lower is better on one and worse on the
+         other, and both sit on the boundary in real data every period.
+
+     `discount` arrives as a DECIMAL (0.015) and every threshold is a PERCENT (1.5), hence the
+     ×100 at each comparison. Keep the conversion at the comparison rather than normalising on
+     the way in — the stored thresholds are what Sky edits and reads, and they are percents. */
+
+  function incInput(inputs, nameKey) {
+    var i = inputs && inputs[nameKey];
+    return { att: !!(i && i.att), spiff: (i && +i.spiff) || 0 };
+  }
+
+  function calcBud(b, T, inputs) {
+    var t = T.budtender, i = incInput(inputs, b.nameKey);
+    var low  = (t.lowVolStores || []).indexOf(b.storeSlug) !== -1;
+    var qual = b.txn >= (low ? t.txnQualifyLowVol : t.txnQualify);
+    var aovB = (qual && b.aov >= t.aovTarget) ? t.aovBonus : 0;
+    var disB = (qual && b.discount * 100 <= t.discountMaxPct) ? t.discountBonus : 0;
+    var attB = i.att ? t.attendanceBonus : 0;
+    var bonus = aovB + disB + attB + i.spiff;
+    return {
+      qual: qual, aovB: aovB, disB: disB, attB: attB, spiff: i.spiff,
+      bonus: bonus, payroll: bonus - i.spiff, hr: bonus / T.hoursPerPeriod
+    };
+  }
+
+  /* Every budtender at the store with attendance ticked — including ones who missed the
+     transaction bar. The manager's job is that the team showed up, not that it sold enough. */
+  function incTeamAtt(budtenders, slug, inputs) {
+    return (budtenders || []).filter(function (b) {
+      return b.storeSlug === slug && incInput(inputs, b.nameKey).att;
+    }).length;
+  }
+
+  function calcMgr(mgr, T, inputs, budtenders) {
+    var t = T.manager, i = incInput(inputs, mgr.nameKey);
+    var pct = mgr.target > 0 ? mgr.sales / mgr.target * 100 : 0;
+
+    var sB = 0;
+    for (var a = 0; a < t.salesTiers.length; a++) {
+      if (pct >= t.salesTiers[a].pct) { sB = t.salesTiers[a].bonus; break; }
+    }
+
+    var goal = T.budtender.discountMaxPct;
+    var tiers = [
+      { maxPct: goal * 2 / 3, bonus: t.discountTiers[0].bonus },
+      { maxPct: goal,         bonus: t.discountTiers[1].bonus }
+    ];
+    var dp = mgr.discount * 100, dB = 0;
+    for (var c = 0; c < tiers.length; c++) {
+      if (dp <= tiers[c].maxPct) { dB = tiers[c].bonus; break; }
+    }
+
+    var aB = mgr.aov >= t.aovTarget ? t.aovBonus : 0;
+    var tA = incTeamAtt(budtenders, mgr.storeSlug, inputs) * t.teamAttendancePerHead;
+    var payroll = sB + dB + aB + tA;
+    return {
+      pct: pct, salesB: sB, discB: dB, aovB: aB, teamA: tA, spiff: i.spiff,
+      payroll: payroll, bonus: payroll + i.spiff, hr: (payroll + i.spiff) / T.hoursPerPeriod
+    };
+  }
+
+  function calcAdmin(admin, T) {
+    var t = T.admin;
+    var pct = admin.target > 0 ? admin.actual / admin.target * 100 : 0;
+    var tier = 0;
+    for (var x = 0; x < t.tiers.length; x++) {
+      if (pct >= t.tiers[x].pct) { tier = t.tiers[x].bonus; break; }
+    }
+    var bonus = Math.min(tier, admin.stores * t.maxPerStore);
+    return { pct: pct, tier: tier, bonus: bonus, hr: bonus / T.hoursPerPeriod };
+  }
+
   // ─── boot ────────────────────────────────────────────────────────────────────
   async function boot(quiet) {
     if (!window.GXClient) { renderStatus('⚠️ gx-client failed to load — cannot reach GX Core.'); return; }
