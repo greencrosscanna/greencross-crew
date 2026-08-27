@@ -52,6 +52,8 @@ function makeSheet(headers) {
   };
 }
 
+let REGISTRY = () => [];      // swapped per-test; see stampEmployeeIds_ below
+
 const gs = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
 function grab(name) {
   const i = gs.indexOf('function ' + name + '(');
@@ -85,13 +87,21 @@ function load(sheet) {
     }
     ${grab('historyStoreId_')} ${grab('historyPeriods_')}
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
+    ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
+    ${grab('samePerson_')} ${grab('stampEmployeeIds_')}
+    var NICKNAMES = Object.create(null);
     return { incentiveImport_: incentiveImport_, incentiveHistory_: incentiveHistory_,
-             incentiveRelink_: incentiveRelink_, historyPeriods_: historyPeriods_ };`;
-  // resolveStore is GX Core's; the local table this replaces is exactly what must not exist.
+             incentiveRelink_: incentiveRelink_, historyPeriods_: historyPeriods_,
+             stampEmployeeIds_: stampEmployeeIds_ };`;
+  /* GX Core is INJECTED, not global — the engine calls it as a bound library. resolveStore is
+     genuinely its job; the local store table this replaces is exactly what must not exist here.
+     getEmployees reads through a mutable hook so a test can swap the registry, including for the
+     case where the read throws. */
   const GXCore = { resolveStore: l => ({ 'Hillsboro': { store_id: 'hillsboro' },
                                          'Portland Road': { store_id: 'portland-rd' },
                                          'River Rd': { store_id: 'river-rd' },
-                                         'Bend': { store_id: 'bend' } }[l] || null) };
+                                         'Bend': { store_id: 'bend' } }[l] || null),
+                   getEmployees: () => REGISTRY() };
   return new Function('SHEET', 'GXCore', 'Date', src)(sheet, GXCore, Date);
 }
 
@@ -205,6 +215,59 @@ ok('every other cell — every figure — is unchanged', untouched);
 
 r = M.incentiveRelink_({ pdf_name: 'Nobody At All', employee_id: 'x', confirm: 'yes' });
 ok('relinking a name with no history is refused, not silently a no-op', r.ok === false);
+
+/* ── every live row leaves the engine carrying an employee_id ──
+   Crew keys its saved inputs on employee_id; Leaderboard sends only its own nameKey. If a row
+   arrives without an employee_id stamped on it, the math looks the input up under a key nothing
+   ever wrote, so an attendance tick or a SPIFF entry is silently ignored and the payroll comes out
+   short. Nothing throws — the payload looks complete, with blanks where the ids should be.
+
+   This is the test the shadowing bug needed: `var live = emps.filter(...)` shadowed the `live`
+   PARAMETER, so `live.budtenders` was undefined, forEach ran zero times, and not one row was
+   stamped. It reached production and was caught by the probe reporting `stamped: 0` alongside
+   `unmatched: []` — a pair that cannot both be true if the loop ran at all. */
+sheet = makeSheet(HEADERS); M = load(sheet);
+const REG = [
+  { employee_id: 'christopher_carney', full_name: 'Christopher Carney', display_name: 'Chris Carney', status: 'active' },
+  { employee_id: 'tj_peterson',   full_name: 'Thomas Peterson', display_name: 'TJ Peterson',   status: 'active' },
+  { employee_id: 'thomas_peterson', full_name: 'Thomas Peterson', display_name: 'Thomas Peterson', status: 'merged' },
+  { employee_id: 'robert_wydick', full_name: 'Robert Wydick',   display_name: 'Nate Wydick',   status: 'active' },
+  { employee_id: 'nathan_wydick', full_name: 'Nathan Wydick',   display_name: 'Nate Wydick',   status: 'merged' },
+  { employee_id: 'jane_schwenger', full_name: 'Jane Schwenger', display_name: 'Jane Schwenger', status: 'retired' },
+];
+const payload = {
+  admin: { name: 'Michael Kettler', nameKey: 'mike_kettler' },
+  managers: [{ name: 'Chris Carney', nameKey: 'chris_carney' },
+             { name: 'TJ Peterson', nameKey: 'tj_peterson' }],
+  budtenders: [{ name: 'Nathan Wydick', nameKey: 'nathan_wydick' },
+               { name: 'Jane Schwenger', nameKey: 'jane_schwenger' },
+               { name: 'Nobody Here', nameKey: 'nobody_here' }],
+};
+REGISTRY = () => REG;
+M.stampEmployeeIds_(payload);
+const stamped = payload.budtenders.concat(payload.managers).filter(r => r.employee_id).length;
+ok('the loop actually runs — rows come back stamped', stamped > 0);
+ok('a legal-name match resolves', payload.managers[0].employee_id === 'christopher_carney');
+/* The reports print the name people are CALLED by. Robert Wydick is "Nate Wydick" on the board and
+   "Nathan Wydick" in the payout PDFs; matching full_name alone reaches neither. */
+ok('a display_name match resolves to the LIVE record, not the tombstone',
+   payload.budtenders[0].employee_id === 'robert_wydick');
+ok('a nameKey that collides with a MERGED id does not win',
+   payload.managers[1].employee_id === 'tj_peterson');
+ok('a RETIRED person still resolves — they really did work that period',
+   payload.budtenders[1].employee_id === 'jane_schwenger');
+ok('somebody with no registry record is reported, not silently blank',
+   payload.budtenders[2].employee_id === '' && payload.unmatched.indexOf('Nobody Here') >= 0);
+ok('unmatched lands on the PAYLOAD, not on some other object',
+   Array.isArray(payload.unmatched));
+
+/* A registry read that fails must not look like "nobody matched": every row unstamped AND every
+   name reported is the honest outcome, and it is distinguishable from a clean run. */
+REGISTRY = () => { throw new Error('GX Core unreachable'); };
+const p2 = { admin: null, managers: [], budtenders: [{ name: 'Chris Carney', nameKey: 'chris_carney' }] };
+M.stampEmployeeIds_(p2);
+ok('a failed registry read reports the name rather than silently blanking it',
+   p2.budtenders[0].employee_id === '' && p2.unmatched.length === 1);
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive history: all passed');
 process.exit(fail ? 1 : 0);

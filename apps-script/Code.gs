@@ -3325,9 +3325,15 @@ function stampEmployeeIds_(live) {
      Leaderboard and SPIFF joins. It is still returned here and still matches on name, so without
      this filter a live row can be stamped with an id nothing renders — and an input saved against
      it would vanish. RETIRED is deliberately kept: a retired person really did work that period. */
-  var live = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
+  /* NAMED `roster`, not `live`. It was `var live = …` and that SHADOWED THE PARAMETER: from that
+     line on, `live` was the employee array, so `live.budtenders` was undefined, forEach ran zero
+     times, and not one row was stamped. Nothing threw — the route returned a complete-looking
+     payload in which every employee_id was blank, so every input saved from the screen would have
+     been looked up under a key nothing wrote. Caught by incentive_probe reporting the impossible
+     pair `stamped: 0, unmatched: []`. */
+  var roster = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
   var byKey = Object.create(null);
-  live.forEach(function (e) {
+  roster.forEach(function (e) {
     /* display_name too, because that is the name people are called by and the name the reports
        print: the registry's Robert Wydick is "Nate Wydick" on the board, and Thomas Peterson is
        "TJ Peterson". Matching only full_name reaches neither. */
@@ -3342,9 +3348,9 @@ function stampEmployeeIds_(live) {
     if (!r) return;
     var hit = byKey[String(r.nameKey || '')] || byKey[nameToKey_(r.name)] || '';
     if (!hit) {
-      for (var i = 0; i < live.length; i++) {
-        if (samePerson_(r.name, live[i].full_name) || samePerson_(r.name, live[i].display_name)) {
-          hit = live[i].employee_id; break;
+      for (var i = 0; i < roster.length; i++) {
+        if (samePerson_(r.name, roster[i].full_name) || samePerson_(r.name, roster[i].display_name)) {
+          hit = roster[i].employee_id; break;
         }
       }
     }
