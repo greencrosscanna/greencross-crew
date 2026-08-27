@@ -3334,10 +3334,17 @@ function stampEmployeeIds_(live) {
   var roster = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
   var byKey = Object.create(null);
   roster.forEach(function (e) {
-    /* display_name too, because that is the name people are called by and the name the reports
-       print: the registry's Robert Wydick is "Nate Wydick" on the board, and Thomas Peterson is
-       "TJ Peterson". Matching only full_name reaches neither. */
-    [e.full_name, e.display_name].forEach(function (n) {
+    /* The name people are CALLED by, as well as the legal one: the registry's Robert Wydick is
+       "Nate Wydick" on the board and "Nathan Wydick" in the payout reports, and Thomas Peterson is
+       "TJ Peterson". Matching only full_name reaches neither.
+
+       DERIVED through displayNameOf_, which this file already had. GXCore.getEmployees() returns
+       the raw `employees` tab,
+       which has no display_name column — that field is added by GX Core's HTTP ?action=employees
+       route via gxDisplayName_(), and is simply undefined on the library call this engine makes.
+       Reading e.display_name therefore matched nothing and failed silently: the probe reported 37
+       of 38 stamped, and the one holdout was exactly the person whose legal name nobody uses. */
+    [e.full_name, displayNameOf_(e)].forEach(function (n) {
       var k = nameToKey_(n);
       if (k && !byKey[k]) byKey[k] = e.employee_id;
     });
@@ -3349,7 +3356,8 @@ function stampEmployeeIds_(live) {
     var hit = byKey[String(r.nameKey || '')] || byKey[nameToKey_(r.name)] || '';
     if (!hit) {
       for (var i = 0; i < roster.length; i++) {
-        if (samePerson_(r.name, roster[i].full_name) || samePerson_(r.name, roster[i].display_name)) {
+        if (samePerson_(r.name, roster[i].full_name) ||
+            samePerson_(r.name, displayNameOf_(roster[i]))) {
           hit = roster[i].employee_id; break;
         }
       }

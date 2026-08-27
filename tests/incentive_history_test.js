@@ -88,7 +88,7 @@ function load(sheet) {
     ${grab('historyStoreId_')} ${grab('historyPeriods_')}
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
     ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
-    ${grab('samePerson_')} ${grab('stampEmployeeIds_')}
+    ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('stampEmployeeIds_')}
     var NICKNAMES = Object.create(null);
     return { incentiveImport_: incentiveImport_, incentiveHistory_: incentiveHistory_,
              incentiveRelink_: incentiveRelink_, historyPeriods_: historyPeriods_,
@@ -227,13 +227,17 @@ ok('relinking a name with no history is refused, not silently a no-op', r.ok ===
    stamped. It reached production and was caught by the probe reporting `stamped: 0` alongside
    `unmatched: []` — a pair that cannot both be true if the loop ran at all. */
 sheet = makeSheet(HEADERS); M = load(sheet);
+/* THE SHAPE THE LIBRARY ACTUALLY RETURNS. GXCore.getEmployees() hands back the raw `employees`
+   tab: preferred_name, no display_name. That column is added by GX Core's HTTP ?action=employees
+   route, not by the library — so a fixture carrying display_name would test a field the engine
+   never sees, and would have passed while production matched nobody by nickname. */
 const REG = [
-  { employee_id: 'christopher_carney', full_name: 'Christopher Carney', display_name: 'Chris Carney', status: 'active' },
-  { employee_id: 'tj_peterson',   full_name: 'Thomas Peterson', display_name: 'TJ Peterson',   status: 'active' },
-  { employee_id: 'thomas_peterson', full_name: 'Thomas Peterson', display_name: 'Thomas Peterson', status: 'merged' },
-  { employee_id: 'robert_wydick', full_name: 'Robert Wydick',   display_name: 'Nate Wydick',   status: 'active' },
-  { employee_id: 'nathan_wydick', full_name: 'Nathan Wydick',   display_name: 'Nate Wydick',   status: 'merged' },
-  { employee_id: 'jane_schwenger', full_name: 'Jane Schwenger', display_name: 'Jane Schwenger', status: 'retired' },
+  { employee_id: 'christopher_carney', full_name: 'Christopher Carney', preferred_name: 'Chris', status: 'active' },
+  { employee_id: 'tj_peterson',     full_name: 'Thomas Peterson', preferred_name: 'TJ',   status: 'active' },
+  { employee_id: 'thomas_peterson', full_name: 'Thomas Peterson', preferred_name: '',     status: 'merged' },
+  { employee_id: 'robert_wydick',   full_name: 'Robert Wydick',   preferred_name: 'Nate', status: 'active' },
+  { employee_id: 'nathan_wydick',   full_name: 'Nathan Wydick',   preferred_name: 'Nate', status: 'merged' },
+  { employee_id: 'jane_schwenger',  full_name: 'Jane Schwenger',  preferred_name: '',     status: 'retired' },
 ];
 const payload = {
   admin: { name: 'Michael Kettler', nameKey: 'mike_kettler' },
@@ -250,7 +254,7 @@ ok('the loop actually runs — rows come back stamped', stamped > 0);
 ok('a legal-name match resolves', payload.managers[0].employee_id === 'christopher_carney');
 /* The reports print the name people are CALLED by. Robert Wydick is "Nate Wydick" on the board and
    "Nathan Wydick" in the payout PDFs; matching full_name alone reaches neither. */
-ok('a display_name match resolves to the LIVE record, not the tombstone',
+ok('a NICKNAME match resolves to the live record, not the tombstone — and the nickname is\n     derived from preferred_name, because the library returns no display_name column',
    payload.budtenders[0].employee_id === 'robert_wydick');
 ok('a nameKey that collides with a MERGED id does not win',
    payload.managers[1].employee_id === 'tj_peterson');
