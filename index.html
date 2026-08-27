@@ -578,6 +578,58 @@
     .crew-inc-msg { padding: 30px 4px; color: var(--gx-text-mute); font-size: 13.5px; }
     .crew-inc-err { color: #f0a6a6; }
     @media (max-width: 720px) { .crew-inc { padding: 14px 12px 50px; } }
+
+    /* ── Printing an incentive period ─────────────────────────────────────────────
+       The PDFs in Drive are the payroll record, so this has to produce something worth
+       filing: black on white, every row on the page, no chrome. The app is dark and
+       full-bleed, which prints as a wall of ink and loses the right-hand columns —
+       so print is a genuinely different layout, not the screen with a filter over it. */
+    @media print {
+      @page { size: letter landscape; margin: 0.4in; }
+      html, body { background: #fff !important; color: #000 !important; }
+      /* Everything that is not the report */
+      .gx-topnav, .crew-subnav, .crew-rail, .crew-pane, .gx-bugreport-btn,
+      .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner { display: none !important; }
+      .crew-body, .crew-inc { display: block !important; overflow: visible !important;
+        height: auto !important; padding: 0 !important; background: #fff !important; }
+      .crew-inc-title, .crew-inc-sub, .crew-inc-sec, .crew-inc-tbl td, .crew-inc-tot dd {
+        color: #000 !important; }
+      .crew-inc-sub { font-size: 11px; }
+      /* The period has to be legible on paper — on screen it is a <select>, which prints as an
+         empty box, so a plain-text twin is revealed here and hidden on screen. */
+      .crew-inc-printpp { display: none; }
+      @media print { .crew-inc-printpp { display: inline !important; font-weight: 600; } }
+      .crew-inc-tot { gap: 26px; margin-bottom: 12px; }
+      .crew-inc-tot dt { color: #555 !important; }
+      .crew-inc-grand, .crew-inc-pay { color: #000 !important; }
+      /* The green that means "hit a target" is the one colour worth the ink — it is the
+         difference between a bonus earned and not, and a grey copy cannot show it. */
+      .crew-inc-hit { color: #0a7a3d !important; font-weight: 700; }
+      .crew-inc-zero { color: #999 !important; }
+      .crew-inc-wrap { overflow: visible !important; border: 1px solid #bbb !important;
+        border-radius: 0 !important; }
+      .crew-inc-tbl { font-size: 9.5px; }
+      .crew-inc-tbl th { background: #f0f0f0 !important; color: #000 !important;
+        border-bottom: 1px solid #999 !important; position: static !important; }
+      .crew-inc-tbl td { border-bottom: 1px solid #e4e4e4 !important; padding: 3px 6px; }
+      .crew-inc-tbl tbody tr:hover td { background: transparent !important; }
+      /* A person's row must not straddle a page break — half a payout line is unreadable
+         and, on a payroll document, ambiguous. */
+      .crew-inc-tbl tr { page-break-inside: avoid; }
+      .crew-inc-sec { page-break-after: avoid; margin: 14px 0 5px; color: #000 !important; }
+      /* Inputs are controls, not values. On paper they must read as what they hold. */
+      .crew-inc-spiff { border: 0 !important; background: transparent !important;
+        color: #000 !important; width: auto !important; padding: 0 !important;
+        -webkit-appearance: none; appearance: none; }
+      .crew-inc-att { -webkit-appearance: none; appearance: none; width: auto; }
+      .crew-inc-att::after { content: '—'; color: #999; }
+      .crew-inc-att:checked::after { content: '✓'; color: #0a7a3d; font-weight: 700; }
+      .crew-inc-note { color: #444 !important; font-size: 9px; page-break-inside: avoid; }
+      .crew-inc-badge.is-imported { background: #fff !important; color: #8a5a12 !important;
+        border: 1px solid #c9a05a !important; }
+      .crew-inc-badge.is-live { background: #fff !important; color: #0a7a3d !important;
+        border: 1px solid #7ab98f !important; }
+    }
   </style>
 </head>
 <body class="gx-app">
@@ -596,6 +648,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.326"></script>
+  <script src="crew.js?v=1.327"></script>
 </body>
 </html>

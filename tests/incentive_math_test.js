@@ -110,6 +110,30 @@ function defaults() {
   };
 }
 
+/* ── The ENGINE's copy, loaded from the shipped Code.gs ──────────────────────────────────────────
+   There are two implementations of this arithmetic on purpose. The browser's runs on every keystroke
+   so an attendance tick re-scores instantly; the engine's runs once, when a period is APPROVED, and
+   it exists because a route that writes whatever amount the page hands it is a route where a stale
+   tab or an edited request decides payroll.
+   Two implementations is a drift risk, and this is the only thing that makes it acceptable: both are
+   driven here against the same frozen Leaderboard oracle, so if they ever disagree this fails before
+   either can pay anybody. */
+const E = (function () {
+  const gs = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+  const grab = (name) => {
+    const i = gs.indexOf('function ' + name + '(');
+    if (i < 0) throw new Error('missing ' + name + ' in Code.gs');
+    let d = 0;
+    for (let k = gs.indexOf('{', i); k < gs.length; k++) {
+      if (gs[k] === '{') d++; else if (gs[k] === '}') { d--; if (!d) return gs.slice(i, k + 1); }
+    }
+    throw new Error('unterminated ' + name);
+  };
+  return new Function(
+    grab('incCalcBud_') + grab('incCalcMgr_') + grab('incCalcAdmin_') +
+    '; return { calcBud: incCalcBud_, calcMgr: incCalcMgr_, calcAdmin: incCalcAdmin_ };')();
+})();
+
 /* ── Crew's port, loaded from the SHIPPED crew.js ────────────────────────────────────────────────
    Same seam the roster tests use: splice a `return` into the IIFE tail so this exercises the real
    file rather than a copy that can drift from it. */
@@ -172,14 +196,16 @@ LB.setState(T, inputs, { budtenders: budRows, admin: null });
 let budChecked = 0;
 for (const c of budCases) {
   const lb = LB.calcBud(c.row);
+  const label = 'budtender ' + c.row.storeSlug + ' txn=' + c.row.txn + ' aov=' + c.row.aov +
+                ' disc=' + c.row.discount + ' spiff=' + c.spiff + ' att=' + c.att;
   const cw = M.calcBud(c.row, T, inputs);
-  if (!same('budtender ' + c.row.storeSlug + ' txn=' + c.row.txn + ' aov=' + c.row.aov +
-            ' disc=' + c.row.discount + ' spiff=' + c.spiff + ' att=' + c.att, lb, cw,
-            ['qual', 'bonus', 'payroll', 'hr'])) break;
+  const en = E.calcBud(c.row, T, inputs);
+  if (!same(label + ' [browser]', lb, cw, ['qual', 'bonus', 'payroll', 'hr'])) break;
+  if (!same(label + ' [engine]', lb, en, ['qual', 'bonus', 'payroll', 'hr'])) break;
   budChecked++;
 }
 console.log((budChecked === budCases.length ? '  ✓' : '  ✗') +
-  ' budtender: ' + budChecked + '/' + budCases.length + ' boundary combinations agree exactly');
+  ' budtender: ' + budChecked + '/' + budCases.length + ' boundary combinations agree exactly (browser AND engine vs Leaderboard)');
 
 /* Managers: sales % against each tier edge, both derived discount tiers, AOV edge, and a real team
    behind them so teamAttendancePerHead is exercised rather than multiplied by zero. */
@@ -196,9 +222,11 @@ for (const slug of STORES) {
           LB.setState(T, inputs, { budtenders: budRows, admin: null });
           const lb = LB.calcMgr(mgr);
           const cw = M.calcMgr(mgr, T, inputs, budRows);
+          const en = E.calcMgr(mgr, T, inputs, budRows);
           mgrTotal++;
-          if (!same('manager ' + slug + ' pct=' + pct + ' disc=' + discount + ' aov=' + aov + ' spiff=' + spiff,
-                    lb, cw, ['pct', 'teamA', 'payroll', 'bonus', 'hr'])) { slug && (mgrChecked = -1); break; }
+          const lbl = 'manager ' + slug + ' pct=' + pct + ' disc=' + discount + ' aov=' + aov + ' spiff=' + spiff;
+          if (!same(lbl + ' [browser]', lb, cw, ['pct', 'teamA', 'payroll', 'bonus', 'hr']) ||
+              !same(lbl + ' [engine]',  lb, en, ['pct', 'teamA', 'payroll', 'bonus', 'hr'])) { mgrChecked = -1; break; }
           mgrChecked++;
         }
       }
@@ -217,9 +245,9 @@ for (const pct of [0, 99, 100, 104.99, 105, 109.99, 110, 130]) {
     const admin = { target, actual: target * pct / 100, stores };
     LB.setState(T, inputs, { budtenders: budRows, admin });
     const lb = LB.calcAdmin();
-    const cw = M.calcAdmin(admin, T);
     admTotal++;
-    if (!same('admin pct=' + pct + ' stores=' + stores, lb, cw, ['pct', 'bonus', 'hr'])) break;
+    if (!same('admin pct=' + pct + ' stores=' + stores + ' [browser]', LB.calcAdmin(), M.calcAdmin(admin, T), ['pct', 'bonus', 'hr']) ||
+        !same('admin pct=' + pct + ' stores=' + stores + ' [engine]',  lb, E.calcAdmin(admin, T), ['pct', 'bonus', 'hr'])) break;
     admChecked++;
   }
 }

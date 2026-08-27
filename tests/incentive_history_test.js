@@ -29,6 +29,7 @@ function makeSheet(headers) {
   return {
     rows: [headers.slice()],
     getLastRow() { return this.rows.length; },
+    getLastColumn() { return this.rows[0].length; },
     getDataRange() { const s = this; return { getValues: () => s.rows.map(r => r.slice()) }; },
     deleteRow(n) { this.rows.splice(n - 1, 1); },
     getRange(r, c, nr, nc) {
@@ -36,10 +37,16 @@ function makeSheet(headers) {
       if (nr === undefined) { nr = 1; nc = 1; }      // getRange(row, col) — a single cell
       return {
         setValue(v) { s.rows[r - 1][c - 1] = v; return this; },
+        /* Writes at the COLUMN OFFSET, like the real API. The first version replaced whole rows,
+           which meant the header-append migration appeared to wipe the header instead of extending
+           it — the stub was lying in the direction that hides the bug. */
         setValues(vals) {
           vals.forEach((row, i) => {
-            while (s.rows.length < r - 1 + i + 1) s.rows.push(new Array(headers.length).fill(''));
-            s.rows[r - 1 + i] = row.slice();
+            const y = r - 1 + i;
+            while (s.rows.length <= y) s.rows.push([]);
+            const target = s.rows[y];
+            while (target.length < c - 1) target.push('');
+            row.forEach((v, j) => { target[c - 1 + j] = v; });
           });
           return this;
         },
@@ -85,7 +92,7 @@ function load(sheet) {
         return o;
       });
     }
-    ${grab('historyStoreId_')} ${grab('historyPeriods_')}
+    ${grab('historyStoreId_')} ${grab('historySheet_')} ${grab('historyPeriods_')}
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
     ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
     ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('stampEmployeeIds_')}
@@ -272,6 +279,21 @@ const p2 = { admin: null, managers: [], budtenders: [{ name: 'Chris Carney', nam
 M.stampEmployeeIds_(p2);
 ok('a failed registry read reports the name rather than silently blanking it',
    p2.budtenders[0].employee_id === '' && p2.unmatched.length === 1);
+
+/* ── the header row migrates by APPENDING, and only by appending ──
+   sheetOf_ writes headers only when it creates the tab, so a column added to HISTORY_HEADERS later
+   would never reach a sheet that already exists — and readTab_ pairs headers to columns by
+   POSITION, so a short or reordered header row silently re-attributes every figure in the tab.
+   approved_by / approved_at were added exactly this way, to a tab that already held 1,012 rows. */
+sheet = makeSheet(HEADERS.slice(0, HEADERS.length - 2));      // an older, narrower tab
+sheet.rows.push(HEADERS.slice(0, HEADERS.length - 2).map((_, i) => 'v' + i));
+M = load(sheet);
+M.incentiveImport_({ confirm: 'yes' }, body());
+const hdr = sheet.getDataRange().getValues()[0];
+ok('a missing column is appended to an existing tab', hdr.length === HEADERS.length);
+ok('and appended at the END, so existing columns keep their positions',
+   hdr.slice(0, HEADERS.length - 2).join(',') === HEADERS.slice(0, HEADERS.length - 2).join(','));
+ok('the pre-existing row is left where it was', sheet.getDataRange().getValues()[1][0] === 'v0');
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive history: all passed');
 process.exit(fail ? 1 : 0);

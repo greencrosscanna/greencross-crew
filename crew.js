@@ -2387,30 +2387,38 @@
     }
 
     var h = [];
-    h.push('<div class="crew-inc-head"><div>');
-    h.push('<div class="crew-inc-title">Incentive</div>');
-    h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
-           '<span class="crew-inc-badge ' + (isImported ? 'is-imported">as paid' : 'is-live">live') + '</span>');
-    if (isImported) h.push('<span>' + esc(d.why_read_only || '') + '</span>');
-    else if (!d.can_edit) h.push('<span>read-only</span>');
-    h.push('</div></div><div class="crew-inc-spacer"></div>');
-    h.push('<button type="button" class="gx-btn" id="incCsv">Export payroll CSV</button>');
-    h.push('</div>');
-
     var budTotal = buds.reduce(function (a, b) { return a + (budCalc(b).payroll || 0); }, 0);
     var mgrTotal = mgrs.reduce(function (a, m) { return a + (mgrCalc(m).payroll || 0); }, 0);
     var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll }
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (adm.payroll == null ? adm.bonus : adm.payroll) : 0;
+
+    h.push('<div class="crew-inc-head"><div class="crew-inc-headl">');
+    h.push('<div class="crew-inc-title">Incentive</div>');
+    h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
+           '<span class="crew-inc-badge ' + (isImported ? 'is-imported">as paid' : 'is-live">live') + '</span>');
+    if (isImported) h.push('<span>' + esc(d.why_read_only || '') + '</span>');
+    else if (!d.can_edit) h.push('<span>read-only</span>');
+    h.push('</div></div>');
+
+    /* Totals top-right, matching the Leaderboard dashboard this replaces. Each is a PAYROLL sum,
+       not a bonus sum — payroll is what the company pays and the only figure Capstone receives,
+       which is what the last tile's label says out loud.
+       ADMIN IS SHOWN even though Leaderboard's header has no tile for it: there it was $0 and
+       invisible, here it is routinely $300, and three tiles whose visible parts do not add up to
+       the total reads as an arithmetic error on a payroll screen. */
     h.push('<dl class="crew-inc-tot">');
-    h.push('<div><dt>Budtenders</dt><dd>' + esc(m0(budTotal)) + '</dd></div>');
-    h.push('<div><dt>Managers</dt><dd>' + esc(m0(mgrTotal)) + '</dd></div>');
+    h.push('<div><dt>Manager bonuses</dt><dd>' + esc(m0(mgrTotal)) + '</dd></div>');
+    h.push('<div><dt>Budtender bonuses</dt><dd>' + esc(m0(budTotal)) + '</dd></div>');
     h.push('<div><dt>Admin</dt><dd>' + esc(m0(admPay)) + '</dd></div>');
-    /* The one figure the screen exists to produce, and the one that leaves for Capstone — LB gave
-       it its own colour and this had it reading like the three inputs above it. */
-    h.push('<div><dt>Payroll total</dt><dd class="crew-inc-grand">' +
+    h.push('<div><dt>Total → Capstone</dt><dd class="crew-inc-grand">' +
            esc(m0(budTotal + mgrTotal + admPay)) + '</dd></div>');
-    h.push('</dl>');
+    h.push('</dl></div>');
+
+    h.push('<div class="crew-inc-actions">');
+    h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Approve &amp; Print PDF</button>');
+    h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
+    h.push('</div>');
 
     if (d.admin) h.push(incAdminTable(d.admin, adm, isImported));
     h.push(incMgrTable(mgrs, mgrCalc, isImported, editable, T));
@@ -2442,7 +2450,10 @@
              (p.pp_start === (d.pp_start || (d.payPeriod && d.payPeriod.start)) ? ' selected' : '') +
              '>' + esc(lbl) + '</option>';
     }).join('');
-    return '<select id="incPeriod" class="gx-input" aria-label="Pay period">' + opts + '</select>';
+    var cur = d.pp_start || (d.payPeriod && d.payPeriod.start) || '';
+    var end = d.pp_end || (d.payPeriod && d.payPeriod.end) || '';
+    return '<select id="incPeriod" class="gx-input" aria-label="Pay period">' + opts + '</select>' +
+           '<span class="crew-inc-printpp">Pay period ' + esc(cur) + ' → ' + esc(end) + '</span>';
   }
 
   function incAdminTable(a, calc, isImported) {
@@ -2533,6 +2544,8 @@
     if (sel) sel.addEventListener('change', function () { loadIncentive(sel.value); });
     var csv = host.querySelector('#incCsv');
     if (csv) csv.addEventListener('click', function () { incExportCsv(d, isImported); });
+    var pr = host.querySelector('#incPrint');
+    if (pr) pr.addEventListener('click', function () { incApproveAndPrint(d, isImported); });
     if (!editable) return;
     /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
        again on blur, so tabbing away never loses the last keystroke. */
@@ -2605,6 +2618,49 @@
                  v == null ? '' : v.toFixed(2)]);
     });
     return rows;
+  }
+
+  /* APPROVE & PRINT.
+     An already-closed record just prints — it was approved when it was written, and there is
+     nothing left to decide. A live period that has ENDED is approved first: the engine recomputes
+     it from the performance slice and the saved inputs and writes it into history, after which it
+     is a record like the imported ones and can never be recomputed. Then it prints.
+     The confirm is not ceremony. Approving is the one irreversible action on this screen, and the
+     figures it freezes are what people get paid. */
+  async function incApproveAndPrint(d, isImported) {
+    if (isImported) { window.print(); return; }
+    var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
+    if (d.payPeriod && d.payPeriod.current) {
+      toast('This pay period is still open — sales bonuses are not final until it ends. Printing a draft.', true);
+      window.print();
+      return;
+    }
+    var btn = document.getElementById('incPrint');
+    try {
+      var pre = await Engine.jsonp('incentive_approve',
+        { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
+      if (!pre || pre.ok === false) throw new Error((pre && pre.error) || 'could not approve');
+      var msg = 'Approve ' + pp + '?\n\n' + pre.rows + ' people · $' +
+                Math.round(pre.payroll_total).toLocaleString('en-US') + ' to Capstone.\n\n' +
+                'This freezes the period as the record of what was paid. It cannot be edited or ' +
+                'recalculated afterwards.' +
+                (pre.unmatched && pre.unmatched.length
+                   ? '\n\nNot matched to a roster record: ' + pre.unmatched.join(', ') : '');
+      if (!window.confirm(msg)) return;
+      if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
+      var r = await Engine.jsonp('incentive_approve',
+        { token: token(), pp_start: pp, confirm: 'yes' }, { timeoutMs: 45000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'approve failed');
+      toast('Approved — ' + r.written + ' rows frozen for ' + pp);
+      /* Reload before printing: the period is now a record, so it must print as one — badged
+         `as paid`, with no live inputs on the page. */
+      await loadIncentive(pp);
+      setTimeout(function () { window.print(); }, 250);
+    } catch (e) {
+      toast('Could not approve: ' + ((e && e.message) || 'unknown'), true);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Approve & Print PDF'; }
+    }
   }
 
   async function loadIncentive(ppStart) {

@@ -409,6 +409,9 @@ function route_(e) {
       // Is the Crew -> Leaderboard hop alive? Shape only, never figures. Secret, not a session,
       // so it can be checked from a shell instead of by a signed-in user hitting an error.
       case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
+      // Approve a CLOSED period: compute it here and write it into history, after which it is a
+      // record like the imported ones and can never be recomputed.
+      case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
@@ -3044,6 +3047,21 @@ function historyStoreId_(label) {
   } catch (e) { return ''; }
 }
 
+/* sheetOf_ writes headers only when it CREATES the tab, so a column added to HISTORY_HEADERS later
+   would never reach a sheet that already exists — reads would then map by index onto a short row.
+   This appends what is missing, and only ever appends: readTab_ pairs headers to columns by
+   POSITION, so reordering HISTORY_HEADERS would silently re-attribute every figure in the tab. */
+function historySheet_() {
+  var sh = sheetOf_(HISTORY_TAB, HISTORY_HEADERS);
+  var width = Math.max(1, sh.getLastColumn());
+  var have = sh.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h).trim(); });
+  var missing = HISTORY_HEADERS.filter(function (h) { return have.indexOf(h) < 0; });
+  if (missing.length) {
+    sh.getRange(1, have.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
+  }
+  return sh;
+}
+
 /** Which pay periods are already imported. Read once; the import checks against it. */
 function historyPeriods_() {
   var seen = Object.create(null);
@@ -3131,7 +3149,7 @@ function incentiveImport_(p, body) {
   if (dry) { summary.note = 'dry run — nothing written. Re-send with confirm=yes.'; return summary; }
   if (!rows.length) { summary.note = 'nothing new to import'; return summary; }
 
-  var sh = sheetOf_(HISTORY_TAB, HISTORY_HEADERS);
+  var sh = historySheet_();
   if (replaced.length) {
     /* Delete bottom-up: deleting a row shifts every row beneath it, so top-down deletion walks off
        its own indices and removes the wrong rows — on payout history. */
@@ -3177,7 +3195,7 @@ function incentiveRelink_(p) {
   if (!pdfName) return { ok: false, error: 'pdf_name required' };
   var dry = String(p.confirm || '') !== 'yes';
 
-  var sh = sheetOf_(HISTORY_TAB, HISTORY_HEADERS);
+  var sh = historySheet_();
   var last = sh.getLastRow();
   if (last < 2) return { ok: false, error: 'no imported history' };
   var NAME_COL = HISTORY_HEADERS.indexOf('pdf_name') + 1;
@@ -3504,6 +3522,144 @@ function saveIncentiveInput_(p) {
   else          sh.getRange(sh.getLastRow() + 1, 1, 1, INPUTS_HEADERS.length).setValues([line]);
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@');   // pp_start stays TEXT
   return { ok: true, pp_start: pp, employee_id: eid, saved: { att: cur.att, spiff: cur.spiff, hours: cur.hours } };
+}
+
+/* ══ Approving a period — the moment live numbers become a record ════════════════════════════════
+ *
+ * Leaderboard's dashboard has "Approve & Print PDF", and the 27 PDFs in Drive are what it produced.
+ * If Crew replaces it without this, the historical record stops being produced at exactly the moment
+ * Crew becomes the system of record.
+ *
+ * Approving writes the period into crew_incentive_history, which is the same store the imported PDFs
+ * went into and carries the same guarantee: written once, never recomputed. From then on the period
+ * renders `as paid` and cannot be edited. That is what makes Crew self-sufficient — after the first
+ * approval there is nothing left to import.
+ *
+ * THE FIGURES ARE COMPUTED HERE, NOT POSTED FROM THE BROWSER. Everywhere else in this screen the
+ * math runs client-side, because an attendance tick has to re-score instantly and a wrong number on
+ * screen is fixed by unticking it. This is different: it is the permanent record of what somebody
+ * was paid, and a route that writes whatever amount the page hands it is a route where a stale tab,
+ * a half-loaded threshold set, or an edited request decides payroll. So approve re-reads the
+ * performance slice and the inputs and does the arithmetic itself.
+ *
+ * That means a SECOND implementation of the bonus math, which is the thing this project has been
+ * carefully avoiding all along. It is only acceptable because both implementations are driven
+ * against the same frozen Leaderboard oracle by tests/incentive_math_test.js — if the engine and
+ * the browser ever disagree, that test fails before either can pay anybody. Do not edit these
+ * without running it. */
+
+function incCalcBud_(b, T, inputs) {
+  var t = T.budtender, i = inputs[b.employee_id || b.nameKey] || {};
+  var spiff = Number(i.spiff || 0) || 0, att = !!i.att;
+  var low  = (t.lowVolStores || []).indexOf(b.storeSlug) !== -1;
+  var qual = b.txn >= (low ? t.txnQualifyLowVol : t.txnQualify);
+  var aovB = (qual && b.aov >= t.aovTarget) ? t.aovBonus : 0;
+  var disB = (qual && b.discount * 100 <= t.discountMaxPct) ? t.discountBonus : 0;
+  var attB = att ? t.attendanceBonus : 0;
+  var bonus = aovB + disB + attB + spiff;
+  return { qual: qual, aovB: aovB, disB: disB, attB: attB, spiff: spiff,
+           bonus: bonus, payroll: bonus - spiff, hr: bonus / T.hoursPerPeriod };
+}
+
+function incCalcMgr_(mgr, T, inputs, budtenders) {
+  var t = T.manager, i = inputs[mgr.employee_id || mgr.nameKey] || {};
+  var spiff = Number(i.spiff || 0) || 0;
+  var pct = mgr.target > 0 ? mgr.sales / mgr.target * 100 : 0;
+  var sB = 0;
+  for (var a = 0; a < t.salesTiers.length; a++) {
+    if (pct >= t.salesTiers[a].pct) { sB = t.salesTiers[a].bonus; break; }
+  }
+  var goal = T.budtender.discountMaxPct;
+  var tiers = [{ maxPct: goal * 2 / 3, bonus: t.discountTiers[0].bonus },
+               { maxPct: goal,         bonus: t.discountTiers[1].bonus }];
+  var dp = mgr.discount * 100, dB = 0;
+  for (var c = 0; c < tiers.length; c++) { if (dp <= tiers[c].maxPct) { dB = tiers[c].bonus; break; } }
+  var aB = mgr.aov >= t.aovTarget ? t.aovBonus : 0;
+  var tA = (budtenders || []).filter(function (b) {
+    var bi = inputs[b.employee_id || b.nameKey] || {};
+    return b.storeSlug === mgr.storeSlug && !!bi.att;
+  }).length * t.teamAttendancePerHead;
+  var payroll = sB + dB + aB + tA;
+  return { pct: pct, salesB: sB, discB: dB, aovB: aB, teamA: tA, spiff: spiff,
+           payroll: payroll, bonus: payroll + spiff, hr: (payroll + spiff) / T.hoursPerPeriod };
+}
+
+function incCalcAdmin_(admin, T) {
+  var t = T.admin;
+  var pct = admin.target > 0 ? admin.actual / admin.target * 100 : 0;
+  var tier = 0;
+  for (var x = 0; x < t.tiers.length; x++) { if (pct >= t.tiers[x].pct) { tier = t.tiers[x].bonus; break; } }
+  var bonus = Math.min(tier, admin.stores * t.maxPerStore);
+  return { pct: pct, tier: tier, bonus: bonus, hr: bonus / T.hoursPerPeriod };
+}
+
+/**
+ * ?action=incentive_approve&pp_start=YYYY-MM-DD&confirm=yes
+ *
+ * Refuses a period that has not ENDED. Leaderboard's own dashboard says it out loud — "live
+ * mid-cycle, sales bonuses lock at period end" — and freezing a fortnight that is still selling
+ * records a number that was never final.
+ *
+ * Refuses a period already in history, imported or approved, for the reason the whole tab exists.
+ */
+function incentiveApprove_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+
+  var pp = String(p.pp_start || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+  if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+    return { ok: false, error: pp + ' is already a closed record and cannot be approved again' };
+  }
+
+  var live = fetchLivePerf_(pp);
+  if (live.ok === false) return live;
+  stampEmployeeIds_(live);
+  if (live.payPeriod && live.payPeriod.current) {
+    return { ok: false, error: 'this pay period is still open (' + live.payPeriod.start + ' → ' +
+             live.payPeriod.end + '). Sales bonuses are not final until it ends.' };
+  }
+
+  var T = live.thresholds, inputs = inputsFor_(pp), rows = [];
+  var now = new Date().toISOString();
+  var by  = String(auth.user || '');
+  function push(section, r, c, extra) {
+    rows.push([pp, String(live.payPeriod.end || ''), section, r.employee_id || '', r.name || '',
+               r.storeName || '', r.storeSlug || '',
+               extra.txn == null ? '' : extra.txn, extra.sales == null ? '' : extra.sales,
+               extra.disc == null ? '' : extra.disc, extra.aov == null ? '' : extra.aov,
+               c.spiff == null ? '' : c.spiff, c.bonus, c.hr,
+               c.payroll == null ? c.bonus : c.payroll,
+               'approved by ' + by, 'approved', now]);
+  }
+  (live.budtenders || []).forEach(function (b) {
+    push('budtender', b, incCalcBud_(b, T, inputs),
+         { txn: b.txn, sales: b.sales, disc: b.discount * 100, aov: b.aov });
+  });
+  (live.managers || []).forEach(function (m) {
+    push('manager', m, incCalcMgr_(m, T, inputs, live.budtenders || []),
+         { txn: null, sales: m.sales, disc: m.discount * 100, aov: m.aov });
+  });
+  if (live.admin) {
+    var ac = incCalcAdmin_(live.admin, T);
+    push('admin', { employee_id: live.admin.employee_id, name: live.admin.name },
+         { spiff: null, bonus: ac.bonus, hr: ac.hr, payroll: ac.bonus },
+         { txn: null, sales: live.admin.actual, disc: null, aov: null });
+  }
+
+  var total = rows.reduce(function (a, r) { return a + (Number(r[14]) || 0); }, 0);
+  if (String(p.confirm || '') !== 'yes') {
+    return { ok: true, dry_run: true, pp_start: pp, rows: rows.length,
+             payroll_total: Math.round(total * 100) / 100, unmatched: live.unmatched || [],
+             note: 'nothing written — re-send with confirm=yes' };
+  }
+
+  var sh = historySheet_();
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
+  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
+  return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
+           payroll_total: Math.round(total * 100) / 100, unmatched: live.unmatched || [] };
 }
 
 function hrImport_(p, body) {
