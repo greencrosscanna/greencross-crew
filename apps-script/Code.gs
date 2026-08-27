@@ -406,6 +406,9 @@ function route_(e) {
       // The dashboard itself: an imported period, or the live one from Leaderboard's slice.
       case 'incentive':      return json_(getIncentive_(p), p.callback);
       case 'incentive_save': return json_(saveIncentiveInput_(p), p.callback);
+      // Is the Crew -> Leaderboard hop alive? Shape only, never figures. Secret, not a session,
+      // so it can be checked from a shell instead of by a signed-in user hitting an error.
+      case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
@@ -3352,6 +3355,45 @@ function stampEmployeeIds_(live) {
   (live.managers || []).forEach(stamp);
   if (live.admin) stamp(live.admin);
   live.unmatched = unmatched;
+}
+
+/**
+ * ?action=incentive_probe — is the Crew → Leaderboard hop alive? Deploy-secret gated.
+ *
+ * The live half of this dashboard depends on ANOTHER APP'S deployment, a secret held in this
+ * script's properties, and an OAuth scope that Apps Script grants silently or not at all. Each can
+ * break without anything here changing, and the symptom is identical every time: a signed-in user
+ * sees an error on one tab while the engine's own health route says ok. That is a bad way to find
+ * out, and it needs a session to reproduce, so it cannot be checked from a shell.
+ *
+ * This answers it with a secret instead of a session, and returns SHAPE, never figures — row counts
+ * and the period it got, so it can be called from a deploy script or a cron without putting anyone's
+ * pay into a log. Delete it with the incentiveperf route when GX Core takes the slice over.
+ */
+function incentiveProbe_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var hasSecret = !!PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  var t0 = new Date().getTime();
+  var live = fetchLivePerf_(String(p.pp_start || ''));
+  var ms = new Date().getTime() - t0;
+  if (live.ok === false) {
+    return { ok: false, stage: 'fetch', secret_property_set: hasSecret, ms: ms, error: live.error };
+  }
+  stampEmployeeIds_(live);
+  return {
+    ok: true, secret_property_set: hasSecret, ms: ms,
+    source: live.source || 'leaderboard',
+    pay_period: live.payPeriod,
+    managers: (live.managers || []).length,
+    budtenders: (live.budtenders || []).length,
+    admin: !!live.admin,
+    thresholds: !!live.thresholds,
+    /* Names only, and only the ones that FAILED to match — the whole point is to surface people the
+       stamp could not resolve, since an input saved against a blank id goes nowhere. */
+    unmatched: live.unmatched || [],
+    stamped: (live.budtenders || []).filter(function (b) { return b.employee_id; }).length +
+             (live.managers || []).filter(function (m) { return m.employee_id; }).length
+  };
 }
 
 /**
