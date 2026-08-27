@@ -2941,7 +2941,15 @@ function installNightlyScanUnsafe_(p) {
 var NICKNAMES = Object.assign(Object.create(null), { mike: 'michael', zach: 'zachary', chris: 'christopher', sam: 'samuel',
                   jon: 'jonathan', nick: 'nicholas', dan: 'daniel', matt: 'matthew',
                   jen: 'jennifer', tanner: 'taner', sky: 'skyler', skylar: 'skyler',
-                  bob: 'robert', rob: 'robert', tom: 'thomas' });
+                  bob: 'robert', rob: 'robert', tom: 'thomas', tj: 'thomas' });
+/* `tj` was added 2026-08-27 after the incentive-history import found Thomas Peterson holding TWO
+   GX Core records -- `tj_peterson` and `thomas_peterson`, same person, same store. That duplicate
+   is this table's own doing: an import saw "TJ Peterson", samePerson_ could not reach "Thomas"
+   (ratio_('tj','thomas') is 0.25, well under the 0.8 first-name bar), so it created a second
+   identity rather than matching the first. Every join in the suite runs on employee_id, so a
+   person split across two of them has their sales, SPIFF and now their payout history divided
+   between two half-people, and nothing anywhere reports an error. The pair still needs
+   roster_merge; this stops the next one being made. */
 
 function canonFirst_(f) {
   var x = String(f || '').toLowerCase().replace(/[^a-z]/g, '');
