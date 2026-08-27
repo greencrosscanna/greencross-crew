@@ -3285,6 +3285,43 @@ function fetchLivePerf_(ppStart) {
   }
 }
 
+/* Leaderboard identifies people by its own nameKey ('chris_carney'); GX Core — and therefore every
+ * input Crew saves, every joined roster row, and the imported history — uses employee_id
+ * ('christopher_carney'). They are different strings for the same person often enough that treating
+ * them as interchangeable does not fail, it just quietly stops finding things: an attendance tick
+ * saved against employee_id would never be found by a row keyed on nameKey, so the bonus computed
+ * as though nothing had been entered and the payroll came out short. Nothing errors.
+ *
+ * So every live row gets an employee_id stamped on it before it leaves the engine, resolved through
+ * the SAME ladder the rest of Crew uses (exact key, then samePerson_) rather than a second opinion.
+ * A row that cannot be resolved keeps a blank employee_id and is reported in `unmatched` — it will
+ * render, and it simply cannot hold an input until somebody is matched to it. */
+function stampEmployeeIds_(live) {
+  var emps = [];
+  try { emps = GXCore.getEmployees() || []; } catch (e) { emps = []; }
+  var byKey = Object.create(null);
+  emps.forEach(function (e) {
+    byKey[nameToKey_(e.full_name)] = e.employee_id;
+    if (e.employee_id) byKey[String(e.employee_id)] = e.employee_id;
+  });
+  var unmatched = [];
+  function stamp(r) {
+    if (!r) return;
+    var hit = byKey[String(r.nameKey || '')] || byKey[nameToKey_(r.name)] || '';
+    if (!hit) {
+      for (var i = 0; i < emps.length; i++) {
+        if (samePerson_(r.name, emps[i].full_name)) { hit = emps[i].employee_id; break; }
+      }
+    }
+    r.employee_id = hit || '';
+    if (!hit) unmatched.push(r.name);
+  }
+  (live.budtenders || []).forEach(stamp);
+  (live.managers || []).forEach(stamp);
+  if (live.admin) stamp(live.admin);
+  live.unmatched = unmatched;
+}
+
 /**
  * ?action=incentive[&pp_start=YYYY-MM-DD]
  * Admin-gated through GX Core's own permissions (requireCrew_ + canEdit_) — Crew is admin-only and
@@ -3312,6 +3349,7 @@ function getIncentive_(p) {
   var live = fetchLivePerf_(want);
   if (live.ok === false) return live;
   live.source = 'live';
+  stampEmployeeIds_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
   live.can_edit = canEdit_(auth);
   live.periods = periodList_(imported, live.periods);

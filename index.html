@@ -509,6 +509,66 @@
     @media (max-width: 1100px) {
       .crew-ov, .crew-pbody, .crew-phead-in { max-width: none; }
     }
+
+    /* ── Incentive ────────────────────────────────────────────────────────────────
+       Full width, not the roster's rail+pane: this is a whole-company table and the
+       eye reads across a row, so nothing may steal 340px from it. */
+    .crew-inc { flex: 1 1 auto; overflow-y: auto; min-height: 0; background: var(--gx-bg);
+      padding: 18px 22px 60px; }
+    .crew-inc-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;
+      margin-bottom: 16px; }
+    .crew-inc-title { font-size: 18px; font-weight: 700; color: var(--gx-text); }
+    .crew-inc-sub { font-size: 12.5px; color: var(--gx-text-mute); margin-top: 3px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .crew-inc-spacer { flex: 1 1 auto; }
+    /* An imported period is a RECORD, a live one is still moving. The badge is the only thing
+       telling you which, and the read-only-ness of the whole screen follows from it. */
+    .crew-inc-badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+    .crew-inc-badge.is-imported { background: #2a2118; color: #e0a458; border: 1px solid #4a3a24; }
+    .crew-inc-badge.is-live { background: #14251c; color: var(--gx-green); border: 1px solid #24503a; }
+    .crew-inc-tot { display: flex; gap: 22px; flex-wrap: wrap; margin: 0 0 16px; }
+    .crew-inc-tot div { min-width: 96px; }
+    .crew-inc-tot dt { font-size: 11px; color: var(--gx-text-mute); text-transform: uppercase;
+      letter-spacing: .05em; margin: 0 0 2px; }
+    .crew-inc-tot dd { margin: 0; font-size: 19px; font-weight: 700; color: var(--gx-text); }
+    .crew-inc-sec { font-size: 12px; font-weight: 700; color: var(--gx-text-mute);
+      text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 7px; }
+    .crew-inc-wrap { overflow-x: auto; border: 1px solid var(--gx-border); border-radius: 8px; }
+    .crew-inc-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
+    .crew-inc-tbl th { text-align: right; padding: 8px 10px; font-size: 11px; font-weight: 700;
+      color: var(--gx-text-mute); text-transform: uppercase; letter-spacing: .04em;
+      background: var(--crew-rail); border-bottom: 1px solid var(--gx-border);
+      position: sticky; top: 0; z-index: 1; }
+    .crew-inc-tbl th.l, .crew-inc-tbl td.l { text-align: left; }
+    .crew-inc-tbl td { text-align: right; padding: 7px 10px; color: var(--gx-text);
+      border-bottom: 1px solid var(--crew-rule); }
+    .crew-inc-tbl tr:last-child td { border-bottom: 0; }
+    .crew-inc-tbl tbody tr:hover td { background: #101614; }
+    .crew-inc-name { font-weight: 600; }
+    .crew-inc-nostore { color: var(--gx-text-mute); font-style: italic; }
+    /* A met target reads green ON THE NUMBER ITSELF, not as a separate tick column — the question
+       is always "did THIS figure clear its bar", and the answer belongs on the figure. */
+    .crew-inc-hit { color: var(--gx-green); font-weight: 700; }
+    .crew-inc-miss { color: var(--gx-text); }
+    .crew-inc-zero { color: var(--gx-text-mute); }
+    .crew-inc-pay { font-weight: 700; }
+    /* The payroll figure is a sum of four or five separate rules and none of them are visible.
+       The underline is the affordance; the breakdown is in the title attribute. */
+    .crew-inc-pay[title] { text-decoration: underline dotted var(--gx-border-strong);
+      text-underline-offset: 3px; cursor: help; }
+    .crew-inc-spiff { width: 62px; text-align: right; background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border); border-radius: 5px; color: var(--gx-text);
+      padding: 3px 5px; font-size: 12px; font-family: inherit; }
+    .crew-inc-spiff:disabled { background: transparent; border-color: transparent;
+      color: var(--gx-text); padding-right: 0; }
+    .crew-inc-att { width: 15px; height: 15px; accent-color: var(--gx-green); cursor: pointer; }
+    .crew-inc-att:disabled { cursor: default; }
+    .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 10px 0 0;
+      max-width: 760px; line-height: 1.5; }
+    .crew-inc-msg { padding: 30px 4px; color: var(--gx-text-mute); font-size: 13.5px; }
+    .crew-inc-err { color: #f0a6a6; }
+    @media (max-width: 720px) { .crew-inc { padding: 14px 12px 50px; } }
   </style>
 </head>
 <body class="gx-app">
@@ -527,6 +587,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.324"></script>
+  <script src="crew.js?v=1.325"></script>
 </body>
 </html>

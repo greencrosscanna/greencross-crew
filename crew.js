@@ -54,6 +54,7 @@
                     checkbox pair, which could be combined into readings nobody meant. Entering
                     `retired` triggers the same refetch showRetired used to, once. */
                  scope: 'active', fetchedRetired: false,
+                 tab: 'roster',            // 'roster' | 'incentive' — which top-nav tab is showing
                  selected: null,           // employee_id, or null for the overview
                  review: null, reviewCounts: {}, reviewErr: '',
                  eom: undefined,           // undefined = not loaded yet; null = nobody holds it
@@ -513,10 +514,21 @@
     var nav = document.getElementById('navTabs');
     if (!nav) return null;
     nav.innerHTML = '';
-    var b = el('button', 'gx-topnav-tab is-active', 'Roster');
-    b.type = 'button';
-    b.addEventListener('click', function () { state.selected = null; paintSubnav(); paintPane(); });
-    nav.appendChild(b);
+    [['roster', 'Roster'], ['incentive', 'Incentive']].forEach(function (t) {
+      var b = el('button', 'gx-topnav-tab' + (state.tab === t[0] ? ' is-active' : ''), t[1]);
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        if (state.tab === t[0]) {
+          /* Clicking the tab you are already on is the roster's "back to overview" gesture, and
+             it stays that — the attention chip that used to do it was removed on 2026-08-25. */
+          if (t[0] === 'roster') { state.selected = null; paintSubnav(); paintPane(); }
+          return;
+        }
+        state.tab = t[0];
+        navBar(); paintTab();
+      });
+      nav.appendChild(b);
+    });
     return null;
   }
 
@@ -922,7 +934,15 @@
     mount.appendChild(subnav);
     mount.appendChild(body);
 
-    ui = { search: search, seg: seg, pills: pillsSlot, rail: rail, pane: pane };
+    /* Incentive is a whole-company table read across the row, so it gets the full width rather
+       than living in the roster's pane — 340px of people list beside it would push Payroll off
+       the screen on a laptop. Its own slot, shown and hidden by paintTab(). */
+    var incSlot = el('div', 'crew-inc');
+    incSlot.style.display = 'none';
+    body.appendChild(incSlot);
+
+    ui = { search: search, seg: seg, pills: pillsSlot, rail: rail, pane: pane,
+           inc: incSlot, subnav: subnav };
     paintSubnav(); paintRail(); paintPane();
   }
 
@@ -939,6 +959,22 @@
     if (state.avatarOpen) { state.avatarOpen = false; paintPane(); return; }
     state.selected = null; paintRail(); paintPane();
   });
+
+  /* The subnav (search, Active/Gaps/Retired, store pills) filters PEOPLE and means nothing on the
+     incentive tab, so it is hidden rather than left there doing nothing to the table below it. */
+  function paintTab() {
+    if (!ui) return;
+    var onInc = state.tab === 'incentive';
+    ui.subnav.style.display = onInc ? 'none' : '';
+    ui.rail.style.display = onInc ? 'none' : '';
+    ui.pane.style.display = onInc ? 'none' : '';
+    ui.inc.style.display = onInc ? '' : 'none';
+    if (!onInc) return;
+    /* Fetched once per visit rather than on every tab click: the live period asks Leaderboard for
+       a fortnight of transactions, which is slow enough to notice. */
+    if (!inc.data && !inc.loading) loadIncentive(inc.pp || '');
+    else paintIncentive();
+  }
 
   function paintSubnav() { paintScope(); paintPills(); }
 
@@ -2127,6 +2163,10 @@
   function render() {
     initBugReport();          // no-op once wired; here so a late gx-bugreport.js still gets picked up
     renderWorkspace();
+    /* renderWorkspace rebuilds the shell from scratch, so the visible tab has to be re-applied.
+       Without this, any repaint — a roster reload, a resolved review item — drops you back onto
+       the roster mid-edit, which on the incentive tab means losing the period you were reading. */
+    paintTab();
   }
 
   /* One listener for the shared header's menu. gx-topnav.js emits the event; what each action MEANS
@@ -2185,13 +2225,22 @@
      ×100 at each comparison. Keep the conversion at the comparison rather than normalising on
      the way in — the stored thresholds are what Sky edits and reads, and they are percents. */
 
-  function incInput(inputs, nameKey) {
-    var i = inputs && inputs[nameKey];
+  /* ONE identity key through Crew: employee_id, which GX Core owns. Leaderboard's rows arrive
+     keyed on its own nameKey ('chris_carney') and the registry knows him as 'christopher_carney',
+     so keying the inputs on nameKey meant every attendance tick and SPIFF entry Crew saved was
+     invisible to the math that spends it — the row simply computed as if nothing had been entered,
+     and understated the payroll. The engine stamps employee_id onto each live row before it gets
+     here; the nameKey fallback keeps Leaderboard's own rows working, which is what the
+     differential test in tests/incentive_math_test.js drives. */
+  function incKey(r) { return (r && (r.employee_id || r.nameKey)) || ''; }
+
+  function incInput(inputs, key) {
+    var i = inputs && inputs[key];
     return { att: !!(i && i.att), spiff: (i && +i.spiff) || 0 };
   }
 
   function calcBud(b, T, inputs) {
-    var t = T.budtender, i = incInput(inputs, b.nameKey);
+    var t = T.budtender, i = incInput(inputs, incKey(b));
     var low  = (t.lowVolStores || []).indexOf(b.storeSlug) !== -1;
     var qual = b.txn >= (low ? t.txnQualifyLowVol : t.txnQualify);
     var aovB = (qual && b.aov >= t.aovTarget) ? t.aovBonus : 0;
@@ -2208,12 +2257,12 @@
      transaction bar. The manager's job is that the team showed up, not that it sold enough. */
   function incTeamAtt(budtenders, slug, inputs) {
     return (budtenders || []).filter(function (b) {
-      return b.storeSlug === slug && incInput(inputs, b.nameKey).att;
+      return b.storeSlug === slug && incInput(inputs, incKey(b)).att;
     }).length;
   }
 
   function calcMgr(mgr, T, inputs, budtenders) {
-    var t = T.manager, i = incInput(inputs, mgr.nameKey);
+    var t = T.manager, i = incInput(inputs, incKey(mgr));
     var pct = mgr.target > 0 ? mgr.sales / mgr.target * 100 : 0;
 
     var sB = 0;
@@ -2251,6 +2300,305 @@
     return { pct: pct, tier: tier, bonus: bonus, hr: bonus / T.hoursPerPeriod };
   }
 
+  /* ── Incentive view ───────────────────────────────────────────────────────────
+     The bonus dashboard, transplanted from Leaderboard 2026-08-27. Full width, its own tab.
+
+     A period is served from one of two places and the screen says which:
+       imported  a closed period from the payout PDFs — the figures AS PAID. Read-only, and
+                 nothing here recomputes them. The benchmarks behind them have already moved
+                 once (the source sheet measured GROSS discount against ~2.75%, the app measures
+                 DISCRETIONARY discount against 1.5%), so re-scoring one would restate history.
+       live      Leaderboard's performance slice. The math runs HERE, in calcBud/calcMgr/
+                 calcAdmin, so ticking attendance or typing a SPIFF re-scores the row instantly.
+
+     Editing follows the roster's rule — no Edit mode, no Save button. A checkbox commits on
+     change, a SPIFF field on a 600ms pause and on blur, and a toast names what was written. */
+
+  var inc = { data: null, pp: '', loading: false, error: '' };
+  var incTimers = Object.create(null);
+
+  function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
+  function m2(n) { return '$' + (Math.round((n || 0) * 100) / 100).toFixed(2); }
+  function pct1(n) { return (Math.round((n || 0) * 10) / 10).toFixed(1) + '%'; }
+  /* A live row carries `discount` as a DECIMAL (0.0185); an imported one carries discount_pct as a
+     PERCENT (1.85) because that is the column the report printed. Reading one as the other is off
+     by 100x and looks plausible on both ends, so the conversion happens once, here. */
+  function incDiscPct(r) {
+    return r.discount_pct != null ? Number(r.discount_pct) : (Number(r.discount || 0) * 100);
+  }
+  function incName(r) { return r.pdf_name || r.name || ''; }
+
+  function incMoneyCell(v, hit) {
+    if (v == null) return '<td class="crew-inc-zero" title="Not recorded in this report">—</td>';
+    if (!v) return '<td class="crew-inc-zero">—</td>';
+    return '<td class="' + (hit ? 'crew-inc-hit' : '') + '">' + esc(m0(v)) + '</td>';
+  }
+
+  function paintIncentive() {
+    if (!ui || !ui.inc) return;
+    var host = ui.inc;
+    if (inc.loading) { host.innerHTML = '<div class="crew-inc-msg">Loading incentive data…</div>'; return; }
+    if (inc.error) {
+      /* A failed read must never render as an empty period: "no bonuses" and "we could not ask"
+         look identical on a bonus screen, and only one of them is good news. */
+      host.innerHTML = '<div class="crew-inc-msg crew-inc-err">⚠️ ' + esc(inc.error) + '</div>';
+      return;
+    }
+    var d = inc.data;
+    if (!d) { host.innerHTML = '<div class="crew-inc-msg">No incentive data.</div>'; return; }
+
+    var isImported = d.source === 'imported';
+    var editable = !!d.can_edit && !isImported;
+    var T = d.thresholds || null;
+    var buds = d.budtenders || [], mgrs = d.managers || [];
+
+    /* Computed for a live period, read straight off the row for an imported one. Same shape either
+       way so one renderer serves both — the difference is which side produced the number. */
+    function budCalc(b) {
+      if (isImported) return { bonus: b.bonus, payroll: b.payroll, spiff: b.spiff, hr: b.per_hour,
+                               qual: null, aovB: null, disB: null, attB: null };
+      return calcBud(b, T, incInputs());
+    }
+    function mgrCalc(m) {
+      if (isImported) return { bonus: m.bonus, payroll: m.payroll, spiff: m.spiff, hr: m.per_hour,
+                               pct: null, salesB: null, discB: null, aovB: null, teamA: m.team_attendance };
+      return calcMgr(m, T, incInputs(), buds);
+    }
+
+    var h = [];
+    h.push('<div class="crew-inc-head"><div>');
+    h.push('<div class="crew-inc-title">Incentive</div>');
+    h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
+           '<span class="crew-inc-badge ' + (isImported ? 'is-imported">as paid' : 'is-live">live') + '</span>');
+    if (isImported) h.push('<span>' + esc(d.why_read_only || '') + '</span>');
+    else if (!d.can_edit) h.push('<span>read-only</span>');
+    h.push('</div></div><div class="crew-inc-spacer"></div>');
+    h.push('<button type="button" class="gx-btn" id="incCsv">Export payroll CSV</button>');
+    h.push('</div>');
+
+    var budTotal = buds.reduce(function (a, b) { return a + (budCalc(b).payroll || 0); }, 0);
+    var mgrTotal = mgrs.reduce(function (a, m) { return a + (mgrCalc(m).payroll || 0); }, 0);
+    var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll }
+                                    : calcAdmin(d.admin, T)) : null;
+    var admPay = adm ? (adm.payroll == null ? adm.bonus : adm.payroll) : 0;
+    h.push('<dl class="crew-inc-tot">');
+    h.push('<div><dt>Budtenders</dt><dd>' + esc(m0(budTotal)) + '</dd></div>');
+    h.push('<div><dt>Managers</dt><dd>' + esc(m0(mgrTotal)) + '</dd></div>');
+    h.push('<div><dt>Admin</dt><dd>' + esc(m0(admPay)) + '</dd></div>');
+    h.push('<div><dt>Payroll total</dt><dd>' + esc(m0(budTotal + mgrTotal + admPay)) + '</dd></div>');
+    h.push('</dl>');
+
+    if (d.admin) h.push(incAdminTable(d.admin, adm, isImported));
+    h.push(incMgrTable(mgrs, mgrCalc, isImported, editable, T));
+    h.push(incBudTable(buds, budCalc, isImported, editable, T));
+
+    /* SPIFF is vendor money. It is in Bonus and deliberately NOT in Payroll, and the export carries
+       payroll only — the single most misreadable thing on this screen, so it is written down. */
+    h.push('<p class="crew-inc-note"><strong>Bonus</strong> is what the person earned in total. ' +
+           '<strong>Payroll</strong> is the company’s share — it excludes SPIFF, which vendors ' +
+           'fund — and it is the only figure the Capstone export carries. Hover a payroll figure to ' +
+           'see what makes it up.</p>');
+    if (isImported) {
+      h.push('<p class="crew-inc-note">These are the figures from the payout report for this period, ' +
+             'imported once and never recalculated. The discount column in those reports measured ' +
+             '<em>gross</em> discount; the live dashboard measures budtender-controlled ' +
+             '<em>discretionary</em> discount, so the two are not comparable.</p>');
+    }
+    host.innerHTML = h.join('');
+    incWire(host, d, isImported, editable);
+  }
+
+  function incInputs() { return (inc.data && inc.data.inputs) || {}; }
+
+  function incPeriodSelect(d) {
+    var opts = (d.periods || []).map(function (p) {
+      var lbl = p.pp_start + ' → ' + p.pp_end + (p.current ? '  (current)' : '') +
+                (p.source === 'imported' ? '  · as paid' : '');
+      return '<option value="' + esc(p.pp_start) + '"' +
+             (p.pp_start === (d.pp_start || (d.payPeriod && d.payPeriod.start)) ? ' selected' : '') +
+             '>' + esc(lbl) + '</option>';
+    }).join('');
+    return '<select id="incPeriod" class="gx-input" aria-label="Pay period">' + opts + '</select>';
+  }
+
+  function incAdminTable(a, calc, isImported) {
+    var pay = calc.payroll == null ? calc.bonus : calc.payroll;
+    var tip = isImported ? '' : ' title="' + esc(pct1(calc.pct) + ' of target — tier ' + m0(calc.tier) +
+              ', capped at ' + m0((a.stores || 0) * 50)) + '"';
+    return '<div class="crew-inc-sec">Admin</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
+      '<thead><tr><th class="l">Name</th><th>Target</th><th>Actual</th><th>% Goal</th>' +
+      '<th>Bonus</th><th>$/hr</th><th>Payroll</th></tr></thead><tbody><tr>' +
+      '<td class="l crew-inc-name">' + esc(incName(a)) + '</td>' +
+      '<td>' + esc(m0(a.target)) + '</td><td>' + esc(m0(a.actual || a.sales)) + '</td>' +
+      '<td>' + (calc.pct == null ? '—' : esc(pct1(calc.pct))) + '</td>' +
+      '<td>' + esc(m0(calc.bonus)) + '</td>' +
+      '<td class="crew-inc-zero">' + esc(m2(calc.hr == null ? (calc.bonus || 0) / 80 : calc.hr)) + '</td>' +
+      '<td class="crew-inc-pay"' + tip + '>' + esc(m0(pay)) + '</td>' +
+      '</tr></tbody></table></div>';
+  }
+
+  function incMgrTable(mgrs, calcOf, isImported, editable, T) {
+    var rows = mgrs.map(function (m) {
+      var c = calcOf(m);
+      var dp = incDiscPct(m);
+      var goal = T ? T.budtender.discountMaxPct : null;
+      var tip = isImported ? '' : ' title="' + esc(
+        'sales ' + m0(c.salesB) + ' · discount ' + m0(c.discB) + ' · AOV ' + m0(c.aovB) +
+        ' · team attendance ' + m0(c.teamA)) + '"';
+      return '<tr>' +
+        '<td class="l crew-inc-name">' + esc(incName(m)) + '</td>' +
+        '<td class="l">' + esc(m.storeName || m.store_label || '') + '</td>' +
+        '<td>' + esc(m0(m.target)) + '</td><td>' + esc(m0(m.sales)) + '</td>' +
+        '<td' + (c.pct != null && c.pct >= 100 ? ' class="crew-inc-hit"' : '') + '>' +
+          (c.pct == null ? '—' : esc(pct1(c.pct))) + '</td>' +
+        '<td' + (goal != null && dp <= goal ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
+        '<td' + (T && m.aov >= T.manager.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(m.aov)) + '</td>' +
+        incMoneyCell(c.teamA, c.teamA > 0) +
+        '<td>' + incSpiffCell(m, c, editable) + '</td>' +
+        '<td>' + esc(m0(c.bonus)) + '</td>' +
+        '<td class="crew-inc-zero">' + esc(m2(c.hr == null ? 0 : c.hr)) + '</td>' +
+        '<td class="crew-inc-pay"' + tip + '>' + esc(m0(c.payroll)) + '</td></tr>';
+    }).join('');
+    return '<div class="crew-inc-sec">Managers</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
+      '<thead><tr><th class="l">Manager</th><th class="l">Store</th><th>Target</th><th>Sales</th>' +
+      '<th>% Goal</th><th>Discount</th><th>AOV</th><th>Team att.</th><th>SPIFF</th><th>Bonus</th>' +
+      '<th>$/hr</th><th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function incBudTable(buds, calcOf, isImported, editable, T) {
+    var rows = buds.map(function (b) {
+      var c = calcOf(b);
+      var dp = incDiscPct(b);
+      var i = incInputs()[incKey(b)] || {};
+      var tip = isImported ? '' : ' title="' + esc(
+        (c.qual ? 'qualified' : 'did not qualify — ' + (b.txn || 0) + ' transactions') +
+        ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
+      return '<tr>' +
+        '<td class="l crew-inc-name">' + esc(incName(b)) + '</td>' +
+        '<td class="l">' + esc(b.storeName || b.store_label || '') + '</td>' +
+        '<td' + (!isImported && c.qual ? ' class="crew-inc-hit"' : '') + '>' + esc(b.txn || 0) + '</td>' +
+        '<td>' + (b.sales == null ? '<span class="crew-inc-zero">—</span>' : esc(m0(b.sales))) + '</td>' +
+        '<td' + (T && dp <= T.budtender.discountMaxPct ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
+        '<td' + (T && b.aov >= T.budtender.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(b.aov)) + '</td>' +
+        '<td>' + (isImported ? '<span class="crew-inc-zero">—</span>'
+                             : '<input type="checkbox" class="crew-inc-att" data-k="' +
+                               esc(b.employee_id || b.nameKey) + '"' + (i.att ? ' checked' : '') +
+                               (editable ? '' : ' disabled') + ' aria-label="100% attendance">') + '</td>' +
+        '<td>' + incSpiffCell(b, c, editable) + '</td>' +
+        '<td>' + esc(m0(c.bonus)) + '</td>' +
+        '<td class="crew-inc-zero">' + esc(m2(c.hr == null ? 0 : c.hr)) + '</td>' +
+        '<td class="crew-inc-pay"' + tip + '>' +
+          (c.payroll == null ? '<span class="crew-inc-zero" title="No payroll column in this report">—</span>'
+                             : esc(m0(c.payroll))) + '</td></tr>';
+    }).join('');
+    return '<div class="crew-inc-sec">Budtenders</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
+      '<thead><tr><th class="l">Name</th><th class="l">Store</th><th>Txn</th><th>Sales</th>' +
+      '<th>Discount</th><th>AOV</th><th>Att.</th><th>SPIFF</th><th>Bonus</th><th>$/hr</th>' +
+      '<th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function incSpiffCell(r, c, editable) {
+    var key = incKey(r);
+    if (!editable) return '<span class="crew-inc-zero">' + esc(c.spiff ? m0(c.spiff) : '—') + '</span>';
+    return '<input type="number" min="0" step="5" class="crew-inc-spiff" data-k="' + esc(key) +
+           '" value="' + esc(String(c.spiff || 0)) + '" aria-label="SPIFF for ' + esc(incName(r)) + '">';
+  }
+
+  function incWire(host, d, isImported, editable) {
+    var sel = host.querySelector('#incPeriod');
+    if (sel) sel.addEventListener('change', function () { loadIncentive(sel.value); });
+    var csv = host.querySelector('#incCsv');
+    if (csv) csv.addEventListener('click', function () { incExportCsv(d, isImported); });
+    if (!editable) return;
+    /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
+       again on blur, so tabbing away never loses the last keystroke. */
+    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-att'), function (cb) {
+      cb.addEventListener('change', function () { incSave(cb.getAttribute('data-k'), 'att', cb.checked ? '1' : ''); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-spiff'), function (inp) {
+      var k = inp.getAttribute('data-k');
+      function commit() { incSave(k, 'spiff', inp.value === '' ? '' : String(Number(inp.value) || 0)); }
+      inp.addEventListener('input', function () {
+        clearTimeout(incTimers[k]); incTimers[k] = setTimeout(commit, 600);
+      });
+      inp.addEventListener('blur', function () { clearTimeout(incTimers[k]); commit(); });
+    });
+  }
+
+  async function incSave(employeeId, field, value) {
+    if (!inc.data || !employeeId) return;
+    var pp = inc.data.payPeriod ? inc.data.payPeriod.start : inc.data.pp_start;
+    var params = { token: token(), pp_start: pp, employee_id: employeeId };
+    params[field] = value;
+    try {
+      var r = await Engine.jsonp('incentive_save', params, { timeoutMs: 20000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
+      /* Update in place and repaint from the same data, so the bonus recomputes without a
+         round trip — the edit is the point of doing the math client-side. */
+      var cur = incInputs();
+      cur[employeeId] = cur[employeeId] || {};
+      cur[employeeId][field] = field === 'att' ? !!value : (value === '' ? 0 : Number(value));
+      paintIncentive();
+      toast(field === 'att' ? 'Attendance saved' : 'SPIFF saved');
+    } catch (e) {
+      toast('Could not save: ' + ((e && e.message) || 'unknown'), true);
+    }
+  }
+
+  /* Payroll only — SPIFF is vendor-funded and must never reach Capstone. Same four columns the
+     Leaderboard export produced, so the file that lands in payroll does not change shape. */
+  function incExportCsv(d, isImported) {
+    var csv = incCsvRows(d, isImported).map(function (r) {
+      return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
+    }).join('\n');
+    var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
+    var a = document.createElement('a');
+    a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
+    a.download = 'incentive-payroll-' + pp + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+
+  /* Split out from the download so the file that reaches payroll can be asserted in a test rather
+     than eyeballed once. Everything that decides an AMOUNT lives here. */
+  function incCsvRows(d, isImported) {
+    var rows = [['Section', 'Name', 'Store', 'Payroll']];
+    var T = d.thresholds || null, buds = d.budtenders || [];
+    function pay(r, kind) {
+      if (isImported) return r.payroll;
+      return kind === 'bud' ? calcBud(r, T, incInputs()).payroll
+           : kind === 'mgr' ? calcMgr(r, T, incInputs(), buds).payroll
+           : calcAdmin(r, T).bonus;
+    }
+    if (d.admin) rows.push(['Admin', incName(d.admin), 'All', (pay(d.admin, 'adm') || 0).toFixed(2)]);
+    (d.managers || []).forEach(function (m) {
+      rows.push(['Manager', incName(m), m.storeName || m.store_label || '', (pay(m, 'mgr') || 0).toFixed(2)]);
+    });
+    buds.forEach(function (b) {
+      /* A row whose payroll the source never recorded is exported EMPTY, not 0.00 — a zero here
+         tells payroll to pay nothing, which is a different claim from "not recorded". */
+      var v = pay(b, 'bud');
+      rows.push(['Budtender', incName(b), b.storeName || b.store_label || '',
+                 v == null ? '' : v.toFixed(2)]);
+    });
+    return rows;
+  }
+
+  async function loadIncentive(ppStart) {
+    inc.loading = true; inc.error = ''; paintIncentive();
+    try {
+      var params = { token: token() };
+      if (ppStart) params.pp_start = ppStart;
+      var r = await Engine.jsonp('incentive', params, { timeoutMs: 45000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not load');
+      inc.data = r;
+      inc.pp = r.pp_start || (r.payPeriod && r.payPeriod.start) || '';
+    } catch (e) {
+      inc.error = (e && e.message) || 'could not load incentive data';
+      inc.data = null;
+    }
+    inc.loading = false;
+    paintIncentive();
+  }
   // ─── boot ────────────────────────────────────────────────────────────────────
   async function boot(quiet) {
     if (!window.GXClient) { renderStatus('⚠️ gx-client failed to load — cannot reach GX Core.'); return; }
