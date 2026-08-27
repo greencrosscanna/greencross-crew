@@ -403,8 +403,11 @@ function route_(e) {
       // Attach history to a person after a merge or rename. Writes employee_id ONLY — never a figure.
       case 'incentive_relink':  return json_(incentiveRelink_(p), p.callback);
 
+      // The dashboard itself: an imported period, or the live one from Leaderboard's slice.
+      case 'incentive':      return json_(getIncentive_(p), p.callback);
+      case 'incentive_save': return json_(saveIncentiveInput_(p), p.callback);
+
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
-      // case 'incentive':    return json_(getIncentiveData_(p), p.callback);   // bonus calc (ported from Leaderboard)
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
       // case 'export':       return json_(buildCapstoneExport_(p), p.callback);// payroll export (CSV/PDF)
       // case 'snapshot':     return json_(monthlySnapshot_(p), p.callback);    // monthly review snapshot
@@ -3196,7 +3199,9 @@ function incentiveRelink_(p) {
 
 /** Read imported history back: ?action=incentive_history[&pp_start=YYYY-MM-DD]. */
 function incentiveHistory_(p) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  // getIncentive_ calls this after its own requireCrew_ gate, so an internal call skips the
+  // secret check rather than the engine having to hold its own secret to talk to itself.
+  if (!p.__internal && !deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var want = String(p.pp_start || '');
   if (!want) return { ok: true, periods: historyPeriods_() };
   var rows = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
@@ -3215,6 +3220,164 @@ function incentiveHistory_(p) {
   return { ok: true, pp_start: want, pp_end: rows[0].pp_end, format: rows[0].format,
            imported_at: rows[0].imported_at, source: 'imported',
            admin: group('admin')[0] || null, managers: group('manager'), budtenders: group('budtender') };
+}
+
+/* ══ Incentive, live side ════════════════════════════════════════════════════════════════════════
+ *
+ * A pay period is served from one of two places and the answer says which:
+ *
+ *   imported  a closed period from the payout PDFs (2025-08-04 .. 2026-08-16). Figures as paid.
+ *             Nothing is computed and nothing is editable — see the header on crew_incentive_history.
+ *   live      Leaderboard's incentiveperf slice plus Crew's own inputs. The bonus MATH runs in the
+ *             browser (crew.js calcBud/calcMgr/calcAdmin) so an attendance or SPIFF edit re-scores
+ *             immediately, which is the behaviour the Leaderboard dashboard had and staff expect.
+ *
+ * THE SPLIT THAT SURVIVES THE MOVE. Leaderboard stays the PERFORMANCE engine — Dutchie ingest,
+ * aggregateTransactions_, the discretionary-discount classification, and the frozen closed-period
+ * snapshots. GX Crew is the PAYOUT app — the math, the inputs, the thresholds and the Capstone
+ * export. Sky's own sentence: SPIFF sets the goals, LB tracks the performance, Crew reads it.
+ *
+ * The hop to Leaderboard is app-to-app, which the shared brain forbids, and it is TEMPORARY: a
+ * brain note asks core-admin to promote the per-employee slice into GX Core, and SPIFF wants the
+ * same data. When that lands, only fetchLivePerf_ changes. */
+var INPUTS_TAB = 'crew_incentive_inputs';
+var INPUTS_HEADERS = ['pp_start', 'employee_id', 'att', 'spiff', 'hours', 'updated_at', 'updated_by'];
+
+/* `hours` is here BEFORE anything fills it, on purpose. The dashboard's $/hr column divides by a
+ * flat thresholds.hoursPerPeriod (80) for everybody — fine as a uniform yardstick, which is what
+ * Sky confirmed it is, but wrong for anyone who did not work a full fortnight. "connect to
+ * SwipeClock" is already on the build order, and when it lands it fills THIS column: a blank means
+ * "use the flat figure", so $/hr becomes true per-person the day the clock connects, with no
+ * schema migration and no recompute of any period already closed. */
+function inputsFor_(ppStart) {
+  var out = Object.create(null);
+  readTab_(INPUTS_TAB, INPUTS_HEADERS).forEach(function (r) {
+    if (r.pp_start !== ppStart || !r.employee_id) return;
+    out[r.employee_id] = { att: isTruthyFlag_(r.att), spiff: Number(r.spiff || 0) || 0,
+                           hours: r.hours === '' ? null : (Number(r.hours) || null) };
+  });
+  return out;
+}
+
+/* Leaderboard's incentiveperf. A failed read RETURNS AN ERROR rather than an empty period: a
+ * dashboard that renders "no bonuses" because a fetch failed looks exactly like a fortnight in
+ * which nobody earned anything, and this one is about pay. Same rule as the nightly Dutchie scan. */
+function fetchLivePerf_(ppStart) {
+  /* The URL lives in GX Core's kv, not in this file — the same place Leaderboard's own callers
+     read it from, so a redeploy that mints a new /exec is fixed in one place for the whole suite. */
+  var base = '';
+  try { base = String(GXCore.getKv('lbGoals') || ''); } catch (e) { base = ''; }
+  if (!base) return { ok: false, error: 'no Leaderboard engine URL in GX Core kv (key lbGoals)' };
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on this script' };
+  var url = base + '?action=incentiveperf&secret=' + encodeURIComponent(secret) +
+            (ppStart ? '&ppStart=' + encodeURIComponent(ppStart) : '');
+  try {
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'Leaderboard returned HTTP ' + res.getResponseCode() };
+    }
+    var d = JSON.parse(res.getContentText());
+    if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'Leaderboard refused' };
+    return d;
+  } catch (e) {
+    return { ok: false, error: 'could not reach Leaderboard: ' + String((e && e.message) || e) };
+  }
+}
+
+/**
+ * ?action=incentive[&pp_start=YYYY-MM-DD]
+ * Admin-gated through GX Core's own permissions (requireCrew_ + canEdit_) — Crew is admin-only and
+ * Sky gates it from Command Center, so there is deliberately no second allowlist here. Leaderboard
+ * gates its copy on a hardcoded sky/mike username list, a workaround for both being 'director';
+ * that list does not come along.
+ */
+function getIncentive_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  var imported = historyPeriods_();
+  var importedBy = Object.create(null);
+  imported.forEach(function (h) { importedBy[h.pp_start] = h; });
+
+  var want = String(p.pp_start || '');
+  if (want && importedBy[want]) {
+    var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
+    h.periods = periodList_(imported, null);
+    h.can_edit = false;
+    h.why_read_only = 'Imported from the payout report for this period — the figures as paid.';
+    return h;
+  }
+
+  var live = fetchLivePerf_(want);
+  if (live.ok === false) return live;
+  live.source = 'live';
+  live.inputs = inputsFor_(live.payPeriod.start);
+  live.can_edit = canEdit_(auth);
+  live.periods = periodList_(imported, live.periods);
+  return live;
+}
+
+/* One period list across both eras, newest first, each saying where it comes from — so the picker
+   cannot offer a period that neither side can serve. Leaderboard's own list overlaps the imported
+   range (it offers the last 8 regardless), and where they overlap the IMPORT wins: it is what was
+   actually paid, and the live path would re-derive it against today's thresholds. */
+function periodList_(imported, livePeriods) {
+  var seen = Object.create(null), out = [];
+  (livePeriods || []).forEach(function (x) {
+    if (imported.some(function (h) { return h.pp_start === x.start; })) return;
+    seen[x.start] = 1;
+    out.push({ pp_start: x.start, pp_end: x.end, current: !!x.current, source: 'live' });
+  });
+  imported.forEach(function (h) {
+    if (seen[h.pp_start]) return;
+    out.push({ pp_start: h.pp_start, pp_end: h.pp_end, current: false, source: 'imported' });
+  });
+  out.sort(function (a, b) { return a.pp_start < b.pp_start ? 1 : a.pp_start > b.pp_start ? -1 : 0; });
+  return out;
+}
+
+/**
+ * ?action=incentive_save — one field at a time, same as the roster.
+ * pp_start, employee_id, and any of att / spiff / hours. An ABSENT parameter means "leave alone";
+ * an empty one means "clear". Read-merge-write, for the reason stated all over this file: posting a
+ * whole record blanks whatever it omits.
+ *
+ * REFUSES TO WRITE INTO AN IMPORTED PERIOD. Those are closed and paid; an attendance tick against
+ * one would imply a recalculation that is never going to happen, and the row it wrote would sit
+ * there looking authoritative.
+ */
+function saveIncentiveInput_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+
+  var pp  = String(p.pp_start || '').trim();
+  var eid = String(p.employee_id || '').trim();
+  if (!pp || !eid) return { ok: false, error: 'pp_start and employee_id required' };
+  if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+    return { ok: false, error: pp + ' is an imported (closed) period — its figures are what was paid and cannot be edited' };
+  }
+
+  var sh = sheetOf_(INPUTS_TAB, INPUTS_HEADERS);
+  var rows = readTab_(INPUTS_TAB, INPUTS_HEADERS);
+  var idx = -1;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].pp_start === pp && rows[i].employee_id === eid) { idx = i; break; }
+  }
+  var cur = idx >= 0 ? rows[idx] : { pp_start: pp, employee_id: eid, att: '', spiff: '', hours: '' };
+  ['att', 'spiff', 'hours'].forEach(function (f) {
+    if (p[f] === undefined) return;                       // absent = leave alone
+    cur[f] = String(p[f]);                                // empty = clear
+  });
+  cur.updated_at = new Date().toISOString();
+  cur.updated_by = auth.user || '';
+
+  var line = INPUTS_HEADERS.map(function (h) { return cur[h] == null ? '' : cur[h]; });
+  if (idx >= 0) sh.getRange(idx + 2, 1, 1, INPUTS_HEADERS.length).setValues([line]);
+  else          sh.getRange(sh.getLastRow() + 1, 1, 1, INPUTS_HEADERS.length).setValues([line]);
+  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@');   // pp_start stays TEXT
+  return { ok: true, pp_start: pp, employee_id: eid, saved: { att: cur.att, spiff: cur.spiff, hours: cur.hours } };
 }
 
 function hrImport_(p, body) {
