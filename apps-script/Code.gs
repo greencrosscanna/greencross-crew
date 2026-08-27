@@ -3273,8 +3273,22 @@ function fetchLivePerf_(ppStart) {
   var base = '';
   try { base = String(GXCore.getKv('lbGoals') || ''); } catch (e) { base = ''; }
   if (!base) return { ok: false, error: 'no Leaderboard engine URL in GX Core kv (key lbGoals)' };
+  /* INBOUND auth (deploySecretOk_) does not need this property — it falls back to a cached digest
+     of a secret somebody already presented, which is why every other route works without it. This
+     is the one OUTBOUND call in the engine, and it needs the secret's actual VALUE to present to
+     Leaderboard, which only the script property can hold. So the engine can look perfectly healthy
+     and still fail here, and the old message ("not set on this script") did not say where to set
+     it or why only this one route cared. */
   var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
-  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on this script' };
+  if (!secret) {
+    return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script, so Crew cannot ' +
+      'authenticate to Leaderboard for live performance data. Imported (closed) periods still ' +
+      'work — they need nothing from Leaderboard. To fix: open the Crew Apps Script project → ' +
+      'Project Settings → Script Properties → add GX_DEPLOY_SECRET with the value in ' +
+      '.gx_deploy_secret. https://script.google.com/home/projects/' +
+      '109qNE_Gjz91xK4cTBFCquQo2OKTHenfA2VWIAXnEZlkr7UHF1tPIw9KP/settings',
+      needs: 'GX_DEPLOY_SECRET script property' };
+  }
   var url = base + '?action=incentiveperf&secret=' + encodeURIComponent(secret) +
             (ppStart ? '&ppStart=' + encodeURIComponent(ppStart) : '');
   try {
