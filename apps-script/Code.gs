@@ -396,6 +396,11 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(permitCoverage_(), p.callback);
 
+      // Incentive history: imported once from the payout PDFs, then read-only. POST for the
+      // import (a year of rows will not fit in a query string); both are deploy-secret.
+      case 'incentive_import':  return json_(incentiveImport_(p, body), p.callback);
+      case 'incentive_history': return json_(incentiveHistory_(p), p.callback);
+
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'incentive':    return json_(getIncentiveData_(p), p.callback);   // bonus calc (ported from Leaderboard)
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
@@ -2982,6 +2987,176 @@ function samePerson_(fullA, fullB) {
                 || ratio_(af, bf) >= 0.8;
   if (!firstOk) return false;
   return al === bl || al.indexOf(bl) >= 0 || bl.indexOf(al) >= 0 || ratio_(al, bl) >= 0.85;
+}
+
+/* ══ Incentive history — imported once, then never changed ═══════════════════════════════════════
+ *
+ * 27 pay periods of payout reports (2025-08-04 .. 2026-08-16) exported from the "Green Cross
+ * Incentive Program" spreadsheet, which is what Leaderboard's dashboard was ported from. Sky,
+ * 2026-08-26: "the SPIFFs change, and in the future the other benchmarks can change. historical
+ * needs to be imported but not changed."
+ *
+ * That sentence is the whole design. A closed period is a RECORD OF WHAT WAS PAID, not an input to
+ * a formula, so nothing here recomputes anything. It matters because the benchmarks have already
+ * moved once and will again: the spreadsheet measured GROSS discount against a ~2.75% bar, the app
+ * measures budtender-controlled DISCRETIONARY discount against 1.5%, and re-scoring a 2025 period
+ * with 2026 thresholds would quietly restate what people took home. Leaderboard has this bug today
+ * in miniature — its performance figures freeze but its thresholds do not, so editing the discount
+ * goal re-scores every period already paid.
+ *
+ * WHAT AN IMPORTED ROW IS ALLOWED TO CARRY. Only what the document actually said. The oldest report
+ * has no PAYROLL column, so payroll is EMPTY for that period rather than derived — the company /
+ * vendor-funded split simply was not recorded, and a plausible guess is indistinguishable from a
+ * fact once it is in a sheet.
+ *
+ * A PERSON WHO HAS LEFT STILL HAS HISTORY. employee_id is blank for the three people in these
+ * reports who predate the roster, and pdf_name then carries the only record of who was paid. Same
+ * arrangement as the EoM reign log, and for the same reason: a name that can no longer be looked
+ * up is not a reason to drop the row. */
+var HISTORY_TAB = 'crew_incentive_history';
+var HISTORY_HEADERS = ['pp_start', 'pp_end', 'section', 'employee_id', 'pdf_name', 'store_label',
+                       'store_id', 'txn', 'sales', 'discount_pct', 'aov', 'spiff', 'bonus',
+                       'per_hour', 'payroll', 'source_file', 'format', 'imported_at'];
+
+/* Store labels in the reports are a year old and several no longer exist under those names —
+ * "Hillsboro" is Baseline now, "Portland Road" is portland-rd. GXCore.resolveStore() already knows
+ * the aliases and the Rd/Road fold (v201+), so this asks it rather than carrying a local table that
+ * would diverge the first time a store is renamed. CLAUDE.md: never hardcode stores.
+ * An unresolvable label is left blank and REPORTED, never guessed. */
+function historyStoreId_(label) {
+  if (!label) return '';
+  try {
+    var row = GXCore.resolveStore(String(label));
+    return (row && (row.store_id || row.id)) || '';
+  } catch (e) { return ''; }
+}
+
+/** Which pay periods are already imported. Read once; the import checks against it. */
+function historyPeriods_() {
+  var seen = Object.create(null);
+  readTab_(HISTORY_TAB, HISTORY_HEADERS).forEach(function (r) {
+    if (!r.pp_start) return;
+    var e = seen[r.pp_start] || (seen[r.pp_start] = { pp_start: r.pp_start, pp_end: r.pp_end,
+                                                      rows: 0, bonus: 0, imported_at: r.imported_at,
+                                                      format: r.format });
+    e.rows++;
+    e.bonus += Number(r.bonus || 0) || 0;
+  });
+  return Object.keys(seen).sort().map(function (k) {
+    seen[k].bonus = Math.round(seen[k].bonus * 100) / 100;
+    return seen[k];
+  });
+}
+
+/**
+ * Import parsed payout periods. Deploy-secret only, POST — the payload is a year of rows and does
+ * not fit in a query string.
+ *
+ * body: { periods: [ { pp_start, pp_end, format, admin, managers[], budtenders[] } ],
+ *         names:   { "<pdf name>": "<employee_id>" } }   // from tools/match_incentive_names.py
+ *
+ * REFUSES TO TOUCH A PERIOD IT HAS ALREADY IMPORTED. Not a convenience — it is the guarantee. A
+ * re-run with a re-parsed file, or a second operator running the same command, must not be able to
+ * restate a paid figure. The only way past it is mode=replace WITH confirm=yes, which exists for
+ * one case: a parse was wrong and the row is worse than nothing. That combination is deliberately
+ * awkward to type by accident and says what it deleted.
+ *
+ * Dry by default, like hr_import — confirm=yes writes.
+ */
+function incentiveImport_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var periods = (body && body.periods) || [];
+  if (!periods.length) return { ok: false, error: 'no periods in payload' };
+  var names = (body && body.names) || {};
+  var dry = String(p.confirm || '') !== 'yes';
+  var replace = String(p.mode || '') === 'replace';
+
+  var already = Object.create(null);
+  historyPeriods_().forEach(function (h) { already[h.pp_start] = h; });
+
+  var rows = [], skipped = [], replaced = [], unresolvedNames = {}, unresolvedStores = {};
+  var now = new Date().toISOString();
+
+  periods.forEach(function (per) {
+    var start = String(per.pp_start || '');
+    if (!start) return;
+    if (already[start]) {
+      if (!replace) { skipped.push(start); return; }        // the default, and the point
+      replaced.push(start);
+    }
+    var fmt = String(per.format || '');
+    function add(section, r) {
+      if (!r || !r.name) return;
+      var pdfName = String(r.name).trim();
+      var empId = names[pdfName] || '';
+      if (!empId) unresolvedNames[pdfName] = (unresolvedNames[pdfName] || 0) + 1;
+      var label = String(r.store_label || '');
+      var storeId = historyStoreId_(label);
+      if (label && !storeId) unresolvedStores[label] = (unresolvedStores[label] || 0) + 1;
+      /* Dates are TEXT and every figure is written as a NUMBER except the ones the document did
+         not state, which stay EMPTY — '' and 0 are different claims about a pay period, and only
+         one of them is true for the report with no payroll column. */
+      rows.push([start, String(per.pp_end || ''), section, empId, pdfName, label, storeId,
+                 r.txn == null ? '' : r.txn, r.sales == null ? '' : r.sales,
+                 r.discount_pct == null ? '' : r.discount_pct, r.aov == null ? '' : r.aov,
+                 r.spiff == null ? '' : r.spiff, r.bonus == null ? '' : r.bonus,
+                 r.per_hour == null ? '' : r.per_hour, r.payroll == null ? '' : r.payroll,
+                 String(per.file || ''), fmt, now]);
+    }
+    (per.budtenders || []).forEach(function (r) { add('budtender', r); });
+    (per.managers || []).forEach(function (r) { add('manager', r); });
+    if (per.admin) add('admin', per.admin);
+  });
+
+  var summary = {
+    ok: true, dry_run: dry, periods_in_payload: periods.length,
+    periods_to_write: periods.length - skipped.length,
+    rows: rows.length, skipped_already_imported: skipped, replaced: replaced,
+    unresolved_names: unresolvedNames, unresolved_stores: unresolvedStores,
+    bonus_total: Math.round(rows.reduce(function (a, r) { return a + (Number(r[12]) || 0); }, 0) * 100) / 100
+  };
+  if (dry) { summary.note = 'dry run — nothing written. Re-send with confirm=yes.'; return summary; }
+  if (!rows.length) { summary.note = 'nothing new to import'; return summary; }
+
+  var sh = sheetOf_(HISTORY_TAB, HISTORY_HEADERS);
+  if (replaced.length) {
+    /* Delete bottom-up: deleting a row shifts every row beneath it, so top-down deletion walks off
+       its own indices and removes the wrong rows — on payout history. */
+    var all = sh.getDataRange().getValues();
+    for (var i = all.length - 1; i >= 1; i--) {
+      if (replaced.indexOf(String(all[i][0])) >= 0) sh.deleteRow(i + 1);
+    }
+  }
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
+  /* employee_number-style leading zeros are not in play here, but pp_start/pp_end are DATES AS TEXT
+     and Sheets will happily coerce them into Date objects on the next edit, shifting them a day on
+     a timezone mismatch. Pin the two date columns to plain text. */
+  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');
+  summary.written = rows.length;
+  return summary;
+}
+
+/** Read imported history back: ?action=incentive_history[&pp_start=YYYY-MM-DD]. */
+function incentiveHistory_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var want = String(p.pp_start || '');
+  if (!want) return { ok: true, periods: historyPeriods_() };
+  var rows = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
+  if (!rows.length) return { ok: false, error: 'no imported history for ' + want };
+  function group(section) {
+    return rows.filter(function (r) { return r.section === section; }).map(function (r) {
+      var o = {};
+      HISTORY_HEADERS.forEach(function (h) {
+        o[h] = (h === 'txn' || h === 'sales' || h === 'discount_pct' || h === 'aov' ||
+                h === 'spiff' || h === 'bonus' || h === 'per_hour' || h === 'payroll')
+               ? (r[h] === '' ? null : Number(r[h])) : r[h];
+      });
+      return o;
+    });
+  }
+  return { ok: true, pp_start: want, pp_end: rows[0].pp_end, format: rows[0].format,
+           imported_at: rows[0].imported_at, source: 'imported',
+           admin: group('admin')[0] || null, managers: group('manager'), budtenders: group('budtender') };
 }
 
 function hrImport_(p, body) {
