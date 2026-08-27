@@ -552,7 +552,16 @@
     .crew-inc-hit { color: var(--gx-green); font-weight: 700; }
     .crew-inc-miss { color: var(--gx-text); }
     .crew-inc-zero { color: var(--gx-text-mute); }
-    .crew-inc-pay { font-weight: 700; }
+    /* PAYROLL is the money the company actually pays and the only column the Capstone export
+       carries, so it is the one that gets the colour — the same green LB used. Bonus sits beside
+       it in plain white precisely so the difference between them (SPIFF, which vendors fund) is
+       visible at a glance rather than needing the footnote. */
+    .crew-inc-pay { font-weight: 700; color: var(--gx-green); }
+    .crew-inc-pay .crew-inc-zero { color: var(--gx-text-mute); font-weight: 400; }
+    .crew-inc-grand { color: var(--gx-green); }
+    /* Store colour from the shared registry, so Century is the same blue here as on the kiosk. */
+    .crew-inc-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      margin-right: 7px; vertical-align: middle; flex: none; }
     /* The payroll figure is a sum of four or five separate rules and none of them are visible.
        The underline is the affordance; the breakdown is in the title attribute. */
     .crew-inc-pay[title] { text-decoration: underline dotted var(--gx-border-strong);
@@ -587,6 +596,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.325"></script>
+  <script src="crew.js?v=1.326"></script>
 </body>
 </html>

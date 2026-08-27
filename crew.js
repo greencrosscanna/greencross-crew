@@ -2328,10 +2328,31 @@
   }
   function incName(r) { return r.pdf_name || r.name || ''; }
 
+  /* ZERO IS NOT A NUMBER WORTH READING. A column of "$0 / $0.00 / $0" is noise the eye has to
+     wade through to find the four people who actually earned something, and on the imported
+     periods that is most of the table. A muted em-dash says "nothing here" and disappears, which
+     is what LB's dashboard did and what this lost in the port. `null` is different again — the
+     source never recorded it — and says so on hover. */
   function incMoneyCell(v, hit) {
     if (v == null) return '<td class="crew-inc-zero" title="Not recorded in this report">—</td>';
     if (!v) return '<td class="crew-inc-zero">—</td>';
     return '<td class="' + (hit ? 'crew-inc-hit' : '') + '">' + esc(m0(v)) + '</td>';
+  }
+  function incDash(v, fmt) {
+    if (v == null) return '<span class="crew-inc-zero" title="Not recorded in this report">—</span>';
+    if (!v) return '<span class="crew-inc-zero">—</span>';
+    return esc((fmt || m0)(v));
+  }
+  /* The store's own colour, from the same registry every app in the suite reads, so Century is the
+     same blue here as on the kiosk. Imported rows print the store label the REPORT used ("Hillsboro"
+     for what is now Baseline) but colour the dot by the resolved store_id — so a year of history
+     groups by eye against today's stores even though the names moved. */
+  function incDot(r) {
+    var id = r.store_id || r.storeSlug || '';
+    if (!id) return '';
+    var c = storeColor(id);
+    return '<span class="crew-inc-dot" style="background:' +
+           (c ? esc(c) : 'var(--store-' + esc(id) + ', var(--gx-text-mute))') + '"></span>';
   }
 
   function paintIncentive() {
@@ -2385,7 +2406,10 @@
     h.push('<div><dt>Budtenders</dt><dd>' + esc(m0(budTotal)) + '</dd></div>');
     h.push('<div><dt>Managers</dt><dd>' + esc(m0(mgrTotal)) + '</dd></div>');
     h.push('<div><dt>Admin</dt><dd>' + esc(m0(admPay)) + '</dd></div>');
-    h.push('<div><dt>Payroll total</dt><dd>' + esc(m0(budTotal + mgrTotal + admPay)) + '</dd></div>');
+    /* The one figure the screen exists to produce, and the one that leaves for Capstone — LB gave
+       it its own colour and this had it reading like the three inputs above it. */
+    h.push('<div><dt>Payroll total</dt><dd class="crew-inc-grand">' +
+           esc(m0(budTotal + mgrTotal + admPay)) + '</dd></div>');
     h.push('</dl>');
 
     if (d.admin) h.push(incAdminTable(d.admin, adm, isImported));
@@ -2429,11 +2453,11 @@
       '<thead><tr><th class="l">Name</th><th>Target</th><th>Actual</th><th>% Goal</th>' +
       '<th>Bonus</th><th>$/hr</th><th>Payroll</th></tr></thead><tbody><tr>' +
       '<td class="l crew-inc-name">' + esc(incName(a)) + '</td>' +
-      '<td>' + esc(m0(a.target)) + '</td><td>' + esc(m0(a.actual || a.sales)) + '</td>' +
-      '<td>' + (calc.pct == null ? '—' : esc(pct1(calc.pct))) + '</td>' +
-      '<td>' + esc(m0(calc.bonus)) + '</td>' +
-      '<td class="crew-inc-zero">' + esc(m2(calc.hr == null ? (calc.bonus || 0) / 80 : calc.hr)) + '</td>' +
-      '<td class="crew-inc-pay"' + tip + '>' + esc(m0(pay)) + '</td>' +
+      '<td>' + incDash(a.target) + '</td><td>' + incDash(a.actual || a.sales) + '</td>' +
+      '<td>' + (calc.pct == null ? '<span class="crew-inc-zero">—</span>' : esc(pct1(calc.pct))) + '</td>' +
+      '<td>' + incDash(calc.bonus) + '</td>' +
+      '<td class="crew-inc-zero">' + incDash(calc.hr == null ? (calc.bonus || 0) / 80 : calc.hr, m2) + '</td>' +
+      '<td class="crew-inc-pay"' + tip + '>' + incDash(pay) + '</td>' +
       '</tr></tbody></table></div>';
   }
 
@@ -2447,17 +2471,17 @@
         ' · team attendance ' + m0(c.teamA)) + '"';
       return '<tr>' +
         '<td class="l crew-inc-name">' + esc(incName(m)) + '</td>' +
-        '<td class="l">' + esc(m.storeName || m.store_label || '') + '</td>' +
-        '<td>' + esc(m0(m.target)) + '</td><td>' + esc(m0(m.sales)) + '</td>' +
+        '<td class="l">' + incDot(m) + esc(m.storeName || m.store_label || '') + '</td>' +
+        '<td>' + incDash(m.target) + '</td><td>' + incDash(m.sales) + '</td>' +
         '<td' + (c.pct != null && c.pct >= 100 ? ' class="crew-inc-hit"' : '') + '>' +
           (c.pct == null ? '—' : esc(pct1(c.pct))) + '</td>' +
         '<td' + (goal != null && dp <= goal ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
         '<td' + (T && m.aov >= T.manager.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(m.aov)) + '</td>' +
-        incMoneyCell(c.teamA, c.teamA > 0) +
+        incMoneyCell(c.teamA, false) +
         '<td>' + incSpiffCell(m, c, editable) + '</td>' +
-        '<td>' + esc(m0(c.bonus)) + '</td>' +
-        '<td class="crew-inc-zero">' + esc(m2(c.hr == null ? 0 : c.hr)) + '</td>' +
-        '<td class="crew-inc-pay"' + tip + '>' + esc(m0(c.payroll)) + '</td></tr>';
+        '<td>' + incDash(c.bonus) + '</td>' +
+        '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
+        '<td class="crew-inc-pay"' + tip + '>' + incDash(c.payroll) + '</td></tr>';
     }).join('');
     return '<div class="crew-inc-sec">Managers</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
       '<thead><tr><th class="l">Manager</th><th class="l">Store</th><th>Target</th><th>Sales</th>' +
@@ -2475,9 +2499,9 @@
         ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
       return '<tr>' +
         '<td class="l crew-inc-name">' + esc(incName(b)) + '</td>' +
-        '<td class="l">' + esc(b.storeName || b.store_label || '') + '</td>' +
+        '<td class="l">' + incDot(b) + esc(b.storeName || b.store_label || '') + '</td>' +
         '<td' + (!isImported && c.qual ? ' class="crew-inc-hit"' : '') + '>' + esc(b.txn || 0) + '</td>' +
-        '<td>' + (b.sales == null ? '<span class="crew-inc-zero">—</span>' : esc(m0(b.sales))) + '</td>' +
+        '<td>' + incDash(b.sales) + '</td>' +
         '<td' + (T && dp <= T.budtender.discountMaxPct ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
         '<td' + (T && b.aov >= T.budtender.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(b.aov)) + '</td>' +
         '<td>' + (isImported ? '<span class="crew-inc-zero">—</span>'
@@ -2485,11 +2509,11 @@
                                esc(b.employee_id || b.nameKey) + '"' + (i.att ? ' checked' : '') +
                                (editable ? '' : ' disabled') + ' aria-label="100% attendance">') + '</td>' +
         '<td>' + incSpiffCell(b, c, editable) + '</td>' +
-        '<td>' + esc(m0(c.bonus)) + '</td>' +
-        '<td class="crew-inc-zero">' + esc(m2(c.hr == null ? 0 : c.hr)) + '</td>' +
+        '<td>' + incDash(c.bonus) + '</td>' +
+        '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
         '<td class="crew-inc-pay"' + tip + '>' +
           (c.payroll == null ? '<span class="crew-inc-zero" title="No payroll column in this report">—</span>'
-                             : esc(m0(c.payroll))) + '</td></tr>';
+                             : incDash(c.payroll)) + '</td></tr>';
     }).join('');
     return '<div class="crew-inc-sec">Budtenders</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
       '<thead><tr><th class="l">Name</th><th class="l">Store</th><th>Txn</th><th>Sales</th>' +

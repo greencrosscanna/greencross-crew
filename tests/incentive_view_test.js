@@ -160,5 +160,42 @@ ok('a departed person with no employee_id still renders',
      payroll: 40, spiff: 0, per_hour: 0.5 }], b => ({ bonus: b.bonus, payroll: b.payroll,
      spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T).includes('Finnick Winchester'));
 
+/* ── colour and zero-suppression carry meaning, so they are pinned ──
+   Sky, comparing this against the Leaderboard dashboard it replaces: "we aren't using color to our
+   benefit in the new version." Three specific things had been lost in the port, and each is a
+   readability regression rather than a wrong number — which is exactly the kind that survives a
+   test suite unless someone asserts it. */
+const zeroRow = { employee_id: 'z0', pdf_name: 'Zero Person', store_label: 'Bend', store_id: 'bend',
+                  txn: 100, sales: 3000, discount_pct: 5, aov: 20,
+                  bonus: 0, payroll: 0, spiff: 0, per_hour: 0 };
+const zeroHtml = M.incBudTable([zeroRow], b => ({ bonus: b.bonus, payroll: b.payroll,
+  spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
+
+/* A column of "$0 / $0.00 / $0" is noise the eye has to wade through to find the few people who
+   actually earned something — and on an imported period that is most of the table. */
+ok('a zero bonus renders as a muted dash, not $0', !/>\$0</.test(zeroHtml));
+ok('a zero $/hr renders as a dash, not $0.00', !/\$0\.00/.test(zeroHtml));
+ok('zeros are muted rather than shouted', (zeroHtml.match(/crew-inc-zero/g) || []).length >= 3);
+
+/* PAYROLL is what the company pays and the only column Capstone receives, so it is the figure that
+   gets the colour. Bonus stays plain white beside it so the gap between them — SPIFF, which vendors
+   fund — is visible without reading the footnote. */
+const paidRow = Object.assign({}, zeroRow, { bonus: 40, payroll: 15, spiff: 25, per_hour: 0.5 });
+const paidHtml = M.incBudTable([paidRow], b => ({ bonus: b.bonus, payroll: b.payroll,
+  spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
+ok('a non-zero payroll is in the payroll class that colours it', /crew-inc-pay[^>]*>\$15/.test(paidHtml));
+ok('bonus is NOT given the payroll colour', !/crew-inc-pay[^>]*>\$40/.test(paidHtml));
+
+/* The store dot groups a 32-row table by eye. Imported rows print the label the REPORT used
+   ("Hillsboro" for what is now Baseline) but colour by the resolved store_id, so a year of history
+   still groups against today's stores. */
+ok('a store dot is rendered', paidHtml.includes('crew-inc-dot'));
+ok('the dot is coloured by the resolved store_id, not the historical label',
+   /crew-inc-dot[^>]*store-bend|crew-inc-dot[^>]*background:/.test(paidHtml));
+const oldLabel = M.incBudTable([Object.assign({}, paidRow, { store_label: 'Hillsboro', store_id: 'hillsboro' })],
+  b => ({ bonus: b.bonus, payroll: b.payroll, spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
+ok('the historical store LABEL is still what the row prints',
+   oldLabel.includes('Hillsboro') && /store-hillsboro|background:/.test(oldLabel));
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);
