@@ -69,15 +69,30 @@ ok('version "' + version + '" matches the suite scheme MAJOR.BBB', EXPECTED.test
    the pipeline in as a literal while its own comment argued against paraphrasing it — and a copy is
    a paraphrase the moment deploy.sh changes, which it since has (it grew a format gate). Lifting the
    real line means this test cannot quietly start agreeing with itself instead of with what ships. */
+/* RE-ANCHORED 2026-08-26. This looked for a line beginning `_ver=`, which is how THIS repo's old
+   private deploy.sh spelled it. Crew has since run ./gx-sync.sh and now carries gx-theme's shared
+   deploy.sh, where extraction lives inside _extract_version() and reads a document STRING ($_src)
+   rather than catting a file — because the shared script reads `git show HEAD:index.html`, not the
+   working tree (a mid-edit tree published a release that was never shipped on 2026-08-23).
+
+   The old anchor did not match any more, so this test threw on load and blocked the push. That is
+   the LOAD FAILED behaviour working as intended — it refused to pass while it could no longer see
+   what it was checking, rather than quietly asserting nothing. Still lifted from deploy.sh rather
+   than copied: a test that reimplements the extractor cannot catch the extractor changing, which is
+   the whole point of assertion 2. */
 const EXTRACT = (function () {
   const sh = fs.readFileSync(ROOT + '/deploy.sh', 'utf8');
-  const line = sh.split('\n').find(l => l.trim().startsWith('_ver=') && l.includes('js\\?v='));
-  if (!line) throw new Error('could not find the ?v= extraction line in deploy.sh');
-  return line.trim().replace(/^_ver="\$\(/, '').replace(/\)"$/, '');
+  const line = sh.split('\n').find(l => l.trim().startsWith('_v="$(printf') && l.includes('js\\?v='));
+  if (!line) throw new Error('could not find the ?v= extraction line in deploy.sh — re-anchor this test, do not delete it');
+  return '_src="$(cat index.html)"; ' + line.trim().replace(/^_v="\$\(/, '').replace(/\)"$/, '');
 })();
 let extracted = '';
 try { extracted = execSync(EXTRACT, { cwd: ROOT, shell: '/bin/sh' }).toString().trim(); }
 catch (e) { extracted = '(extraction failed: ' + e.message + ')'; }
+// No 'v' is prepended here on purpose: the line lifted above is only the inner pipeline, which
+// yields the bare number. _extract_version() adds the 'v' on its NEXT line. Adding one here would
+// make this compare 'v1.322' against index.html's '1.322' and fail for a reason that is this test's
+// own doing — which it did, once, on the way in.
 
 ok('deploy.sh would record exactly "' + version + '"', extracted === version,
    'the file says "' + version + '" but the extractor returns "' + extracted + '" — ' +
