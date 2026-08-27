@@ -587,6 +587,10 @@
           searchActive: state.q ? 'yes' : ''
         };
       },
+      // Screenshot upload. Separate from `submit` because the image cannot ride the report payload
+      // — several apps in the suite submit through a GET query string, which a ~273KB base64 would
+      // not survive. Still no second auth path: the shared uploader is handed THIS app's token.
+      uploadShot: GXBugReport.gxCoreUploader(GXCORE_URL, token),
       submit: function (payload) {
         // Crew's own authenticated path, which is the point of `submit` being a function: the shared
         // script never handles a token, so there is no second auth path to keep correct.
