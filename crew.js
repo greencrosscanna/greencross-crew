@@ -2402,8 +2402,7 @@
     h.push('</div></div>');
 
     /* Totals top-right, matching the Leaderboard dashboard this replaces. Each is a PAYROLL sum,
-       not a bonus sum — payroll is what the company pays and the only figure Capstone receives,
-       which is what the last tile's label says out loud.
+       not a bonus sum — payroll is what the company pays and the only figure Capstone receives.
        ADMIN IS SHOWN even though Leaderboard's header has no tile for it: there it was $0 and
        invisible, here it is routinely $300, and three tiles whose visible parts do not add up to
        the total reads as an arithmetic error on a payroll screen. */
@@ -2411,14 +2410,11 @@
     h.push('<div><dt>Manager bonuses</dt><dd>' + esc(m0(mgrTotal)) + '</dd></div>');
     h.push('<div><dt>Budtender bonuses</dt><dd>' + esc(m0(budTotal)) + '</dd></div>');
     h.push('<div><dt>Admin</dt><dd>' + esc(m0(admPay)) + '</dd></div>');
-    h.push('<div><dt>Total → Capstone</dt><dd class="crew-inc-grand">' +
+    h.push('<div><dt>Total</dt><dd class="crew-inc-grand">' +
            esc(m0(budTotal + mgrTotal + admPay)) + '</dd></div>');
     h.push('</dl></div>');
 
-    h.push('<div class="crew-inc-actions">');
-    h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Approve &amp; Print PDF</button>');
-    h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
-    h.push('</div>');
+    h.push(incHeadActions(d, isImported));
 
     if (d.admin) h.push(incAdminTable(d.admin, adm, isImported));
     h.push(incMgrTable(mgrs, mgrCalc, isImported, editable, T));
@@ -2438,6 +2434,17 @@
     }
     host.innerHTML = h.join('');
     incWire(host, d, isImported, editable);
+  }
+
+  /* A closed record has nothing left to approve — it was approved when it was written — and an
+     open period cannot be approved yet. Both just print, so the button says what it will actually
+     do rather than offering an action the engine will refuse. */
+  function incHeadActions(d, isImported) {
+    var canApprove = !isImported && !(d.payPeriod && d.payPeriod.current);
+    return '<div class="crew-inc-actions">' +
+      '<button type="button" class="gx-btn gx-btn-green" id="incPrint">' +
+      (canApprove ? 'Approve &amp; Print PDF' : 'Print PDF') + '</button>' +
+      '<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button></div>';
   }
 
   function incInputs() { return (inc.data && inc.data.inputs) || {}; }
@@ -2627,12 +2634,37 @@
      is a record like the imported ones and can never be recomputed. Then it prints.
      The confirm is not ceremony. Approving is the one irreversible action on this screen, and the
      figures it freezes are what people get paid. */
+  /* MMDDYY, the convention the archived reports already use — "Incentive Dashboard -
+     030226-031526.pdf". Chrome names a Save-as-PDF from document.title, so the file lands with the
+     right name instead of "GX Crew.pdf" and whoever files it does not have to retype it. Restored
+     afterwards, including when the print dialog is cancelled. */
+  function incMMDDYY(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    return m ? m[2] + m[3] + m[1].slice(2) : '';
+  }
+  function incPrintWithName(d) {
+    var a = incMMDDYY(d.pp_start || (d.payPeriod && d.payPeriod.start));
+    var b = incMMDDYY(d.pp_end || (d.payPeriod && d.payPeriod.end));
+    var was = document.title;
+    if (a && b) document.title = 'Incentive Dashboard - ' + a + '-' + b;
+    function restore() {
+      document.title = was;
+      window.removeEventListener('afterprint', restore);
+    }
+    window.addEventListener('afterprint', restore);
+    window.print();
+    /* afterprint does not fire everywhere (and not at all in some headless paths), so the title is
+       restored on a timer as well — a tab left named after a pay period is a small thing that
+       looks broken. */
+    setTimeout(restore, 4000);
+  }
+
   async function incApproveAndPrint(d, isImported) {
-    if (isImported) { window.print(); return; }
+    if (isImported) { incPrintWithName(d); return; }
     var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
     if (d.payPeriod && d.payPeriod.current) {
       toast('This pay period is still open — sales bonuses are not final until it ends. Printing a draft.', true);
-      window.print();
+      incPrintWithName(d);
       return;
     }
     var btn = document.getElementById('incPrint');
@@ -2655,11 +2687,12 @@
       /* Reload before printing: the period is now a record, so it must print as one — badged
          `as paid`, with no live inputs on the page. */
       await loadIncentive(pp);
-      setTimeout(function () { window.print(); }, 250);
+      setTimeout(function () { incPrintWithName(inc.data || d); }, 250);
     } catch (e) {
       toast('Could not approve: ' + ((e && e.message) || 'unknown'), true);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Approve & Print PDF'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Approve & Print PDF'; }   // reset; the
+      // next paint relabels it to "Print PDF" now that the period is a record
     }
   }
 

@@ -30,7 +30,7 @@ const M = (function () {
   const cut = src.lastIndexOf(TAIL);
   src = src.slice(0, cut) +
         '\n; return { incBudTable, incMgrTable, incAdminTable, incCsvRows, incDiscPct,\n' +
-        '           calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
+        '           incHeadActions, incMMDDYY, calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
   const doc = { readyState: 'loading', currentScript: { src: 'crew.js?v=99' },
                 body: { classList: { add() {}, remove() {} } },
@@ -196,6 +196,38 @@ const oldLabel = M.incBudTable([Object.assign({}, paidRow, { store_label: 'Hills
   b => ({ bonus: b.bonus, payroll: b.payroll, spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
 ok('the historical store LABEL is still what the row prints',
    oldLabel.includes('Hillsboro') && /store-hillsboro|background:/.test(oldLabel));
+
+/* ── what the print path has to get right ──
+   Checked against the first real PDF, which came back with a bug-report icon printed in the middle
+   of the budtender table, two screen-only footnotes on the last page, and a generic filename. */
+const html = fs.readFileSync(__dirname + '/../index.html', 'utf8');
+const printCss = html.slice(html.indexOf('@media print'));
+
+/* gx-bugreport.js names its launcher gx-bug-fab / #gxBugFab. The first stylesheet hid
+   `.gx-bugreport-btn`, a class that does not exist anywhere, so it silently hid nothing. */
+ok('the bug launcher is hidden by its REAL selector',
+   /gx-bug-fab/.test(printCss) && /#gxBugFab/.test(printCss));
+ok('the screen-only footnotes do not print',
+   /\.crew-inc-note \{ display: none/.test(printCss));
+ok('the period control is replaced by plain text on paper',
+   /#incPeriod/.test(printCss) && /crew-inc-printpp/.test(printCss));
+ok('a row never straddles a page break', /page-break-inside: avoid/.test(printCss));
+
+/* MMDDYY-MMDDYY, matching the names already in the Drive archive. */
+ok('the pay period becomes the archive filename convention',
+   M.incMMDDYY('2026-03-02') === '030226' && M.incMMDDYY('2026-03-15') === '031526');
+ok('a malformed date yields no filename rather than a wrong one', M.incMMDDYY('') === '' &&
+   M.incMMDDYY('3/2/26') === '');
+
+/* The button offers only what it will actually do: a closed record has nothing left to approve,
+   and an open period cannot be approved yet. */
+function headOf(d) { M.inc.data = d; return M.incHeadActions(d, d.source === 'imported'); }
+ok('a closed record offers Print PDF, not Approve',
+   headOf({ source: 'imported', pp_start: '2026-08-03' }).includes('>Print PDF<'));
+ok('an open period offers Print PDF too — it cannot be approved yet',
+   headOf({ source: 'live', payPeriod: { start: '2026-08-17', current: true } }).includes('>Print PDF<'));
+ok('a CLOSED live period is the only one that offers Approve',
+   /Approve/.test(headOf({ source: 'live', payPeriod: { start: '2026-08-03', current: false } })));
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);
