@@ -95,7 +95,24 @@ def main():
             e['roles'].add(role); e['stores'].add(r.get('store_label') or '')
             e['periods'].append(p['pp_start']); e['bonus_total'] += (r.get('bonus') or 0)
 
-    by_key = {name_to_key(e.get('full_name')): e for e in emps}
+    # A MERGED record is a tombstone. GX Core keeps it so the old employee_id still resolves for
+    # Leaderboard and SPIFF joins, which means it is still returned by getEmployees and still
+    # matches on name -- and attaching a year of payout history to it would hang that history off
+    # a record nothing renders. Retired is NOT the same thing: a retired person is a real person
+    # who worked those periods, and their history belongs to them.
+    live = [e for e in emps if str(e.get('status') or '').lower() != 'merged']
+
+    # Match the name the reports actually PRINT. The spreadsheet wrote "Nathan Wydick" and
+    # "TJ Peterson"; the registry's legal names are Robert Wydick and Thomas Peterson, with
+    # display_name carrying "Nate Wydick" and "TJ Peterson". Keying on full_name alone cannot
+    # reach either, and one of them had already gone to a tombstone.
+    by_key = {}
+    for e in live:
+        for field in ('full_name', 'display_name'):
+            k = name_to_key(e.get(field))
+            if k and k not in by_key:
+                by_key[k] = e
+
     resolved, fuzzy, unmatched = [], [], []
 
     for name, info in sorted(seen.items()):
@@ -115,7 +132,9 @@ def main():
             rec['employee_id'] = exact['employee_id']; rec['registry_name'] = exact.get('full_name')
             rec['how'] = 'exact'; resolved.append(rec); continue
 
-        cands = [e for e in emps if same_person(clean, e.get('full_name'))]
+        cands = [e for e in live
+                 if same_person(clean, e.get('full_name'))
+                 or same_person(clean, e.get('display_name'))]
         if len(cands) == 1:
             rec['employee_id'] = cands[0]['employee_id']
             rec['registry_name'] = cands[0].get('full_name')
@@ -126,7 +145,8 @@ def main():
         else:
             rec['how'] = 'none'; unmatched.append(rec)
 
-    print('registry: %d employees   history: %d distinct names\n' % (len(emps), len(seen)))
+    print('registry: %d employees (%d live, %d merged tombstones)   history: %d distinct names\n'
+          % (len(emps), len(live), len(emps) - len(live), len(seen)))
     print('EXACT   %d' % len(resolved))
     print('FUZZY   %d  (review these -- a wrong one attaches somebody else\'s pay)' % len(fuzzy))
     for r in fuzzy:

@@ -2952,14 +2952,19 @@ var NICKNAMES = Object.assign(Object.create(null), { mike: 'michael', zach: 'zac
                   jon: 'jonathan', nick: 'nicholas', dan: 'daniel', matt: 'matthew',
                   jen: 'jennifer', tanner: 'taner', sky: 'skyler', skylar: 'skyler',
                   bob: 'robert', rob: 'robert', tom: 'thomas', tj: 'thomas' });
-/* `tj` was added 2026-08-27 after the incentive-history import found Thomas Peterson holding TWO
-   GX Core records -- `tj_peterson` and `thomas_peterson`, same person, same store. That duplicate
-   is this table's own doing: an import saw "TJ Peterson", samePerson_ could not reach "Thomas"
-   (ratio_('tj','thomas') is 0.25, well under the 0.8 first-name bar), so it created a second
-   identity rather than matching the first. Every join in the suite runs on employee_id, so a
-   person split across two of them has their sales, SPIFF and now their payout history divided
-   between two half-people, and nothing anywhere reports an error. The pair still needs
-   roster_merge; this stops the next one being made. */
+/* `tj` added 2026-08-27. ratio_('tj','thomas') is 0.25, far under the 0.8 first-name bar, so
+   samePerson_('TJ Peterson', 'Thomas Peterson') was false and any source that prints the nickname
+   -- which the incentive payout reports do, for all 27 of them -- could not reach the registry
+   record by legal name alone.
+
+   CORRECTION, same day: this comment first claimed the gap had CREATED a duplicate record for him.
+   It had not. `thomas_peterson` and `tj_peterson` are a completed roster_merge -- a tombstone plus
+   its survivor -- which is the arrangement that keeps an old employee_id resolving for Leaderboard
+   and SPIFF joins. The reviewer who spotted it had merged them himself. An invented cause is worse
+   than none: it is the spiff_payouts mistake in miniature, and someone would eventually have
+   "fixed" a merge that was working correctly. The real fix for name-vs-nickname is matching
+   display_name, which stampEmployeeIds_ and the importer now both do; this entry is still correct
+   on its own terms and stays. */
 
 function canonFirst_(f) {
   var x = String(f || '').toLowerCase().replace(/[^a-z]/g, '');
@@ -3299,18 +3304,31 @@ function fetchLivePerf_(ppStart) {
 function stampEmployeeIds_(live) {
   var emps = [];
   try { emps = GXCore.getEmployees() || []; } catch (e) { emps = []; }
+  /* A MERGED record is a tombstone GX Core keeps so the old employee_id still resolves for
+     Leaderboard and SPIFF joins. It is still returned here and still matches on name, so without
+     this filter a live row can be stamped with an id nothing renders — and an input saved against
+     it would vanish. RETIRED is deliberately kept: a retired person really did work that period. */
+  var live = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
   var byKey = Object.create(null);
-  emps.forEach(function (e) {
-    byKey[nameToKey_(e.full_name)] = e.employee_id;
-    if (e.employee_id) byKey[String(e.employee_id)] = e.employee_id;
+  live.forEach(function (e) {
+    /* display_name too, because that is the name people are called by and the name the reports
+       print: the registry's Robert Wydick is "Nate Wydick" on the board, and Thomas Peterson is
+       "TJ Peterson". Matching only full_name reaches neither. */
+    [e.full_name, e.display_name].forEach(function (n) {
+      var k = nameToKey_(n);
+      if (k && !byKey[k]) byKey[k] = e.employee_id;
+    });
+    if (e.employee_id && !byKey[String(e.employee_id)]) byKey[String(e.employee_id)] = e.employee_id;
   });
   var unmatched = [];
   function stamp(r) {
     if (!r) return;
     var hit = byKey[String(r.nameKey || '')] || byKey[nameToKey_(r.name)] || '';
     if (!hit) {
-      for (var i = 0; i < emps.length; i++) {
-        if (samePerson_(r.name, emps[i].full_name)) { hit = emps[i].employee_id; break; }
+      for (var i = 0; i < live.length; i++) {
+        if (samePerson_(r.name, live[i].full_name) || samePerson_(r.name, live[i].display_name)) {
+          hit = live[i].employee_id; break;
+        }
       }
     }
     r.employee_id = hit || '';
