@@ -33,7 +33,9 @@ function makeSheet(headers) {
     deleteRow(n) { this.rows.splice(n - 1, 1); },
     getRange(r, c, nr, nc) {
       const s = this;
+      if (nr === undefined) { nr = 1; nc = 1; }      // getRange(row, col) — a single cell
       return {
+        setValue(v) { s.rows[r - 1][c - 1] = v; return this; },
         setValues(vals) {
           vals.forEach((row, i) => {
             while (s.rows.length < r - 1 + i + 1) s.rows.push(new Array(headers.length).fill(''));
@@ -82,9 +84,9 @@ function load(sheet) {
       });
     }
     ${grab('historyStoreId_')} ${grab('historyPeriods_')}
-    ${grab('incentiveImport_')} ${grab('incentiveHistory_')}
+    ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
     return { incentiveImport_: incentiveImport_, incentiveHistory_: incentiveHistory_,
-             historyPeriods_: historyPeriods_ };`;
+             incentiveRelink_: incentiveRelink_, historyPeriods_: historyPeriods_ };`;
   // resolveStore is GX Core's; the local table this replaces is exactly what must not exist.
   const GXCore = { resolveStore: l => ({ 'Hillsboro': { store_id: 'hillsboro' },
                                          'Portland Road': { store_id: 'portland-rd' },
@@ -173,6 +175,36 @@ ok('an unresolvable store label is reported and left blank, never guessed',
    r.unresolved_stores['Nowhere'] === 1 && sheet.getDataRange().getValues()[2][6] === '');
 ok('a store label that GX Core does know is resolved through it',
    gone[5] === 'Hillsboro' && gone[6] === 'hillsboro');
+
+/* ── relink attaches history to a person and CANNOT touch a figure ──
+   Identity and money come apart constantly — Thomas Peterson holds two GX Core records today, and
+   after they are merged his 27 periods have to point at the survivor. Doing that through
+   mode=replace would delete a year of paid figures and rewrite them from a re-parse, which is the
+   operation this whole design exists to prevent, for a change that is not about the figures. */
+sheet = makeSheet(HEADERS); M = load(sheet);
+M.incentiveImport_({ confirm: 'yes' }, { periods: [{ pp_start: '2026-08-03', pp_end: '2026-08-16',
+  format: 'gen2', managers: [{ name: 'TJ Peterson', store_label: 'River Rd', txn: 0, sales: 59247.29,
+  discount_pct: 6.99, aov: 32.19, spiff: 0, bonus: 50, per_hour: 0.63, payroll: 50 }],
+  budtenders: [] }], names: {} });
+const before = sheet.getDataRange().getValues()[1].slice();
+ok('a manager with no registry match imports with a blank employee_id', before[3] === '');
+
+r = M.incentiveRelink_({ pdf_name: 'TJ Peterson', employee_id: 'thomas_peterson' });
+ok('relink is a dry run by default, and reports what it would change',
+   r.dry_run === true && r.rows === 1 && r.currently['(blank)'] === 1);
+ok('the dry run wrote nothing', sheet.getDataRange().getValues()[1][3] === '');
+
+r = M.incentiveRelink_({ pdf_name: 'TJ Peterson', employee_id: 'thomas_peterson', confirm: 'yes' });
+const relinked = sheet.getDataRange().getValues()[1];
+ok('confirm=yes attaches the history to the person', r.written === 1 && relinked[3] === 'thomas_peterson');
+
+/* The assertion that matters: EVERY other cell is byte-for-byte what it was. A relink that
+   silently re-rounded a payout would be worse than the duplicate record it was fixing. */
+const untouched = before.every((v, i) => i === 3 || Object.is(v, relinked[i]));
+ok('every other cell — every figure — is unchanged', untouched);
+
+r = M.incentiveRelink_({ pdf_name: 'Nobody At All', employee_id: 'x', confirm: 'yes' });
+ok('relinking a name with no history is refused, not silently a no-op', r.ok === false);
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive history: all passed');
 process.exit(fail ? 1 : 0);

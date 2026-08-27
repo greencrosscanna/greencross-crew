@@ -400,6 +400,8 @@ function route_(e) {
       // import (a year of rows will not fit in a query string); both are deploy-secret.
       case 'incentive_import':  return json_(incentiveImport_(p, body), p.callback);
       case 'incentive_history': return json_(incentiveHistory_(p), p.callback);
+      // Attach history to a person after a merge or rename. Writes employee_id ONLY — never a figure.
+      case 'incentive_relink':  return json_(incentiveRelink_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'incentive':    return json_(getIncentiveData_(p), p.callback);   // bonus calc (ported from Leaderboard)
@@ -3134,6 +3136,62 @@ function incentiveImport_(p, body) {
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');
   summary.written = rows.length;
   return summary;
+}
+
+/**
+ * Attach imported history to a person, WITHOUT touching a single figure.
+ *   ?action=incentive_relink&pdf_name=TJ%20Peterson&employee_id=thomas_peterson&confirm=yes
+ *
+ * WHY THIS EXISTS SEPARATELY FROM mode=replace
+ * Immutability here is about the MONEY, not about who the money is attached to. Those come apart
+ * constantly: Thomas Peterson currently holds two GX Core records (tj_peterson and
+ * thomas_peterson) and once they are merged his 27 periods need to point at the survivor. People
+ * also get renamed, and three people in these reports predate the roster entirely — if any of them
+ * is ever added back, their history should find them.
+ *
+ * Doing that through mode=replace would mean deleting a year of paid figures and rewriting them
+ * from a re-parse, which is exactly the operation this whole design exists to prevent, for a change
+ * that is not about the figures at all. So this writes ONE column and cannot write any other: it
+ * reads each matching row, sets employee_id, and puts the row back with every money cell byte-for-
+ * byte as it found it. A relink that silently altered a payout would be worse than the duplicate
+ * it was fixing.
+ *
+ * Matches on pdf_name — the name as the report printed it — because that is the only handle these
+ * rows have when employee_id is blank, which is the case this is for.
+ */
+function incentiveRelink_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var pdfName = String(p.pdf_name || '').trim();
+  var empId   = String(p.employee_id || '').trim();
+  if (!pdfName) return { ok: false, error: 'pdf_name required' };
+  var dry = String(p.confirm || '') !== 'yes';
+
+  var sh = sheetOf_(HISTORY_TAB, HISTORY_HEADERS);
+  var last = sh.getLastRow();
+  if (last < 2) return { ok: false, error: 'no imported history' };
+  var NAME_COL = HISTORY_HEADERS.indexOf('pdf_name') + 1;
+  var ID_COL   = HISTORY_HEADERS.indexOf('employee_id') + 1;
+
+  var names = sh.getRange(2, NAME_COL, last - 1, 1).getValues();
+  var ids   = sh.getRange(2, ID_COL,   last - 1, 1).getValues();
+  var hits = [], was = Object.create(null);
+  for (var i = 0; i < names.length; i++) {
+    if (String(names[i][0]).trim() !== pdfName) continue;
+    hits.push(i + 2);
+    var cur = String(ids[i][0] || '(blank)');
+    was[cur] = (was[cur] || 0) + 1;
+  }
+  if (!hits.length) return { ok: false, error: 'no history rows for pdf_name ' + pdfName };
+
+  var out = { ok: true, dry_run: dry, pdf_name: pdfName, employee_id: empId,
+              rows: hits.length, currently: was };
+  if (dry) { out.note = 'dry run — nothing written. Re-send with confirm=yes.'; return out; }
+
+  /* One column, one cell at a time. Writing the whole row back — even "unchanged" — is how a
+     rounded or re-serialised figure gets in, and these are numbers that paid people. */
+  hits.forEach(function (rowNum) { sh.getRange(rowNum, ID_COL).setValue(empId); });
+  out.written = hits.length;
+  return out;
 }
 
 /** Read imported history back: ?action=incentive_history[&pp_start=YYYY-MM-DD]. */
