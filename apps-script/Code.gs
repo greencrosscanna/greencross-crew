@@ -3906,39 +3906,107 @@ function wfMoney_(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('e
  * Computes it exactly as approval will, so the email says what approval would write.
  */
 function incentiveSend_(p) {
-  var auth = requireCrew_(p);
-  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
-  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+  /* PREVIEW is deploy-secret so the email can be dry-run from a shell before the first real pay
+     period closes — otherwise the first time anyone sees this email is the day it matters. It
+     changes NO state, mints no token, and is allowed on an OPEN period, which the real send
+     refuses. Everything else runs identically: the body comes from the same builder, because a
+     preview that renders different HTML tests nothing. */
+  var preview = isTruthyFlag_(p.preview || '');
+  var auth;
+  if (preview && deploySecretOk_(p)) auth = { ok: true, user: String(p.as || 'preview'), role: 'admin' };
+  else {
+    auth = requireCrew_(p);
+    if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+    if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+  }
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
-  if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
-    return { ok: false, error: pp + ' is already a closed record' };
-  }
-  var wf = wfGet_(pp);
-  if (wf && wf.status === 'pending') {
-    return { ok: false, error: 'already sent for approval on ' + wf.sent_at + ' by ' + wf.sent_by };
+  if (!preview) {
+    if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+      return { ok: false, error: pp + ' is already a closed record' };
+    }
+    var wfPrev = wfGet_(pp);
+    if (wfPrev && wfPrev.status === 'pending') {
+      return { ok: false, error: 'already sent for approval on ' + wfPrev.sent_at + ' by ' + wfPrev.sent_by };
+    }
   }
 
-  var pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
-  if (pre.ok === false) return pre;
+  var pre;
+  if (preview) {
+    /* incentiveApprove_ refuses an open period, which is correct for approving and useless for
+       previewing. Compute the same figures directly instead of loosening that guard. */
+    var live = fetchLivePerf_(pp);
+    if (live.ok === false) return live;
+    stampEmployeeIds_(live);
+    var T = live.thresholds, inputs = inputsFor_(pp), tot = 0, n = 0;
+    (live.budtenders || []).forEach(function (b) { tot += incCalcBud_(b, T, inputs).payroll || 0; n++; });
+    (live.managers || []).forEach(function (m) {
+      tot += incCalcMgr_(m, T, inputs, live.budtenders || []).payroll || 0; n++;
+    });
+    if (live.admin) { tot += incCalcAdmin_(live.admin, T).bonus || 0; n++; }
+    pre = { ok: true, rows: n, payroll_total: Math.round(tot * 100) / 100,
+            pp_end: (live.payPeriod || {}).end || '', unmatched: live.unmatched || [],
+            still_open: !!(live.payPeriod || {}).current };
+  } else {
+    pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
+    if (pre.ok === false) return pre;
+  }
 
   /* Single-use, 72 hours, and bound to the TOTAL that was sent. If anything about the period
      changes after the email goes out, the link refuses and sends Sky into the app to look —
      a standing key to payroll in an inbox is the thing to avoid, not the click. */
-  var token = Utilities.getUuid().replace(/-/g, '');
+  var token = preview ? 'PREVIEW' : Utilities.getUuid().replace(/-/g, '');
   var expires = new Date(new Date().getTime() + 72 * 3600 * 1000).toISOString();
-  wfSet_(pp, { status: 'pending', sent_by: auth.user || '', sent_at: new Date().toISOString(),
-               decided_by: '', decided_at: '', note: '', token: token, token_expires: expires,
-               sent_total: String(pre.payroll_total) });
+  if (!preview) {
+    wfSet_(pp, { status: 'pending', sent_by: auth.user || '', sent_at: new Date().toISOString(),
+                 decided_by: '', decided_at: '', note: '', token: token, token_expires: expires,
+                 sent_total: String(pre.payroll_total) });
+  }
 
-  var to = wfApproverEmails_();
+  var html = wfApprovalEmail_(pp, pre, auth.user || 'a manager', token, preview);
+  var to = preview
+    ? String(p.to || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean)
+    : wfApproverEmails_();
+  if (preview && !to.length) return { ok: true, preview: true, pp_start: pp, rows: pre.rows,
+                                      payroll_total: pre.payroll_total, still_open: !!pre.still_open,
+                                      to: wfApproverEmails_(), html: html,
+                                      note: 'nothing sent — add &to=someone@… to actually mail it' };
+
+  var mailed = [];
+  if (to.length) {
+    try {
+      MailApp.sendEmail({ to: to.join(','), name: 'GX Crew', htmlBody: html,
+        subject: (preview ? '[PREVIEW] ' : '') + 'Approve incentive — ' + pp });
+      mailed = to;
+    } catch (e) {
+      /* The state is already `pending`, which is correct — it WAS sent for approval. Report the
+         mail failure rather than throwing, so the sender learns to nudge in person instead of
+         believing an email went out. */
+      return { ok: true, pp_start: pp, status: preview ? 'preview' : 'pending', rows: pre.rows,
+               payroll_total: pre.payroll_total, mailed: [],
+               warning: 'the email failed: ' + String((e && e.message) || e) };
+    }
+  }
+  return { ok: true, preview: preview || undefined, pp_start: pp,
+           status: preview ? 'preview' : 'pending', rows: pre.rows,
+           payroll_total: pre.payroll_total, mailed: mailed, still_open: !!pre.still_open,
+           warning: mailed.length ? '' : 'no approver is configured (cfg.crewApprover) — nobody was emailed' };
+}
+
+/* ONE builder for the real email and the preview. Two would drift, and the drift would only show
+ * up on the day it mattered. */
+function wfApprovalEmail_(pp, pre, sender, token, preview) {
   var link = CREW_URL + '#incentive/' + encodeURIComponent(pp);
   var approveLink = CREW_URL + '#approve/' + encodeURIComponent(pp) + '/' + token;
-  var html =
-    '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px">' +
+  return '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px">' +
+    (preview ? '<p style="background:#fde68a;color:#4a3208;padding:8px 12px;border-radius:6px;' +
+       'margin:0 0 16px;font-size:13px"><strong>Preview.</strong> Nothing was sent for approval and ' +
+       'the button below will not approve anything' +
+       (pre.still_open ? ' — this pay period is still open, so these figures are not final.' : '.') +
+       '</p>' : '') +
     '<h2 style="margin:0 0 4px">Incentive ready for approval</h2>' +
     '<p style="margin:0 0 16px;color:#555">Pay period <strong>' + pp + ' → ' +
-      (pre.pp_end || '') + '</strong>, prepared by ' + (auth.user || 'a manager') + '.</p>' +
+      (pre.pp_end || '') + '</strong>, prepared by ' + sender + '.</p>' +
     '<table style="border-collapse:collapse;margin-bottom:16px">' +
     '<tr><td style="padding:4px 16px 4px 0;color:#555">People</td><td style="font-weight:700">' +
       pre.rows + '</td></tr>' +
@@ -3953,26 +4021,8 @@ function incentiveSend_(p) {
       '&nbsp;&nbsp;<a href="' + link + '" style="color:#0a7a3d">Open in GX Crew to review</a></p>' +
     '<p style="color:#777;font-size:12px;margin:14px 0 0">Approving freezes these figures as the ' +
       'record of what was paid. If something needs fixing, open it in Crew and send it back to ' +
-      (auth.user || 'the sender') + ' with a note. This link works once and expires in 72 hours.</p>' +
+      sender + ' with a note. This link works once and expires in 72 hours.</p>' +
     '</div>';
-  var mailed = [];
-  if (to.length) {
-    try {
-      MailApp.sendEmail({ to: to.join(','), subject: 'Approve incentive — ' + pp, htmlBody: html,
-                          name: 'GX Crew' });
-      mailed = to;
-    } catch (e) {
-      /* The state is already `pending`, which is correct — it WAS sent for approval. Report the
-         mail failure rather than throwing, so the sender learns to nudge in person instead of
-         believing an email went out. */
-      return { ok: true, pp_start: pp, status: 'pending', rows: pre.rows,
-               payroll_total: pre.payroll_total, mailed: [],
-               warning: 'marked pending, but the email failed: ' + String((e && e.message) || e) };
-    }
-  }
-  return { ok: true, pp_start: pp, status: 'pending', rows: pre.rows,
-           payroll_total: pre.payroll_total, mailed: mailed,
-           warning: mailed.length ? '' : 'no approver is configured (cfg.crewApprover) — nobody was emailed' };
 }
 
 /** ?action=incentive_return&pp_start=…&note=…  — Sky sends it back for a fix. */
