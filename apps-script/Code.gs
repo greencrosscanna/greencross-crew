@@ -3487,8 +3487,19 @@ function incentiveProbe_(p) {
     return { ok: false, stage: 'fetch', secret_property_set: hasSecret, ms: ms, error: live.error };
   }
   stampEmployeeIds_(live);
+  /* The SPIFF fold, reported here for the same reason the stamp is: it is the other join that can
+     silently match nobody, and a payroll column reading $0 for everyone looks exactly like a quiet
+     fortnight. Names only, never amounts — this route is safe to log. */
+  applySpiffEarnings_(live, (live.payPeriod || {}).start || '');
+  var withSpiff = (live.budtenders || []).concat(live.managers || [])
+                    .filter(function (r) { return (Number(r.spiff_earned) || 0) > 0; });
   return {
     ok: true, secret_property_set: hasSecret, ms: ms,
+    spiff: live.spiff ? { ok: live.spiff.ok, error: live.spiff.error || '',
+                          refreshed_at: live.spiff.refreshed_at || '',
+                          matched: live.spiff.matched, people: live.spiff.people,
+                          unmatched: live.spiff.unmatched,
+                          earning: withSpiff.map(function (r) { return r.name; }) } : null,
     source: live.source || 'leaderboard',
     pay_period: live.payPeriod,
     managers: (live.managers || []).length,
