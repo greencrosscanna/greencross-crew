@@ -467,6 +467,47 @@ Email links carry a single-use 72-hour token bound to the period **and the total
 - **`''` and `0` are different claims.** The oldest report has no payroll column; those rows export
   empty, because 0.00 tells payroll to pay nothing.
 
+### The settings tray — thresholds in GX Core, discount rules still in Leaderboard
+
+**Thresholds live in GX Core kv as `incentiveThresholds`.** Deliberately **not** a `cfg.` key: that
+prefix is public on `?action=config`, and comp policy should not be readable by anyone with the URL.
+They were a Leaderboard ScriptProperty, which was wrong twice — compensation is not the kiosk's, and
+**Leaderboard's own discount colouring reads `budtender.discountMaxPct`** to decide what counts as a
+good rate on the board every staff member sees. Two copies of that number means the board grades
+people against a goal nobody set on it.
+
+Leaderboard reads GX Core → its local property → its defaults, **in that order**: an unreachable GX
+Core must keep the board scoring as it did rather than silently reverting everyone to defaults. Its
+per-execution memo is **cleared at the top of `doGet`** — Apps Script reuses warm instances, so a
+module-level global outlives the request that filled it, and without that reset a threshold edit
+appears to do nothing for minutes.
+
+**Editing is the approver's, not any editor's** — Mike prepares a period, he does not move the bar.
+
+**The tray's CSS is copied verbatim from `greencross-leaderboard/index.html`** (the `.ist-*` and
+`.inc-tray-*` blocks). Sky designed it; a rewrite was worse. The only change is a variable bridge —
+that sheet names colours `--text`/`--green`/`--border`, gx-theme names them `--gx-*` — aliased once
+and scoped to the tray. **Re-copy on any change there rather than hand-editing**, and keep the class
+names: renaming one silently unstyles a section instead of erroring.
+
+**Discount rules stay in Leaderboard** (`discountrules` / `discountrules_save`, secret-gated, above
+`requireAuth_`) because they filter the transaction data — the half that did not move — but they are
+edited in this tray because to whoever sets the scheme it is one screen. This is the **only write**
+Crew makes into that app. **The checkboxes mean COUNTED and Leaderboard stores EXCLUDED**; the flip
+happens in the engine, never the browser, because a UI posting one while displaying the other grades
+every budtender against the opposite rule and nothing about the result looks wrong. Every
+discretionary name is sent on save — the store merges by key, so an omitted one keeps its old value.
+If the list failed to load, save skips the rules rather than posting an empty set, which would switch
+all of them off.
+
+**Tier lists are ORDER-SENSITIVE** — matched high-to-low, first hit wins — so `thresholdProblems_`
+refuses an ascending list *by name*. Ascending would pay everyone the lowest tier they clear, and
+nothing else in the suite would notice.
+
+**Manager store-discount cut-offs are derived** (`goal × ⅔` and `goal`) and render as text, not
+inputs: only their dollar amounts are stored, so an editable field would invite setting a value the
+math ignores.
+
 ### The Capstone export is THEIR shape, not ours
 
 ADMIN, then one block per store in Capstone's order (BEND / HILLSBORO / RIVER / CENTER / SOUTH /
