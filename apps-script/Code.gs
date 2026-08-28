@@ -3249,10 +3249,18 @@ function incentiveHistory_(p) {
   /* Imported rows store the name the REPORT printed, which is what the document said and what the
      screen shows. The export needs the legal name, so the registry is joined in here rather than
      the history tab carrying a copy that would go stale the next time somebody is renamed. */
-  var legalById = Object.create(null);
+  var legalById = Object.create(null), midById = Object.create(null);
   try {
     (GXCore.getEmployees() || []).forEach(function (e) {
       if (e.employee_id) legalById[String(e.employee_id)] = String(e.full_name || '');
+    });
+  } catch (e) {}
+  /* middle_initial is a CREW attribute, not part of GX Core's identity slice, so it comes from
+     this app's own attribute tab rather than the registry read above. */
+  try {
+    var attrs = readAttrs_();
+    Object.keys(attrs).forEach(function (id) {
+      midById[id] = String(attrs[id].middle_initial || '');
     });
   } catch (e) {}
 
@@ -3265,6 +3273,7 @@ function incentiveHistory_(p) {
                ? (r[h] === '' ? null : Number(r[h])) : r[h];
       });
       o.full_name = legalById[String(r.employee_id || '')] || '';
+      o.middle_initial = midById[String(r.employee_id || '')] || '';
       return o;
     });
   }
@@ -3375,6 +3384,11 @@ function stampEmployeeIds_(live) {
      been looked up under a key nothing wrote. Caught by incentive_probe reporting the impossible
      pair `stamped: 0, unmatched: []`. */
   var roster = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
+  var midById = Object.create(null);
+  try {
+    var _attrs = readAttrs_();
+    Object.keys(_attrs).forEach(function (id) { midById[id] = String(_attrs[id].middle_initial || ''); });
+  } catch (e) {}
   var byKey = Object.create(null), legalById = Object.create(null);
   roster.forEach(function (e) {
     if (e.employee_id) legalById[String(e.employee_id)] = String(e.full_name || '');
@@ -3411,6 +3425,7 @@ function stampEmployeeIds_(live) {
        person and the payout reports print the nickname; Capstone pays "Wydick Robert N". The
        screen keeps leading with the name people use — this rides alongside for the export. */
     r.full_name = hit ? (legalById[hit] || '') : '';
+    r.middle_initial = hit ? (midById[hit] || '') : '';
     if (!hit) unmatched.push(r.name);
   }
   (live.budtenders || []).forEach(stamp);
