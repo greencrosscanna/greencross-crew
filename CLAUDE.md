@@ -8,8 +8,9 @@ Center; Incentive was formerly a Leaderboard view). Its app key in GX Core is **
 ## What GX Crew owns
 - **Roster / identity attributes** — the rich HR record: OLCC/METRC permits, time (SwipeClock),
   birthday / work-anniversary, shirt size, badges.
-- **Compensation** — the **Incentive / bonus calculation** (ported from Leaderboard), editable comp
-  **thresholds**, **Capstone payroll export** (CSV/PDF), and **monthly review snapshots**.
+- **Compensation** — the **Incentive / bonus calculation** (ported 2026-08-27 — see the Incentive
+  section below), editable comp **thresholds**, **Capstone payroll export** (CSV/PDF), and
+  **monthly review snapshots**.
 - **Feeds to Leaderboard (via GX Core, never app-to-app):** the **perks** shown on the board and a
   **privacy-preserving "celebrations" feed** (today/upcoming birthdays + anniversaries — a derived flag,
   **not raw DOB**) so the kiosk can surface them without PII leaving GX Crew.
@@ -383,6 +384,100 @@ Leaderboard. Crew mounts it; it does not own it.
 - `tests/avatar_picker_adoption_test.js` pins the contract a push gate can hold: both files loaded,
   no vendored copy, no local `.gxava-*` override, `avatarPanel` and the option tables gone. The
   behaviour (click → save → reload → remove) needs a browser and is not in the gate.
+
+## Incentive — transplanted from Leaderboard (2026-08-27)
+
+**The split that survives the move:** Leaderboard stays the **performance engine** — Dutchie ingest,
+`aggregateTransactions_`, the discretionary-discount classification, and the frozen closed-period
+snapshots. **GX Crew is the payout app** — the bonus math, the attendance/SPIFF inputs, the Capstone
+export and the approval. Sky's own framing: SPIFF sets the goals, LB tracks the performance, Crew
+reads the performance.
+
+Crew reaches it through LB's `incentiveperf` route: deploy-secret, **read-only**, no save twin,
+and placed *above* `requireAuth_` because everything below that line is rejected as "not signed in"
+before a machine caller reaches it. **This is app-to-app, which the brain forbids, and it is
+deliberate and temporary** — promoting the per-employee slice into GX Core needs a library cut Crew
+could not wait for. A brain note asks `core-admin` for it; SPIFF wants the same data. Delete the
+route when GX Core exposes the slice.
+
+### A period is served from one of two places, and the payload says which
+
+- **`imported`** — a closed period from the 27 payout PDFs (2025-08-04 → 2026-08-16), or one Crew
+  has since approved. Figures **as paid**. Read-only, never recomputed.
+- **`live`** — LB's slice plus Crew's inputs, with the math running in the browser so a tick
+  re-scores instantly.
+
+Where the two overlap the **import wins** — LB offers its last 8 periods regardless, and serving one
+live would re-derive a paid fortnight against today's thresholds.
+
+**Never recompute a closed period.** The benchmarks have already moved once: the source spreadsheet
+measured **gross** discount against a ~2.75% bar, the app measures budtender-controlled
+**discretionary** discount against 1.5%. Same staff, same fortnight, 7.30% and 2.81%. So the PDFs are
+history, *not* a penny-match corpus — run the app's formulas over them and they disagree, correctly.
+Leaderboard still has this bug in miniature: its performance figures freeze but its thresholds do
+not, so editing the discount goal re-scores every period it already paid.
+
+### There are TWO implementations of the bonus math, on purpose
+
+The browser's (`calcBud`/`calcMgr`/`calcAdmin` in `crew.js`) runs on every keystroke. The engine's
+(`incCalcBud_`/`incCalcMgr_`/`incCalcAdmin_`) runs once, at approval, because a route that writes
+whatever amount the page hands it is a route where a stale tab decides payroll.
+
+**This is only acceptable because `tests/incentive_math_test.js` drives BOTH against a frozen copy
+of Leaderboard's originals** across 12,040 boundary combinations. Do not touch either without
+running it. The oracle is frozen rather than read from `../greencross-leaderboard` because that
+dashboard gets deleted — a test that dies with the thing it was checking takes the guarantee with it.
+
+### Approval — Mike prepares, Sky decides
+
+```
+draft ──send──► pending ──approve──► approved (immutable, in history)
+  ▲                │
+  └──send back─────┘  reason required, emailed to the preparer
+```
+
+Sending **locks the inputs** server-side for everyone, approver included. Approval is the only thing
+that writes, which is why sending back needs no undo. **`incentive_unapprove` is the break glass:**
+deploy-secret only, never a button, and it **voids rather than deletes** — rows are copied to
+`crew_incentive_voided` with who and why.
+
+**Who approves is NOT a role check.** GX Core's vocabulary is `viewer/editor/admin/director` —
+there is no `owner`, and Crew is admin-only so Sky and Mike hold the same grant. The approver is
+named in GX Core kv **`cfg.crewApprover`** (currently `sky`). Unset, nobody can approve and the
+screen says so: failing closed beats a default that lets the preparer approve their own work.
+Email links carry a single-use 72-hour token bound to the period **and the total that was sent**.
+
+`?action=incentive_send&preview=1&secret=…&to=…` dry-runs the email with no state change.
+
+### Things that silently pay the wrong amount
+
+- **SPIFF is vendor money.** In Bonus, never in Payroll, never in the export. Budtenders subtract it
+  out (`bonus - spiff`); managers add it on. Same rule, opposite construction.
+- **One identity key: `employee_id`.** LB sends its own `nameKey` (`chris_carney`) and GX Core uses
+  `christopher_carney`. Keying inputs on nameKey did not fail — it found nothing, so bonuses computed
+  as if nothing had been entered. `stampEmployeeIds_` attaches the id, the legal name and the middle
+  initial to every live row.
+- **A `merged` record is a tombstone**, still returned by `getEmployees()` and still matching on
+  name. Filter it out or history attaches to a record nothing renders. `retired` is NOT the same —
+  those people really did work those periods.
+- **`GXCore.getEmployees()` has no `display_name`**; that column is added by GX Core's *HTTP* route.
+  Match on `displayNameOf_` (which already existed — do not write a second one).
+- **`discount` is a DECIMAL on live rows and `discount_pct` a PERCENT on imported ones.** Off by
+  100×, and both readings look plausible.
+- **`''` and `0` are different claims.** The oldest report has no payroll column; those rows export
+  empty, because 0.00 tells payroll to pay nothing.
+
+### The Capstone export is THEIR shape, not ours
+
+ADMIN, then one block per store in Capstone's order (BEND / HILLSBORO / RIVER / CENTER / SOUTH /
+PORTLAND), surname-sorted within each. Their labels — SOUTH is Commercial, BEND is Century —
+**deliberately not the store registry**, because it is a third party's import format and must not
+move when a store is renamed. Header column is `Bonus`; the value is payroll. Names are legal names,
+surname first, from `full_name` + the `middle_initial` roster field (backfilled for 36 of 39; three
+have none). Anyone whose store does not resolve exports under `UNASSIGNED` rather than vanishing.
+
+**On screen, stores come from the registry** — `GXStores.name(store_id)`, never the label the row
+arrived with. The original shows on hover.
 
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
