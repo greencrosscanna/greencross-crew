@@ -3433,8 +3433,28 @@ function stampEmployeeIds_(live) {
     r.middle_initial = hit ? (midById[hit] || '') : '';
     if (!hit) unmatched.push(r.name);
   }
-  (live.budtenders || []).forEach(stamp);
-  (live.managers || []).forEach(stamp);
+  /* LEADERBOARD'S STORE SLUGS ARE NOT GX CORE'S. LB says baseline / century / portland / river;
+     the registry says hillsboro / bend / portland-rd / river-rd. Only `center` and `commercial`
+     coincide — which is why exactly those two rows had a coloured dot and the other four were grey.
+     Resolved through GXCore.resolveStore on the DISPLAY NAME, whose aliases already cover every one
+     of these ('Baseline' → hillsboro, 'Century' → bend), rather than a local translation table that
+     would need editing every time a store is renamed.
+
+     `storeSlug` is deliberately LEFT ALONE. The thresholds express lowVolStores in LEADERBOARD's
+     slugs (['center','portland']), and the bonus math matches against it — rewriting the slug to
+     the registry's id would silently move two stores off the low-volume transaction bar and change
+     what their staff are paid. store_id rides alongside for display and for the export. */
+  function stampStore(r) {
+    if (!r) return;
+    var id = '';
+    try {
+      var row = GXCore.resolveStore(String(r.storeName || r.storeSlug || ''));
+      id = (row && (row.store_id || row.id)) || '';
+    } catch (e) { id = ''; }
+    r.store_id = id;
+  }
+  (live.budtenders || []).forEach(function (r) { stamp(r); stampStore(r); });
+  (live.managers || []).forEach(function (r) { stamp(r); stampStore(r); });
   if (live.admin) stamp(live.admin);
   live.unmatched = unmatched;
 }

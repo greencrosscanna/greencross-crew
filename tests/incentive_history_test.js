@@ -104,10 +104,14 @@ function load(sheet) {
      genuinely its job; the local store table this replaces is exactly what must not exist here.
      getEmployees reads through a mutable hook so a test can swap the registry, including for the
      case where the read throws. */
-  const GXCore = { resolveStore: l => ({ 'Hillsboro': { store_id: 'hillsboro' },
-                                         'Portland Road': { store_id: 'portland-rd' },
-                                         'River Rd': { store_id: 'river-rd' },
-                                         'Bend': { store_id: 'bend' } }[l] || null),
+  /* Keyed on the strings the real resolveStore accepts as aliases — the historical report labels
+     AND today's display names, since live rows arrive with the latter. */
+  const STORE_ALIASES = { 'Hillsboro': 'hillsboro', 'Baseline': 'hillsboro',
+                          'Portland Road': 'portland-rd', 'Portland': 'portland-rd',
+                          'River Rd': 'river-rd', 'River': 'river-rd',
+                          'Bend': 'bend', 'Century': 'bend',
+                          'Center': 'center', 'Commercial': 'commercial' };
+  const GXCore = { resolveStore: l => STORE_ALIASES[l] ? { store_id: STORE_ALIASES[l] } : null,
                    getEmployees: () => REGISTRY() };
   return new Function('SHEET', 'GXCore', 'Date', src)(sheet, GXCore, Date);
 }
@@ -271,6 +275,24 @@ ok('somebody with no registry record is reported, not silently blank',
    payload.budtenders[2].employee_id === '' && payload.unmatched.indexOf('Nobody Here') >= 0);
 ok('unmatched lands on the PAYLOAD, not on some other object',
    Array.isArray(payload.unmatched));
+
+/* ── Leaderboard's store slugs are not GX Core's ──
+   LB says baseline / century / portland / river; the registry says hillsboro / bend / portland-rd /
+   river-rd. Only `center` and `commercial` coincide, which is why exactly those two rows had a
+   coloured dot and the other four were grey.
+   The SLUG MUST SURVIVE: thresholds express lowVolStores in LEADERBOARD's slugs, and the bonus math
+   matches against it — rewriting it to the registry id would move two stores off the low-volume
+   transaction bar and change what their staff are paid. */
+const stores = { admin: null, managers: [], budtenders: [
+  { name: 'Chris Carney', nameKey: 'chris_carney', storeSlug: 'century', storeName: 'Century' },
+  { name: 'Dean Deloof', nameKey: 'dean_deloof', storeSlug: 'baseline', storeName: 'Baseline' },
+] };
+REGISTRY = () => REG;
+M.stampEmployeeIds_(stores);
+ok('a Leaderboard slug resolves to the registry store_id',
+   stores.budtenders[0].store_id === 'bend' && stores.budtenders[1].store_id === 'hillsboro');
+ok('and the Leaderboard slug is left untouched — the bonus math matches on it',
+   stores.budtenders[0].storeSlug === 'century' && stores.budtenders[1].storeSlug === 'baseline');
 
 /* A registry read that fails must not look like "nobody matched": every row unstamped AND every
    name reported is the honest outcome, and it is distinguishable from a clean run. */
