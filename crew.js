@@ -2452,6 +2452,14 @@
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (adm.payroll == null ? adm.bonus : adm.payroll) : 0;
 
+    /* Top-right of the pane, under the nav — where Leaderboard put it, and out of the row of
+       per-period actions: the scheme is not a thing you do to this pay period. Approver only,
+       because Mike prepares a period and does not move the bar people are measured against. */
+    if (d.can_approve) {
+      h.push('<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
+             'title="Incentive settings — targets, tiers and bonus amounts" ' +
+             'aria-label="Incentive settings">⚙</button>');
+    }
     h.push('<div class="crew-inc-head"><div class="crew-inc-headl">');
     h.push('<div class="crew-inc-title">Incentive</div>');
     h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
@@ -2527,13 +2535,6 @@
       h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Print PDF</button>');
     }
     h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
-    /* The scheme itself, not this period. Approver only: Mike prepares a period, he does not move
-       the bar people are measured against. */
-    if (d.can_approve) {
-      h.push('<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
-             'title="Incentive thresholds — targets, tiers and bonus amounts" ' +
-             'aria-label="Incentive thresholds">⚙</button>');
-    }
     h.push('</div>');
 
     /* A returned period carries the reason it came back. It sits with the buttons rather than in a
@@ -2659,7 +2660,7 @@
     var rt = host.querySelector('#incReturn');
     if (rt) rt.addEventListener('click', function () { incSendBack(d); });
     var gr = host.querySelector('#incGear');
-    if (gr) gr.addEventListener('click', function () { incThresholdsTray(d); });
+    if (gr) gr.addEventListener('click', function () { incTray(d); });
     if (!editable) return;
     /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
        again on blur, so tabbing away never loses the last keystroke. */
@@ -2903,54 +2904,176 @@
     }
   }
 
-  /* ── Thresholds tray ────────────────────────────────────────────────────────
-     The scheme lives in GX Core and Leaderboard's kiosk colouring reads the same discount target,
-     so this is not a Crew setting — it is the suite's, edited here because Crew owns compensation.
+  /* ── Incentive settings tray ────────────────────────────────────────────────
+     Leaderboard's design, ported rather than reinvented. Sky built it and a JSON textarea was a
+     worse answer to the same question: the tier lists are the fiddly part, and a labelled row per
+     tier says what each number DOES, where raw JSON only says what it is called.
 
-     Edited as JSON on purpose. A form would need a control per tier, and the tier LISTS are
-     variable-length and ORDER-SENSITIVE (matched high-to-low, first hit wins), which is exactly the
-     kind of thing a hand-built form gets wrong quietly. The engine validates the shape and refuses
-     an ascending tier list by name, so a typo is rejected with a sentence rather than paid out. */
-  function incThresholdsTray(d) {
-    var wrap = document.getElementById('incTray');
-    if (wrap) { wrap.parentNode.removeChild(wrap); return; }
-    var T = d.thresholds || {};
-    wrap = el('div', 'crew-inc-tray');
-    wrap.id = 'incTray';
-    wrap.innerHTML =
-      '<div class="crew-inc-tray-head"><strong>Incentive thresholds</strong>' +
-      '<button type="button" class="crew-inc-tray-x" id="incTrayX" aria-label="Close">✕</button></div>' +
-      '<p class="crew-inc-tray-note">Held in GX Core and read by Leaderboard too — the kiosk grades ' +
-      'discounts against <code>budtender.discountMaxPct</code>. Changing these does <strong>not</strong> ' +
-      'alter any period already approved or imported.</p>' +
-      '<textarea class="crew-inc-tray-json" id="incTrayJson" spellcheck="false"></textarea>' +
-      '<div class="crew-inc-tray-msg" id="incTrayMsg"></div>' +
-      '<div class="crew-inc-tray-btns">' +
-      '<button type="button" class="gx-btn gx-btn-green" id="incTraySave">Save thresholds</button>' +
-      '<button type="button" class="gx-btn" id="incTrayCancel">Cancel</button></div>';
-    ui.inc.insertBefore(wrap, ui.inc.firstChild);
-    var ta = wrap.querySelector('#incTrayJson');
-    ta.value = JSON.stringify(T, null, 2);
-    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
-    wrap.querySelector('#incTrayX').addEventListener('click', close);
-    wrap.querySelector('#incTrayCancel').addEventListener('click', close);
-    wrap.querySelector('#incTraySave').addEventListener('click', async function () {
-      var msg = wrap.querySelector('#incTrayMsg');
-      var parsed;
-      /* Parsed here as well as server-side so a stray comma is a red line under the box rather
-         than a round trip. The engine still validates — this is convenience, not the gate. */
-      try { parsed = JSON.parse(ta.value); }
-      catch (e) { msg.className = 'crew-inc-tray-msg is-bad'; msg.textContent = 'Not valid JSON: ' + e.message; return; }
-      msg.className = 'crew-inc-tray-msg'; msg.textContent = 'Saving…';
+     Every control writes into a working copy; nothing reaches GX Core until Save. The engine still
+     validates the whole object — in particular it refuses an ascending tier list, which no amount
+     of form design prevents. */
+  /* The tray's markup, split out so a test can round-trip it: build the controls from a scheme,
+     read them back by path, and assert nothing moved. That round trip is the only thing standing
+     between a mislabelled input and a bonus paid against the wrong number. */
+  function incTrayHtml(T) {
+    var b = T.budtender, m = T.manager, a = T.admin;
+    var goal = Number(b.discountMaxPct) || 0;
+    var mgrTight = Math.round(goal * 2 / 3 * 100) / 100;
+    function num(path, val, cls, step, min) {
+      return '<input type="number" data-path="' + esc(path) + '" ' +
+             'class="crew-tray-num' + (cls ? ' ' + cls : '') + '" ' +
+             'value="' + esc(String(val)) + '" step="' + (step || 1) + '"' +
+             (min == null ? '' : ' min="' + min + '"') + '>';
+    }
+    function row(label, when, reward) {
+      return '<div class="crew-tray-row"><div>' + label + '</div>' +
+             '<div class="crew-tray-when">' + when + '</div>' +
+             '<div class="crew-tray-reward">$' + reward + '</div></div>';
+    }
+      return '<div class="crew-tray-hd"><h3>Incentive settings</h3>' +
+        '<button type="button" class="crew-tray-x" id="incTrayX" aria-label="Close">✕</button></div>' +
+      '<div class="crew-tray-body">' +
+
+        '<div class="crew-tray-sec">Discount target</div>' +
+        '<div class="crew-tray-goal"><label for="thDisc">Discretionary discount goal</label>' +
+          '<span>' + num('budtender.discountMaxPct', b.discountMaxPct, '', 0.1, 0).replace('<input', '<input id="thDisc"') +
+          '<span class="crew-tray-pct">%</span></span></div>' +
+        '<div class="crew-tray-bands" id="thBands"></div>' +
+        '<p class="crew-tray-help">Budtenders earn the discount bonus at or under this. Manager ' +
+          'store-discount tiers follow this goal. Loyalty and automatic promos never count.</p>' +
+
+        '<div class="crew-tray-sec">Bonus thresholds<span>Earn it when → reward</span></div>' +
+
+        '<div class="crew-tray-card">' +
+          '<div class="crew-tray-card-hd">Budtenders' +
+            '<span class="crew-tray-qual">Qualify: ≥ ' + num('budtender.txnQualify', b.txnQualify, 'sm', 1, 0) +
+            ' txns · low-vol ≥ ' + num('budtender.txnQualifyLowVol', b.txnQualifyLowVol, 'sm', 1, 0) + '</span></div>' +
+          row('AOV', '≥ $ ' + num('budtender.aovTarget', b.aovTarget, 'sm', 1, 0), num('budtender.aovBonus', b.aovBonus, 'sm money', 5, 0)) +
+          row('Discount', '≤ <span id="thDiscEcho">' + esc(String(goal)) + '</span>% ' +
+              '<span class="crew-tray-tag">GOAL</span>', num('budtender.discountBonus', b.discountBonus, 'sm money', 5, 0)) +
+          row('Attendance', '100%', num('budtender.attendanceBonus', b.attendanceBonus, 'sm money', 5, 0)) +
+        '</div>' +
+
+        '<div class="crew-tray-card">' +
+          '<div class="crew-tray-card-hd">Store Managers</div>' +
+          m.salesTiers.map(function (t, i) {
+            return row(i === 0 ? 'Sales vs<br>goal' : '',
+                       '≥ ' + num('manager.salesTiers.' + i + '.pct', t.pct, 'sm', 1, 0) + ' %',
+                       num('manager.salesTiers.' + i + '.bonus', t.bonus, 'sm money', 25, 0));
+          }).join('') +
+          row('Store<br>discount', '<span class="crew-tray-tag">−33%</span> ≤ ' + mgrTight + '%',
+              num('manager.discountTiers.0.bonus', m.discountTiers[0].bonus, 'sm money', 25, 0)) +
+          row('', '<span class="crew-tray-tag">GOAL</span> ≤ <span class="thGoalEcho">' +
+              esc(String(goal)) + '</span>%', num('manager.discountTiers.1.bonus', m.discountTiers[1].bonus, 'sm money', 25, 0)) +
+          row('AOV', '≥ $ ' + num('manager.aovTarget', m.aovTarget, 'sm', 1, 0), num('manager.aovBonus', m.aovBonus, 'sm money', 25, 0)) +
+          row('Team att.', 'per member · 100%', num('manager.teamAttendancePerHead', m.teamAttendancePerHead, 'sm money', 5, 0)) +
+        '</div>' +
+
+        '<div class="crew-tray-card">' +
+          '<div class="crew-tray-card-hd">Admin (Chain)</div>' +
+          a.tiers.map(function (t, i) {
+            return row(i === 0 ? 'Chain sales' : '',
+                       '≥ ' + num('admin.tiers.' + i + '.pct', t.pct, 'sm', 1, 0) + ' %',
+                       num('admin.tiers.' + i + '.bonus', t.bonus, 'sm money', 50, 0));
+          }).join('') +
+        '</div>' +
+
+        '<div class="crew-tray-hours"><span>Hours per period <span class="crew-tray-pct">(for $/hr)</span></span>' +
+          num('hoursPerPeriod', T.hoursPerPeriod, '', 1, 1) + '</div>' +
+
+        /* Named rather than quietly missing. The discount RULES — which promos count as
+           discretionary — are still Leaderboard's: they feed the performance figures, which is the
+           half of this that did not move. Saying so beats a section that looks broken. */
+        '<p class="crew-tray-note"><strong>Discount rules</strong> — which promotions count against ' +
+          'a staff discount rate — still live in Leaderboard\'s settings, alongside the transaction ' +
+          'data they filter. They move here when the discount engine does.</p>' +
+        '<div class="crew-tray-msg" id="incTrayMsg"></div>' +
+      '</div>' +
+      '<div class="crew-tray-foot">' +
+        '<button type="button" class="gx-btn gx-btn-green" id="incTraySave">Save &amp; recalculate</button>' +
+      '</div>';
+  }
+
+  /* Read the controls back into a scheme, by PATH. */
+  function incTrayRead(base, inputs) {
+    var out = JSON.parse(JSON.stringify(base));
+    Array.prototype.forEach.call(inputs, function (n) {
+      var path = n.getAttribute('data-path');
+      if (!path) return;
+      var parts = path.split('.'), ref = out;
+      for (var k = 0; k < parts.length - 1; k++) ref = ref[parts[k]];
+      ref[parts[parts.length - 1]] = Number(n.value);
+    });
+    out.manager.discountTiers[0].maxPct = Math.round(out.budtender.discountMaxPct * 2 / 3 * 100) / 100;
+    out.manager.discountTiers[1].maxPct = out.budtender.discountMaxPct;
+    return out;
+  }
+
+  function incTray(d) {
+    if (document.getElementById('incTrayScrim')) return;
+    /* Deep copy: abandoning the tray must leave the live thresholds untouched, and these nest. */
+    var T = JSON.parse(JSON.stringify(d.thresholds || {}));
+    if (!T.budtender || !T.manager || !T.admin) { toast('No thresholds to edit', true); return; }
+
+    var scrim = el('div', 'crew-tray-scrim'); scrim.id = 'incTrayScrim';
+    var tray  = el('div', 'crew-tray');
+    tray.setAttribute('role', 'dialog');
+    tray.setAttribute('aria-label', 'Incentive settings');
+
+    /* Each input carries the PATH it writes to. The first version read the inputs back in DOM
+       order, which meant reordering a row — or adding one — silently shifted every value after it:
+       an AOV bonus landing in attendance, with nothing to see. A path is verbose and cannot do
+       that. */
+    var b = T.budtender, m = T.manager, a = T.admin;
+    var goal = Number(b.discountMaxPct) || 0;
+    /* The manager's store-discount tiers are DERIVED from this goal (goal × ⅔ and goal), which is
+       why they are shown as computed text rather than as editable numbers — only their dollar
+       amounts are stored. Making them look editable would invite somebody to set a cut-off that
+       the math then ignores. */
+    var mgrTight = Math.round(goal * 2 / 3 * 100) / 100;
+
+    tray.innerHTML = incTrayHtml(T);
+    document.body.appendChild(scrim);
+    document.body.appendChild(tray);
+
+    var inputs = tray.querySelectorAll('input');
+    function bands() {
+      var g = Number(tray.querySelector('#thDisc').value) || 0;
+      var amber = Math.round(g * 2 * 100) / 100;
+      tray.querySelector('#thBands').innerHTML =
+        '<div class="crew-tray-band g">≤ ' + g + '% GREEN</div>' +
+        '<div class="crew-tray-band a">≤ ' + amber + '% AMBER</div>' +
+        '<div class="crew-tray-band r">&gt; ' + amber + '% RED</div>';
+      tray.querySelector('#thDiscEcho').textContent = g;
+      Array.prototype.forEach.call(tray.querySelectorAll('.thGoalEcho'), function (n) { n.textContent = g; });
+    }
+    bands();
+    tray.querySelector('#thDisc').addEventListener('input', bands);
+
+    function close() {
+      if (scrim.parentNode) scrim.parentNode.removeChild(scrim);
+      if (tray.parentNode) tray.parentNode.removeChild(tray);
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+    scrim.addEventListener('click', close);
+    tray.querySelector('#incTrayX').addEventListener('click', close);
+
+    tray.querySelector('#incTraySave').addEventListener('click', async function () {
+      var out = incTrayRead(T, inputs);
+
+      var msg = tray.querySelector('#incTrayMsg');
+      msg.className = 'crew-tray-msg'; msg.textContent = 'Saving…';
       try {
         var r = await Engine.jsonp('incentive_thresholds',
-          { token: token(), save: JSON.stringify(parsed) }, { timeoutMs: 30000, retries: 1 });
+          { token: token(), save: JSON.stringify(out) }, { timeoutMs: 30000, retries: 1 });
         if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
         close();
-        toast('Thresholds saved — every open period recomputed');
+        toast('Thresholds saved — open periods recalculated');
         await loadIncentive(inc.pp || '');
       } catch (e) {
-        msg.className = 'crew-inc-tray-msg is-bad';
+        msg.className = 'crew-tray-msg is-bad';
         msg.textContent = (e && e.message) || 'Could not save';
       }
     });

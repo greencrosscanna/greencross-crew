@@ -31,6 +31,7 @@ const M = (function () {
   src = src.slice(0, cut) +
         '\n; return { incBudTable, incMgrTable, incAdminTable, incCsvRows, incDiscPct,\n' +
         '           incHeadActions, incMMDDYY, legalSortName, CAPSTONE_SECTIONS,\n' +
+        '           incTrayHtml, incTrayRead,\n' +
         '           calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
   const doc = { readyState: 'loading', currentScript: { src: 'crew.js?v=99' },
@@ -355,6 +356,62 @@ ok('the base cell rule is still the thing to beat', !!BASE);
   ok(cls + ' has a colour rule that out-specifies the base cell',
      !!rule && !!BASE && beats(rule.trim(), BASE));
 });
+
+/* ── the settings tray round-trips the scheme without moving a number ──
+   The tray is Leaderboard's design: a labelled control per threshold, which is far better to use
+   than raw JSON and far easier to get quietly wrong. The first version read the inputs back in DOM
+   ORDER, so adding or reordering a row would have shifted every value after it — an AOV bonus
+   landing in attendance, with nothing on screen to see. Each input now carries the path it writes
+   to, and this asserts the trip out and back is lossless. */
+function parseInputs(html) {
+  const out = [];
+  const re = /<input\b[^>]*data-path="([^"]+)"[^>]*value="([^"]*)"[^>]*>/g;
+  let m;
+  /* Capture per iteration — `m` is reassigned by exec, so a closure over it reads the LAST match
+     for every entry (and null once the loop ends). */
+  while ((m = re.exec(html))) {
+    const path = m[1], value = m[2];
+    out.push({ getAttribute: k => (k === 'data-path' ? path : null), value: value });
+  }
+  return out;
+}
+const trayHtml = M.incTrayHtml(T);
+const back = M.incTrayRead(JSON.parse(JSON.stringify(T)), parseInputs(trayHtml));
+ok('every threshold survives a trip through the tray untouched',
+   JSON.stringify(back) === JSON.stringify((function () {
+     const t = JSON.parse(JSON.stringify(T));
+     t.manager.discountTiers[0].maxPct = Math.round(t.budtender.discountMaxPct * 2 / 3 * 100) / 100;
+     t.manager.discountTiers[1].maxPct = t.budtender.discountMaxPct;
+     return t;
+   })()));
+
+/* Every editable threshold must actually HAVE a control — one silently missing means a value that
+   can never be changed from the screen it is displayed on. */
+const paths = parseInputs(trayHtml).map(i => i.getAttribute('data-path'));
+['budtender.discountMaxPct', 'budtender.txnQualify', 'budtender.txnQualifyLowVol',
+ 'budtender.aovTarget', 'budtender.aovBonus', 'budtender.discountBonus', 'budtender.attendanceBonus',
+ 'manager.aovTarget', 'manager.aovBonus', 'manager.teamAttendancePerHead',
+ 'manager.discountTiers.0.bonus', 'manager.discountTiers.1.bonus',
+ 'hoursPerPeriod'].forEach(function (p) {
+  ok('the tray edits ' + p, paths.indexOf(p) >= 0);
+});
+ok('every sales tier gets its own pair of controls',
+   T.manager.salesTiers.every((_, i) => paths.indexOf('manager.salesTiers.' + i + '.pct') >= 0 &&
+                                        paths.indexOf('manager.salesTiers.' + i + '.bonus') >= 0));
+ok('every admin tier does too',
+   T.admin.tiers.every((_, i) => paths.indexOf('admin.tiers.' + i + '.pct') >= 0 &&
+                                 paths.indexOf('admin.tiers.' + i + '.bonus') >= 0));
+/* The manager store-discount CUT-OFFS derive from the budtender goal — only the dollar amounts are
+   stored. Making them editable would invite setting a value the math then ignores. */
+ok('the derived manager discount cut-offs are NOT editable',
+   paths.indexOf('manager.discountTiers.0.maxPct') < 0 &&
+   paths.indexOf('manager.discountTiers.1.maxPct') < 0);
+/* An edit lands where it says it does. */
+const edited = parseInputs(trayHtml);
+edited.filter(i => i.getAttribute('data-path') === 'budtender.aovBonus')[0].value = '40';
+ok('changing one control changes only that threshold',
+   M.incTrayRead(JSON.parse(JSON.stringify(T)), edited).budtender.aovBonus === 40 &&
+   M.incTrayRead(JSON.parse(JSON.stringify(T)), edited).budtender.attendanceBonus === T.budtender.attendanceBonus);
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);

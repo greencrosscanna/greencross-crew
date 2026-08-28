@@ -582,24 +582,6 @@
     .crew-inc-att:disabled { cursor: default; }
     .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 10px 0 0;
       max-width: 760px; line-height: 1.5; }
-    .crew-inc-gear { flex: none; padding: 0 11px; font-size: 15px; line-height: 1; }
-    .crew-inc-tray { border: 1px solid var(--gx-border-strong); border-radius: 9px;
-      background: var(--crew-rail); padding: 14px 16px; margin: 0 0 18px; max-width: 720px; }
-    .crew-inc-tray-head { display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: 6px; color: var(--gx-text); font-size: 14px; }
-    .crew-inc-tray-x { background: none; border: 0; color: var(--gx-text-mute); cursor: pointer;
-      font-size: 14px; padding: 2px 4px; }
-    .crew-inc-tray-note { font-size: 12px; color: var(--gx-text-mute); margin: 0 0 10px;
-      line-height: 1.5; }
-    .crew-inc-tray-note code { background: var(--gx-surface-3); padding: 1px 4px; border-radius: 3px; }
-    .crew-inc-tray-json { width: 100%; min-height: 260px; box-sizing: border-box;
-      background: var(--gx-bg); border: 1px solid var(--gx-border); border-radius: 6px;
-      color: var(--gx-text); padding: 10px 12px; font-size: 12px; line-height: 1.5;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
-    .crew-inc-tray-msg { font-size: 12.5px; color: var(--gx-text-mute); min-height: 18px;
-      margin: 7px 0 2px; line-height: 1.5; }
-    .crew-inc-tray-msg.is-bad { color: #f0a6a6; }
-    .crew-inc-tray-btns { display: flex; gap: 8px; margin-top: 8px; }
     .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
     /* The reason a period came back sits with the buttons, not in a toast: the person who has to
        act on it is usually not the person who was looking when it arrived. */
@@ -630,7 +612,7 @@
       .gx-topnav, .crew-subnav, .crew-rail, .crew-pane,
       .gx-bug-fab, #gxBugFab, #gxBugOverlay, .gx-bug-modal,
       .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner,
-      .crew-inc-returned, .crew-inc-tray { display: none !important; }
+      .crew-inc-returned, .crew-tray, .crew-tray-scrim, .crew-inc-gear { display: none !important; }
       /* The two explanatory notes are for somebody reading the screen and deciding. The PDF is a
          payroll record that gets filed — it does not need to be told what Payroll means, and one
          of them pointed at a hover that paper does not have. */
@@ -675,6 +657,74 @@
       .crew-inc-badge.is-live { background: #fff !important; color: #0a7a3d !important;
         border: 1px solid #7ab98f !important; }
     }
+
+    /* ── Incentive settings tray ──────────────────────────────────────────────────
+       Leaderboard's design, brought over rather than reinvented — Sky designed it and
+       a JSON textarea was a worse answer to the same question. A right-hand drawer, so
+       the table it is about stays on screen behind it. */
+    .crew-inc-gear { position: absolute; top: 14px; right: 22px; z-index: 4;
+      width: 34px; height: 34px; padding: 0; font-size: 15px; line-height: 1;
+      display: flex; align-items: center; justify-content: center; }
+    .crew-inc { position: relative; }
+    .crew-tray-scrim { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 60; }
+    .crew-tray { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 100vw;
+      background: var(--gx-surface-2, #0f1512); border-left: 1px solid var(--gx-border);
+      z-index: 61; display: flex; flex-direction: column; }
+    .crew-tray-hd { display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px 12px; border-bottom: 1px solid var(--gx-border); flex: none; }
+    .crew-tray-hd h3 { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--gx-text-mute); }
+    .crew-tray-x { background: none; border: 0; color: var(--gx-text-mute); font-size: 16px;
+      cursor: pointer; padding: 2px 6px; }
+    .crew-tray-body { flex: 1 1 auto; overflow-y: auto; padding: 18px 20px 24px; }
+    .crew-tray-foot { flex: none; padding: 14px 20px; border-top: 1px solid var(--gx-border); }
+    .crew-tray-foot .gx-btn { width: 100%; justify-content: center; }
+    .crew-tray-sec { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: var(--gx-text-mute); margin: 22px 0 10px; display: flex; justify-content: space-between;
+      align-items: baseline; }
+    .crew-tray-sec:first-child { margin-top: 0; }
+    .crew-tray-sec span { font-weight: 500; letter-spacing: 0; text-transform: none; font-size: 11.5px; }
+    .crew-tray-goal { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .crew-tray-goal label { font-size: 15px; font-weight: 600; color: var(--gx-text); }
+    .crew-tray-num { width: 74px; text-align: center; background: var(--gx-surface-3);
+      border: 1px solid var(--gx-border-strong); border-radius: 7px; color: var(--gx-text);
+      padding: 8px 6px; font-size: 15px; font-weight: 700; font-family: inherit; }
+    .crew-tray-num.sm { width: 58px; padding: 5px 4px; font-size: 13px; }
+    .crew-tray-num.money { border-color: #2f6b45; color: var(--gx-green); }
+    .crew-tray-pct { color: var(--gx-text-mute); font-size: 13px; margin-left: 6px; }
+    /* The three bands are DERIVED from the goal, so they move when it does — the whole point of
+       showing them is that you can see what you are about to do to the board's colouring. */
+    .crew-tray-bands { display: flex; gap: 6px; margin: 12px 0 8px; }
+    .crew-tray-band { flex: 1; text-align: center; padding: 7px 4px; border-radius: 6px;
+      font-size: 11.5px; font-weight: 700; letter-spacing: .02em; }
+    .crew-tray-band.g { background: rgba(74,222,128,.12); color: #4ade80; border: 1px solid #2f6b45; }
+    .crew-tray-band.a { background: rgba(234,179,8,.12);  color: #eab308; border: 1px solid #6b5a1f; }
+    .crew-tray-band.r { background: rgba(248,113,113,.12); color: #f87171; border: 1px solid #6b2f2f; }
+    .crew-tray-help { font-size: 11.5px; color: var(--gx-text-mute); line-height: 1.55; margin: 0; }
+    .crew-tray-card { border: 1px solid var(--gx-border); border-radius: 9px; overflow: hidden;
+      margin-bottom: 12px; }
+    .crew-tray-card-hd { display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 10px 12px; background: var(--crew-rail); font-size: 13.5px;
+      font-weight: 700; color: var(--gx-text); flex-wrap: wrap; }
+    .crew-tray-qual { font-size: 11.5px; font-weight: 500; color: var(--gx-text-mute);
+      display: flex; align-items: center; gap: 5px; }
+    .crew-tray-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px;
+      align-items: center; padding: 8px 12px; border-top: 1px solid var(--crew-rule); }
+    .crew-tray-row > :first-child { font-size: 13px; color: var(--gx-text); }
+    .crew-tray-when { font-size: 12px; color: var(--gx-text-mute); display: flex;
+      align-items: center; gap: 5px; justify-content: flex-end; }
+    .crew-tray-tag { font-size: 9.5px; letter-spacing: .06em; color: var(--gx-text-mute);
+      border: 1px solid var(--gx-border); border-radius: 3px; padding: 1px 4px; }
+    .crew-tray-reward { display: flex; align-items: center; gap: 4px; color: var(--gx-text-mute);
+      font-size: 12px; }
+    .crew-tray-hours { display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 2px 0; font-size: 13px; color: var(--gx-text); }
+    .crew-tray-msg { font-size: 12.5px; color: var(--gx-text-mute); margin: 10px 0 0; line-height: 1.5; }
+    .crew-tray-msg.is-bad { color: #f0a6a6; }
+    .crew-tray-note { font-size: 11.5px; color: var(--gx-text-mute); line-height: 1.55;
+      margin: 16px 0 0; padding: 10px 12px; border: 1px dashed var(--gx-border);
+      border-radius: 7px; }
+    @media (max-width: 560px) { .crew-tray { width: 100vw; } }
   </style>
 </head>
 <body class="gx-app">
@@ -693,6 +743,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.333"></script>
+  <script src="crew.js?v=1.334"></script>
 </body>
 </html>
