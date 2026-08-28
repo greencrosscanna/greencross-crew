@@ -575,6 +575,24 @@
     .crew-inc-att:disabled { cursor: default; }
     .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 10px 0 0;
       max-width: 760px; line-height: 1.5; }
+    .crew-inc-gear { flex: none; padding: 0 11px; font-size: 15px; line-height: 1; }
+    .crew-inc-tray { border: 1px solid var(--gx-border-strong); border-radius: 9px;
+      background: var(--crew-rail); padding: 14px 16px; margin: 0 0 18px; max-width: 720px; }
+    .crew-inc-tray-head { display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 6px; color: var(--gx-text); font-size: 14px; }
+    .crew-inc-tray-x { background: none; border: 0; color: var(--gx-text-mute); cursor: pointer;
+      font-size: 14px; padding: 2px 4px; }
+    .crew-inc-tray-note { font-size: 12px; color: var(--gx-text-mute); margin: 0 0 10px;
+      line-height: 1.5; }
+    .crew-inc-tray-note code { background: var(--gx-surface-3); padding: 1px 4px; border-radius: 3px; }
+    .crew-inc-tray-json { width: 100%; min-height: 260px; box-sizing: border-box;
+      background: var(--gx-bg); border: 1px solid var(--gx-border); border-radius: 6px;
+      color: var(--gx-text); padding: 10px 12px; font-size: 12px; line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+    .crew-inc-tray-msg { font-size: 12.5px; color: var(--gx-text-mute); min-height: 18px;
+      margin: 7px 0 2px; line-height: 1.5; }
+    .crew-inc-tray-msg.is-bad { color: #f0a6a6; }
+    .crew-inc-tray-btns { display: flex; gap: 8px; margin-top: 8px; }
     .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
     /* The reason a period came back sits with the buttons, not in a toast: the person who has to
        act on it is usually not the person who was looking when it arrived. */
@@ -605,7 +623,7 @@
       .gx-topnav, .crew-subnav, .crew-rail, .crew-pane,
       .gx-bug-fab, #gxBugFab, #gxBugOverlay, .gx-bug-modal,
       .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner,
-      .crew-inc-returned { display: none !important; }
+      .crew-inc-returned, .crew-inc-tray { display: none !important; }
       /* The two explanatory notes are for somebody reading the screen and deciding. The PDF is a
          payroll record that gets filed — it does not need to be told what Payroll means, and one
          of them pointed at a hover that paper does not have. */
@@ -667,6 +685,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.330"></script>
+  <script src="crew.js?v=1.331"></script>
 </body>
 </html>

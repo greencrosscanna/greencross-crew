@@ -417,6 +417,8 @@ function route_(e) {
       // Is the Crew -> Leaderboard hop alive? Shape only, never figures. Secret, not a session,
       // so it can be checked from a shell instead of by a signed-in user hitting an error.
       case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
+      // Comp thresholds: GX Core holds them, Crew edits them, Leaderboard reads them.
+      case 'incentive_thresholds': return json_(incentiveThresholdsRoute_(p), p.callback);
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
       // record like the imported ones and can never be recomputed.
       case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
@@ -427,7 +429,6 @@ function route_(e) {
       case 'incentive_unapprove': return json_(incentiveUnapprove_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
-      // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
       // case 'export':       return json_(buildCapstoneExport_(p), p.callback);// payroll export (CSV/PDF)
       // case 'snapshot':     return json_(monthlySnapshot_(p), p.callback);    // monthly review snapshot
 
@@ -3525,6 +3526,11 @@ function getIncentive_(p) {
   var live = fetchLivePerf_(want);
   if (live.ok === false) return live;
   live.source = 'live';
+  /* GX Core is the source of truth for the scheme. Leaderboard sends its own read of the same kv
+     key, so these agree today — but if LB ever falls back to its local copy, Crew must not compute
+     against a number GX Core does not hold. */
+  var coreT = incentiveThresholds_();
+  if (coreT) live.thresholds = coreT;
   stampEmployeeIds_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
   var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
@@ -4160,6 +4166,113 @@ function incentiveUnapprove_(p) {
            note: 'copied to ' + VOID_TAB + ' — the period is editable again' };
 }
 function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reason']); }
+
+/* ══ Thresholds — GX Core holds them, Crew edits them ════════════════════════════════════════════
+ *
+ * They were a Leaderboard ScriptProperty, which was wrong twice: compensation policy is not the
+ * kiosk's, and LEADERBOARD'S OWN DISCOUNT COLOURING reads budtender.discountMaxPct to decide what
+ * counts as a good discount rate on the board every staff member sees. Two copies of that number
+ * means the board grades people against a goal nobody set on it.
+ *
+ * So they live in GX Core kv (`incentiveThresholds`) — deliberately NOT a `cfg.` key, because that
+ * prefix is public on ?action=config and comp policy should not be readable by anyone with the URL.
+ * Crew writes; Leaderboard and Crew both read.
+ */
+function incentiveThresholds_() {
+  var ok = function (t) { return t && t.budtender && t.manager && t.admin; };
+  try {
+    var t = JSON.parse(GXCore.getKv('incentiveThresholds') || 'null');
+    if (ok(t)) return t;
+  } catch (e) {}
+  return null;      // caller falls back to whatever Leaderboard sent
+}
+
+/**
+ * ?action=incentive_thresholds            read
+ * ?action=incentive_thresholds&save=…     write (approver only)
+ *
+ * WRITES THE WHOLE OBJECT, and validates it first. A partial write here is not a blanked column,
+ * it is a bonus scheme with a missing tier — and the failure would land on the next payroll rather
+ * than on the person who typed it.
+ */
+function incentiveThresholdsRoute_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  var raw = p.save == null ? '' : String(p.save);
+  if (!raw) {
+    return { ok: true, thresholds: incentiveThresholds_(), can_edit: canApprove_(auth),
+             source: 'gx-core' };
+  }
+  /* Editing the scheme is the approver's call, not any editor's. Mike prepares a period; he does
+     not move the bar people are measured against. */
+  if (!canApprove_(auth)) return { ok: false, error: 'only the approver can change the thresholds' };
+
+  var t;
+  try { t = JSON.parse(raw); } catch (e) { return { ok: false, error: 'thresholds are not valid JSON' }; }
+  var bad = thresholdProblems_(t);
+  if (bad.length) return { ok: false, error: 'rejected: ' + bad.join('; ') };
+
+  var before = incentiveThresholds_();
+  var r = GXCore.setKv ? GXCore.setKv('incentiveThresholds', JSON.stringify(t))
+                       : gxSetThresholdsViaWeb_(JSON.stringify(t));
+  if (r && r.ok === false) return r;
+
+  /* An audit line, because this changes what everybody earns and the kv tab keeps no history. */
+  try {
+    GXCore.addNote('crew', 'core-admin', 'Incentive thresholds changed by ' + (auth.user || '?'),
+      'before: ' + JSON.stringify(before) + '\nafter: ' + JSON.stringify(t), '', 'fyi');
+  } catch (e) {}
+  return { ok: true, thresholds: t, saved_by: auth.user || '' };
+}
+
+/* GXCore may expose no kv WRITER to bound libraries; the web route is secret-gated and does. */
+function gxSetThresholdsViaWeb_(json) {
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
+  var url = GXCORE_URL + '?action=set_config&key=incentiveThresholds' +
+            '&secret=' + encodeURIComponent(secret) + '&value=' + encodeURIComponent(json);
+  try {
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    var d = JSON.parse(res.getContentText());
+    if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'GX Core refused the write' };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: 'could not write to GX Core: ' + String((e && e.message) || e) };
+  }
+}
+
+/* Every rule here is one whose absence pays somebody the wrong amount rather than erroring. */
+function thresholdProblems_(t) {
+  var bad = [];
+  function num(v) { return typeof v === 'number' && isFinite(v); }
+  if (!t || typeof t !== 'object') return ['not an object'];
+  if (!num(t.hoursPerPeriod) || t.hoursPerPeriod <= 0) bad.push('hoursPerPeriod must be a positive number');
+  var b = t.budtender || {}, m = t.manager || {}, a = t.admin || {};
+  ['txnQualify', 'txnQualifyLowVol', 'aovTarget', 'aovBonus', 'discountMaxPct', 'discountBonus',
+   'attendanceBonus'].forEach(function (k) { if (!num(b[k])) bad.push('budtender.' + k + ' must be a number'); });
+  if (!Array.isArray(b.lowVolStores)) bad.push('budtender.lowVolStores must be a list');
+  ['aovTarget', 'aovBonus', 'teamAttendancePerHead'].forEach(function (k) {
+    if (!num(m[k])) bad.push('manager.' + k + ' must be a number');
+  });
+  if (!num(a.maxPerStore)) bad.push('admin.maxPerStore must be a number');
+  /* Tiers are matched HIGH TO LOW with a break on the first hit, so an ascending list silently pays
+     everyone the lowest tier they clear instead of the highest. Nothing else would catch it. */
+  function tiers(list, label, key) {
+    if (!Array.isArray(list) || !list.length) { bad.push(label + ' must be a non-empty list'); return; }
+    for (var i = 0; i < list.length; i++) {
+      if (!num(list[i][key]) || !num(list[i].bonus)) { bad.push(label + '[' + i + '] needs ' + key + ' and bonus'); return; }
+      if (i && list[i][key] > list[i - 1][key]) bad.push(label + ' must run highest-first — ' +
+        list[i][key] + ' comes after ' + list[i - 1][key] + ', so everyone would be paid the lowest tier they clear');
+    }
+  }
+  tiers(m.salesTiers, 'manager.salesTiers', 'pct');
+  tiers(a.tiers, 'admin.tiers', 'pct');
+  if (!Array.isArray(m.discountTiers) || m.discountTiers.length < 2) {
+    bad.push('manager.discountTiers needs two entries (only their bonus amounts are used)');
+  }
+  return bad;
+}
 
 function hrImport_(p, body) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };

@@ -96,10 +96,11 @@ function load(sheet) {
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
     ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
     ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('stampEmployeeIds_')}
+    ${grab('thresholdProblems_')}
     var NICKNAMES = Object.create(null);
     return { incentiveImport_: incentiveImport_, incentiveHistory_: incentiveHistory_,
              incentiveRelink_: incentiveRelink_, historyPeriods_: historyPeriods_,
-             stampEmployeeIds_: stampEmployeeIds_ };`;
+             stampEmployeeIds_: stampEmployeeIds_, thresholdProblems_: thresholdProblems_ };`;
   /* GX Core is INJECTED, not global — the engine calls it as a bound library. resolveStore is
      genuinely its job; the local store table this replaces is exactly what must not exist here.
      getEmployees reads through a mutable hook so a test can swap the registry, including for the
@@ -316,6 +317,48 @@ ok('a missing column is appended to an existing tab', hdr.length === HEADERS.len
 ok('and appended at the END, so existing columns keep their positions',
    hdr.slice(0, HEADERS.length - 2).join(',') === HEADERS.slice(0, HEADERS.length - 2).join(','));
 ok('the pre-existing row is left where it was', sheet.getDataRange().getValues()[1][0] === 'v0');
+
+/* ── the thresholds GX Core stores are validated before they can pay anybody ──
+   The scheme moved to GX Core so Crew can edit it and Leaderboard's kiosk colouring reads the same
+   discount target. It is edited as JSON, so the engine is the only thing standing between a typo
+   and a payroll run. Every rule below is one whose absence pays the wrong amount rather than
+   erroring. */
+const goodT = { hoursPerPeriod: 80,
+  budtender: { txnQualify: 200, txnQualifyLowVol: 150, lowVolStores: ['center'], aovTarget: 33,
+               aovBonus: 25, discountMaxPct: 1.5, discountBonus: 25, attendanceBonus: 15 },
+  manager: { salesTiers: [{ pct: 110, bonus: 300 }, { pct: 105, bonus: 200 }, { pct: 100, bonus: 100 }],
+             discountTiers: [{ maxPct: 1.5, bonus: 100 }, { maxPct: 2, bonus: 50 }],
+             aovTarget: 33, aovBonus: 50, teamAttendancePerHead: 25 },
+  admin: { tiers: [{ pct: 110, bonus: 600 }, { pct: 100, bonus: 300 }], maxPerStore: 50 } };
+const clone = () => JSON.parse(JSON.stringify(goodT));
+
+ok('a complete scheme is accepted', M.thresholdProblems_(goodT).length === 0);
+
+/* THE ONE THAT PAYS EVERYBODY WRONG AND LOOKS FINE. Tiers are matched high-to-low with a break on
+   the first hit, so an ascending list silently pays everyone the LOWEST tier they clear. Nothing
+   else in the system would notice. */
+const asc = clone();
+asc.manager.salesTiers = [{ pct: 100, bonus: 100 }, { pct: 105, bonus: 200 }, { pct: 110, bonus: 300 }];
+const ascErr = M.thresholdProblems_(asc);
+ok('an ascending sales tier list is refused', ascErr.length > 0);
+ok('and the refusal says WHY, not just "invalid"',
+   /lowest tier they clear/.test(ascErr.join(' ')));
+const ascAdmin = clone();
+ascAdmin.admin.tiers = [{ pct: 100, bonus: 300 }, { pct: 110, bonus: 600 }];
+ok('the admin tiers are checked the same way', M.thresholdProblems_(ascAdmin).length > 0);
+
+ok('a missing number is named', /discountMaxPct/.test(
+   M.thresholdProblems_((function () { const t = clone(); delete t.budtender.discountMaxPct; return t; })()).join(' ')));
+ok('a string where a number belongs is refused', M.thresholdProblems_(
+   (function () { const t = clone(); t.budtender.aovTarget = '33'; return t; })()).length > 0);
+ok('hoursPerPeriod of zero is refused — it divides the $/hr column', M.thresholdProblems_(
+   (function () { const t = clone(); t.hoursPerPeriod = 0; return t; })()).length > 0);
+ok('lowVolStores must be a list — a bare string would match by character',
+   M.thresholdProblems_((function () { const t = clone(); t.budtender.lowVolStores = 'center'; return t; })()).length > 0);
+ok('an empty tier list is refused', M.thresholdProblems_(
+   (function () { const t = clone(); t.manager.salesTiers = []; return t; })()).length > 0);
+ok('junk is refused without throwing', M.thresholdProblems_(null).length > 0 &&
+   M.thresholdProblems_('nope').length > 0);
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive history: all passed');
 process.exit(fail ? 1 : 0);

@@ -2523,6 +2523,13 @@
       h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Print PDF</button>');
     }
     h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
+    /* The scheme itself, not this period. Approver only: Mike prepares a period, he does not move
+       the bar people are measured against. */
+    if (d.can_approve) {
+      h.push('<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
+             'title="Incentive thresholds — targets, tiers and bonus amounts" ' +
+             'aria-label="Incentive thresholds">⚙</button>');
+    }
     h.push('</div>');
 
     /* A returned period carries the reason it came back. It sits with the buttons rather than in a
@@ -2647,6 +2654,8 @@
     if (sd) sd.addEventListener('click', function () { incSendForApproval(d); });
     var rt = host.querySelector('#incReturn');
     if (rt) rt.addEventListener('click', function () { incSendBack(d); });
+    var gr = host.querySelector('#incGear');
+    if (gr) gr.addEventListener('click', function () { incThresholdsTray(d); });
     if (!editable) return;
     /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
        again on blur, so tabbing away never loses the last keystroke. */
@@ -2888,6 +2897,59 @@
     } catch (e) {
       toast('Could not send back: ' + ((e && e.message) || 'unknown'), true);
     }
+  }
+
+  /* ── Thresholds tray ────────────────────────────────────────────────────────
+     The scheme lives in GX Core and Leaderboard's kiosk colouring reads the same discount target,
+     so this is not a Crew setting — it is the suite's, edited here because Crew owns compensation.
+
+     Edited as JSON on purpose. A form would need a control per tier, and the tier LISTS are
+     variable-length and ORDER-SENSITIVE (matched high-to-low, first hit wins), which is exactly the
+     kind of thing a hand-built form gets wrong quietly. The engine validates the shape and refuses
+     an ascending tier list by name, so a typo is rejected with a sentence rather than paid out. */
+  function incThresholdsTray(d) {
+    var wrap = document.getElementById('incTray');
+    if (wrap) { wrap.parentNode.removeChild(wrap); return; }
+    var T = d.thresholds || {};
+    wrap = el('div', 'crew-inc-tray');
+    wrap.id = 'incTray';
+    wrap.innerHTML =
+      '<div class="crew-inc-tray-head"><strong>Incentive thresholds</strong>' +
+      '<button type="button" class="crew-inc-tray-x" id="incTrayX" aria-label="Close">✕</button></div>' +
+      '<p class="crew-inc-tray-note">Held in GX Core and read by Leaderboard too — the kiosk grades ' +
+      'discounts against <code>budtender.discountMaxPct</code>. Changing these does <strong>not</strong> ' +
+      'alter any period already approved or imported.</p>' +
+      '<textarea class="crew-inc-tray-json" id="incTrayJson" spellcheck="false"></textarea>' +
+      '<div class="crew-inc-tray-msg" id="incTrayMsg"></div>' +
+      '<div class="crew-inc-tray-btns">' +
+      '<button type="button" class="gx-btn gx-btn-green" id="incTraySave">Save thresholds</button>' +
+      '<button type="button" class="gx-btn" id="incTrayCancel">Cancel</button></div>';
+    ui.inc.insertBefore(wrap, ui.inc.firstChild);
+    var ta = wrap.querySelector('#incTrayJson');
+    ta.value = JSON.stringify(T, null, 2);
+    function close() { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }
+    wrap.querySelector('#incTrayX').addEventListener('click', close);
+    wrap.querySelector('#incTrayCancel').addEventListener('click', close);
+    wrap.querySelector('#incTraySave').addEventListener('click', async function () {
+      var msg = wrap.querySelector('#incTrayMsg');
+      var parsed;
+      /* Parsed here as well as server-side so a stray comma is a red line under the box rather
+         than a round trip. The engine still validates — this is convenience, not the gate. */
+      try { parsed = JSON.parse(ta.value); }
+      catch (e) { msg.className = 'crew-inc-tray-msg is-bad'; msg.textContent = 'Not valid JSON: ' + e.message; return; }
+      msg.className = 'crew-inc-tray-msg'; msg.textContent = 'Saving…';
+      try {
+        var r = await Engine.jsonp('incentive_thresholds',
+          { token: token(), save: JSON.stringify(parsed) }, { timeoutMs: 30000, retries: 1 });
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
+        close();
+        toast('Thresholds saved — every open period recomputed');
+        await loadIncentive(inc.pp || '');
+      } catch (e) {
+        msg.className = 'crew-inc-tray-msg is-bad';
+        msg.textContent = (e && e.message) || 'Could not save';
+      }
+    });
   }
 
   async function loadIncentive(ppStart) {
