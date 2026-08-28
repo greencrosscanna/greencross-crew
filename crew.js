@@ -2246,13 +2246,22 @@
      differential test in tests/incentive_math_test.js drives. */
   function incKey(r) { return (r && (r.employee_id || r.nameKey)) || ''; }
 
-  function incInput(inputs, key) {
+  /* SPIFF is READ, not typed — Sky: "the goal is there is no typing needed… I'm trying to take
+     human error out of the equation." The figure comes from SPIFF's progress cache, and a manual
+     entry only wins when somebody deliberately made one, because Mike still overrides a miss.
+     An override that a background refresh silently reverted would be worse than no automation:
+     he would fix it, watch it come back, and stop trusting the column. */
+  function incInput(inputs, key, row) {
     var i = inputs && inputs[key];
-    return { att: !!(i && i.att), spiff: (i && +i.spiff) || 0 };
+    var manual = i && i.spiff !== '' && i.spiff != null ? +i.spiff : null;
+    var earned = row && row.spiff_earned != null ? Number(row.spiff_earned) : null;
+    return { att: !!(i && i.att),
+             spiff: manual != null ? manual : (earned || 0),
+             spiffEarned: earned, spiffManual: manual };
   }
 
   function calcBud(b, T, inputs) {
-    var t = T.budtender, i = incInput(inputs, incKey(b));
+    var t = T.budtender, i = incInput(inputs, incKey(b), b);
     var low  = (t.lowVolStores || []).indexOf(b.storeSlug) !== -1;
     var qual = b.txn >= (low ? t.txnQualifyLowVol : t.txnQualify);
     var aovB = (qual && b.aov >= t.aovTarget) ? t.aovBonus : 0;
@@ -2261,6 +2270,10 @@
     var bonus = aovB + disB + attB + i.spiff;
     return {
       qual: qual, aovB: aovB, disB: disB, attB: attB, spiff: i.spiff,
+      /* Carried through so the cell can say where its number came from — a measured figure and a
+         typed one are different claims about vendor money. The differential test compares only
+         qual/bonus/payroll/hr, so these ride along without touching the arithmetic. */
+      spiffEarned: i.spiffEarned, spiffManual: i.spiffManual,
       bonus: bonus, payroll: bonus - i.spiff, hr: bonus / T.hoursPerPeriod
     };
   }
@@ -2269,12 +2282,12 @@
      transaction bar. The manager's job is that the team showed up, not that it sold enough. */
   function incTeamAtt(budtenders, slug, inputs) {
     return (budtenders || []).filter(function (b) {
-      return b.storeSlug === slug && incInput(inputs, incKey(b)).att;
+      return b.storeSlug === slug && incInput(inputs, incKey(b), b).att;
     }).length;
   }
 
   function calcMgr(mgr, T, inputs, budtenders) {
-    var t = T.manager, i = incInput(inputs, incKey(mgr));
+    var t = T.manager, i = incInput(inputs, incKey(mgr), mgr);
     var pct = mgr.target > 0 ? mgr.sales / mgr.target * 100 : 0;
 
     var sB = 0;
@@ -2297,6 +2310,7 @@
     var payroll = sB + dB + aB + tA;
     return {
       pct: pct, salesB: sB, discB: dB, aovB: aB, teamA: tA, spiff: i.spiff,
+      spiffEarned: i.spiffEarned, spiffManual: i.spiffManual,
       payroll: payroll, bonus: payroll + i.spiff, hr: (payroll + i.spiff) / T.hoursPerPeriod
     };
   }
@@ -2493,6 +2507,21 @@
            '<strong>Payroll</strong> is the company’s share — it excludes SPIFF, which vendors ' +
            'fund — and it is the only figure the Capstone export carries. Hover a payroll figure to ' +
            'see what makes it up.</p>');
+    var sp = d.spiff;
+    if (!isImported && sp) {
+      if (sp.ok === false) {
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ SPIFF earnings could not be read (' +
+               esc(sp.error) + '). The SPIFF column shows only what has been entered by hand.</p>');
+      } else {
+        h.push('<p class="crew-inc-note">SPIFF earnings read from the SPIFF app' +
+               (sp.refreshed_at ? ', last measured ' + esc(sp.refreshed_at) : '') + '. ' +
+               esc(sp.matched) + ' of ' + esc(sp.people) + ' people matched.' +
+               (sp.unmatched && sp.unmatched.length
+                 ? ' <strong>Owed but not on this board:</strong> ' + esc(sp.unmatched.join(', ')) +
+                   ' — check they are on the roster.'
+                 : '') + '</p>');
+      }
+    }
     if (isImported) {
       h.push('<p class="crew-inc-note">These are the figures from the payout report for this period, ' +
              'imported once and never recalculated. The discount column in those reports measured ' +
@@ -2611,7 +2640,7 @@
     var rows = buds.map(function (b) {
       var c = calcOf(b);
       var dp = incDiscPct(b);
-      var i = incInputs()[incKey(b)] || {};
+      var i = incInput(incInputs(), incKey(b), b);
       var tip = isImported ? '' : ' title="' + esc(
         (c.qual ? 'qualified' : 'did not qualify — ' + (b.txn || 0) + ' transactions') +
         ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
@@ -2639,11 +2668,23 @@
       '<th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
+  /* The cell says where its number came from. A figure SPIFF measured and a figure somebody typed
+     are different claims about vendor money, and the one case worth seeing at a glance is where
+     they disagree — that is either a miss Mike corrected or a SPIFF read that is wrong. */
   function incSpiffCell(r, c, editable) {
     var key = incKey(r);
-    if (!editable) return '<span class="crew-inc-zero">' + esc(c.spiff ? m0(c.spiff) : '—') + '</span>';
-    return '<input type="number" min="0" step="5" class="crew-inc-spiff" data-k="' + esc(key) +
-           '" value="' + esc(String(c.spiff || 0)) + '" aria-label="SPIFF for ' + esc(incName(r)) + '">';
+    var earned = c.spiffEarned, manual = c.spiffManual;
+    var overridden = manual != null && earned != null && manual !== earned;
+    var tip = overridden ? ' title="' + esc('SPIFF measured ' + m0(earned) + ' — overridden to ' +
+                                            m0(manual)) + '"'
+            : (earned != null && earned > 0 ? ' title="From the SPIFF programs running this period"' : '');
+    if (!editable) {
+      return '<span class="' + (overridden ? 'crew-inc-over' : 'crew-inc-zero') + '"' + tip + '>' +
+             esc(c.spiff ? m0(c.spiff) : '—') + '</span>';
+    }
+    return '<input type="number" min="0" step="5" class="crew-inc-spiff' +
+           (overridden ? ' is-over' : '') + '" data-k="' + esc(key) + '"' + tip +
+           ' value="' + esc(String(c.spiff || 0)) + '" aria-label="SPIFF for ' + esc(incName(r)) + '">';
   }
 
   function incWire(host, d, isImported, editable) {

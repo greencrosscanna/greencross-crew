@@ -442,5 +442,37 @@ ok('the always-excluded footer states both counts',
 ok('discount codes are shown, since two rules can share a name',
    /ist-code">Employee25</.test(discs));
 
+/* ── SPIFF is read, not typed ──
+   Sky: "the goal is there is no typing needed… I'm trying to take human error out of the equation."
+   The figure comes from SPIFF's progress cache; a manual entry wins only when somebody deliberately
+   made one. An override that a background refresh silently reverted would be worse than no
+   automation — Mike would fix it, watch it come back, and stop trusting the column. */
+const spRow = { employee_id: 'sp1', nameKey: 'sp1', storeSlug: 'bend', name: 'Sold Lots',
+                txn: 400, aov: 40, discount: 0.001, spiff_earned: 25 };
+ok('a measured SPIFF lands in the bonus with nothing typed',
+   M.calcBud(spRow, T, {}).spiff === 25);
+ok('and it is excluded from payroll, like any other SPIFF',
+   M.calcBud(spRow, T, {}).payroll === M.calcBud(Object.assign({}, spRow, { spiff_earned: 0 }), T, {}).payroll);
+
+/* An explicit manual entry overrides the measurement — that is the miss Mike is allowed to fix. */
+ok('a manual entry overrides what SPIFF measured',
+   M.calcBud(spRow, T, { sp1: { att: false, spiff: 40 } }).spiff === 40);
+/* Zero is a real override, not an absence: "SPIFF says 25, but they did not actually earn it." */
+ok('an explicit zero overrides too, rather than falling back to the measurement',
+   M.calcBud(spRow, T, { sp1: { att: false, spiff: 0 } }).spiff === 0);
+/* An empty box is NOT an override — it is nobody having typed anything. */
+ok('an empty entry falls back to the measurement',
+   M.calcBud(spRow, T, { sp1: { att: true, spiff: '' } }).spiff === 25);
+
+/* The cell says where its number came from, because a measured figure and a typed one are
+   different claims about vendor money. */
+M.inc.data = { inputs: { sp1: { att: false, spiff: 40 } } };
+const over = M.incBudTable([spRow], b => M.calcBud(b, T, M.inc.data.inputs), false, true, T);
+ok('an overridden SPIFF is marked and says what was measured',
+   /is-over/.test(over) && /SPIFF measured \$25/.test(over));
+M.inc.data = { inputs: {} };
+const plain = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
+ok('an un-overridden one is not marked', !/is-over/.test(plain));
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);

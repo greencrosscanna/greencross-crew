@@ -580,6 +580,11 @@
       color: var(--gx-text); padding-right: 0; }
     .crew-inc-att { width: 15px; height: 15px; accent-color: var(--gx-green); cursor: pointer; }
     .crew-inc-att:disabled { cursor: default; }
+    /* An overridden SPIFF reads amber — not an error, but a human decision that replaced a
+       measurement, and the one thing on this column worth spotting from across the table. */
+    .crew-inc-over { color: #eab308; font-weight: 700; }
+    .crew-inc-spiff.is-over { border-color: #6b5a1f; color: #eab308; }
+    .crew-inc-warn { color: #f0a6a6; }
     .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 10px 0 0;
       max-width: 760px; line-height: 1.5; }
     .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
@@ -870,6 +875,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.335"></script>
+  <script src="crew.js?v=1.336"></script>
 </body>
 </html>

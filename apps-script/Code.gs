@@ -3503,6 +3503,81 @@ function incentiveProbe_(p) {
   };
 }
 
+/* ══ SPIFF — vendor money, read not typed ═══════════════════════════════════════════════════════
+ *
+ * Sky, 2026-08-27: "the goal is there is no typing needed… I'm trying to take human error out of
+ * the equation." So the SPIFF column is populated from what SPIFF actually measured, and Mike
+ * overrides only when something is a miss.
+ *
+ * Read from SPIFF's progress cache, never computed here. SPIFF owns the sell-through, the targets
+ * and the payout rule; Crew reads a finished figure. Computing it a second time would be a second
+ * answer to "what does this person get", and the vendor is being sent SPIFF's number.
+ *
+ * App-to-app again, and temporary for the same reason as the Leaderboard hop: it goes when GX Core
+ * carries the slice. `spiffProgress` in GX Core kv holds the URL so a redeploy is a config change.
+ */
+function spiffProgressFor_(ppStart) {
+  var base = '';
+  try { base = String(GXCore.getKv('spiffProgress') || ''); } catch (e) {}
+  if (!base) return { ok: false, error: 'no SPIFF engine URL in GX Core kv (key spiffProgress)' };
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
+  var url = base + '?action=progress&secret=' + encodeURIComponent(secret) +
+            (ppStart ? '&pay_period=' + encodeURIComponent(ppStart) : '');
+  try {
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) return { ok: false, error: 'SPIFF returned HTTP ' + res.getResponseCode() };
+    var d = JSON.parse(res.getContentText());
+    if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'SPIFF refused' };
+    return d;
+  } catch (e) {
+    return { ok: false, error: 'could not reach SPIFF: ' + String((e && e.message) || e) };
+  }
+}
+
+/* Fold SPIFF's earnings onto the live rows. Matched on employee_id, with a displayed-name fallback
+ * for anyone SPIFF could not resolve — SPIFF attributes from Dutchie's completedByUser and its own
+ * source comment anticipates the roster being seeded, which it now is.
+ *
+ * The computed figure does NOT overwrite a manual entry. Mike can override a miss, and an override
+ * that a background refresh silently reverted would be worse than no automation at all: he would
+ * fix it, watch it come back, and stop trusting the column. Both are returned; the screen shows the
+ * computed one, marks a row where they disagree, and the export uses whichever is in force. */
+function applySpiffEarnings_(live, ppStart) {
+  var sp = spiffProgressFor_(ppStart);
+  if (sp.ok === false) { live.spiff = { ok: false, error: sp.error }; return; }
+
+  var byId = Object.create(null), byName = Object.create(null);
+  (sp.by_employee || []).forEach(function (e) {
+    if (e.employee_id) byId[String(e.employee_id)] = e;
+    if (e.name) byName[nameToKey_(e.name)] = e;
+  });
+  var matched = 0, unmatched = [];
+  function fold(r) {
+    if (!r) return;
+    var e = byId[String(r.employee_id || '')] ||
+            byName[nameToKey_(r.name)] || byName[nameToKey_(displayNameOf_(r))];
+    if (!e) return;
+    r.spiff_earned = Number(e.earned) || 0;
+    r.spiff_programs = e.programs || [];
+    matched++;
+  }
+  (live.budtenders || []).forEach(fold);
+  (live.managers || []).forEach(fold);
+  (sp.by_employee || []).forEach(function (e) {
+    var onBoard = (live.budtenders || []).concat(live.managers || []).some(function (r) {
+      return String(r.employee_id || '') === String(e.employee_id || '') ||
+             nameToKey_(r.name) === nameToKey_(e.name);
+    });
+    /* Somebody SPIFF is paying who is not on this period's performance slice — a leaver, or a
+       name the connector could not resolve. Reported rather than dropped: unpaid vendor money is
+       the thing this whole column exists to stop being missed. */
+    if (!onBoard && (Number(e.earned) || 0) > 0) unmatched.push(e.name + ' ($' + e.earned + ')');
+  });
+  live.spiff = { ok: true, refreshed_at: sp.refreshed_at || '', matched: matched,
+                 unmatched: unmatched, people: (sp.by_employee || []).length };
+}
+
 /**
  * ?action=incentive[&pp_start=YYYY-MM-DD]
  * Admin-gated through GX Core's own permissions (requireCrew_ + canEdit_) — Crew is admin-only and
@@ -3537,6 +3612,7 @@ function getIncentive_(p) {
   if (coreT) live.thresholds = coreT;
   stampEmployeeIds_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
+  applySpiffEarnings_(live, live.payPeriod.start);
   var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
   live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
                     decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',

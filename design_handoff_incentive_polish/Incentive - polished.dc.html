@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GX Crew — Incentive (polished)</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+
+<helmet>
+<style>
+  body { margin:0; background:#07100c; }
+  a { color:#4ade80; text-decoration:none; }
+  a:hover { color:#86efac; }
+  .inc-tbl td, .inc-tbl th { white-space:nowrap; }
+  .inc-tbl tbody tr:hover td { background:#101614; }
+  .b-tbl tbody tr:hover td { background:#121917; }
+</style>
+</helmet>
+
+<section style="padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+<div id="1b" style="display:flex;flex-direction:column;gap:10px;">
+      
+
+      <div style="box-sizing:border-box;width:1400px;height:940px;overflow:hidden;background:#0a0e0d;border:1px solid #232a27;border-radius:10px;display:flex;flex-direction:column;">
+        <!-- topnav (unchanged) -->
+        <div style="flex:none;min-height:52px;display:flex;align-items:center;gap:22px;padding:0 18px;background:#121715;border-bottom:1px solid #232a27;">
+          <div style="display:flex;align-items:center;gap:9px;">
+            <img src="https://greencrosscanna.github.io/greencross-gx-theme/gx-logo.png" alt="Green Cross" style="height:22px;display:block;">
+            <span style="font-size:11px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:#5e6864;">Crew</span>
+          </div>
+          <div style="display:flex;align-items:stretch;gap:2px;align-self:stretch;">
+            <button type="button" style="background:none;border:0;padding:0 14px;font:inherit;font-size:13px;font-weight:600;color:#8a958f;cursor:pointer;">Roster</button>
+            <button type="button" style="background:none;border:0;padding:0 14px;font:inherit;font-size:13px;font-weight:600;color:#e6ece9;cursor:pointer;box-shadow:inset 0 -2px 0 #4ade80;">Incentive</button>
+          </div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:16px;">
+            <div style="text-align:right;line-height:1.2;">
+              <div style="font-size:13px;font-weight:600;color:#e6ece9;font-variant-numeric:tabular-nums;">2:41 PM</div>
+              <div style="font-size:10.5px;color:#5e6864;">Thu Aug 27</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 10px 4px 4px;border:1px solid #232a27;border-radius:999px;background:#161c1a;">
+              <span style="box-sizing:border-box;width:24px;height:24px;border-radius:50%;background:#1a221f;border:1px solid #2e3733;display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:700;color:#8a958f;">MK</span>
+              <span style="font-size:12px;color:#e6ece9;">Mike</span>
+              <span style="font-size:9px;color:#5e6864;">▾</span>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex:1 1 auto;overflow-y:auto;background:#0a0e0d;">
+          <!-- header band: title + period + actions -->
+          <div style="background:#0d1211;border-bottom:1px solid #232a27;padding:16px 22px 18px;">
+            <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap;">
+              <div style="flex:1 1 auto;min-width:0;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="font-size:20px;font-weight:700;letter-spacing:-.3px;color:#e6ece9;">Incentive</div>
+                  <span style="display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 7px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:#14251c;color:#4ade80;border:1px solid #24503a;">
+                    <span style="box-sizing:border-box;width:6px;height:6px;border-radius:50%;background:#4ade80;display:inline-block;"></span>Live
+                  </span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap;">
+                  <div style="display:flex;align-items:center;background:#161c1a;border:1px solid #232a27;border-radius:8px;overflow:hidden;">
+                    <button type="button" aria-label="Previous period" style="background:none;border:0;border-right:1px solid #232a27;color:#8a958f;font:inherit;font-size:13px;padding:6px 10px;cursor:pointer;">‹</button>
+                    <select aria-label="Pay period" style="background:transparent;border:0;color:#e6ece9;font:inherit;font-size:13px;font-weight:600;padding:6px 8px;cursor:pointer;outline:none;">
+                      <option>Aug 17 – Aug 30, 2026</option>
+                      <option>Aug 3 – Aug 16, 2026 · as paid</option>
+                      <option>Jul 20 – Aug 2, 2026 · as paid</option>
+                    </select>
+                    <button type="button" aria-label="Next period" style="background:none;border:0;border-left:1px solid #232a27;color:#2e3733;font:inherit;font-size:13px;padding:6px 10px;cursor:default;">›</button>
+                  </div>
+                  <span style="font-size:12px;color:#5e6864;">Current period · closes in 3 days · 13 people</span>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <button type="button" style="background:#4ade80;border:1px solid #4ade80;border-radius:7px;color:#06210f;font:inherit;font-size:12.5px;font-weight:700;padding:8px 14px;cursor:pointer;">Print PDF</button>
+                <button type="button" style="background:#161c1a;border:1px solid #2e3733;border-radius:7px;color:#8a958f;font:inherit;font-size:12.5px;font-weight:600;padding:8px 14px;cursor:pointer;">Export Payroll CSV</button>
+                <button type="button" title="Incentive settings — targets, tiers and bonus amounts" aria-label="Incentive settings" style="box-sizing:border-box;width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;background:#161c1a;border:1px solid #2e3733;border-radius:7px;color:#8a958f;font-size:15px;cursor:pointer;">⚙</button>
+              </div>
+            </div>
+
+            <!-- totals as tiles -->
+            <div style="display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:10px;margin-top:16px;max-width:820px;">
+              <div style="background:#121715;border:1px solid #232a27;border-radius:10px;padding:12px 14px;">
+                <div style="font-size:22px;font-weight:700;letter-spacing:-.4px;color:#e6ece9;font-variant-numeric:tabular-nums;">$1,075</div>
+                <div style="font-size:10.5px;color:#5e6864;margin-top:3px;text-transform:uppercase;letter-spacing:.06em;">Manager bonuses</div>
+              </div>
+              <div style="background:#121715;border:1px solid #232a27;border-radius:10px;padding:12px 14px;">
+                <div style="font-size:22px;font-weight:700;letter-spacing:-.4px;color:#e6ece9;font-variant-numeric:tabular-nums;">$355</div>
+                <div style="font-size:10.5px;color:#5e6864;margin-top:3px;text-transform:uppercase;letter-spacing:.06em;">Budtender bonuses</div>
+              </div>
+              <div style="background:#121715;border:1px solid #232a27;border-radius:10px;padding:12px 14px;">
+                <div style="font-size:22px;font-weight:700;letter-spacing:-.4px;color:#e6ece9;font-variant-numeric:tabular-nums;">$300</div>
+                <div style="font-size:10.5px;color:#5e6864;margin-top:3px;text-transform:uppercase;letter-spacing:.06em;">Admin</div>
+              </div>
+              <div style="background:#121715;border:1px solid #24503a;border-radius:10px;padding:12px 14px;">
+                <div style="font-size:22px;font-weight:700;letter-spacing:-.4px;color:#4ade80;font-variant-numeric:tabular-nums;">$1,730</div>
+                <div style="font-size:10.5px;color:#5e6864;margin-top:3px;text-transform:uppercase;letter-spacing:.06em;">Total payroll</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="padding:20px 22px 60px;">
+            <!-- ADMIN -->
+            <div style="display:flex;align-items:baseline;gap:9px;margin:0 0 8px;">
+              <span style="font-size:11.5px;font-weight:700;color:#8a958f;text-transform:uppercase;letter-spacing:.1em;">Admin</span>
+              <span style="font-size:11.5px;color:#5e6864;">1 person</span>
+            </div>
+            <div style="overflow:hidden;border:1px solid #232a27;border-radius:9px;background:#0d1211;">
+              <table class="b-tbl" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
+                <thead><tr>
+                  <th style="box-sizing:border-box;width:186px;text-align:left;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Name</th>
+                  <th style="box-sizing:border-box;width:143px;background:#121715;border-bottom:1px solid #232a27;"></th>
+                  <th style="box-sizing:border-box;width:115px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;border-left:1px solid #232a27;">Target</th>
+                  <th style="box-sizing:border-box;width:115px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Actual</th>
+                  <th style="box-sizing:border-box;width:88px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">% Goal</th>
+                  <th colspan="4" style="box-sizing:border-box;width:401px;background:#121715;border-bottom:1px solid #232a27;"></th>
+                  <th style="box-sizing:border-box;width:99px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;border-left:1px solid #232a27;">Bonus</th>
+                  <th style="box-sizing:border-box;width:88px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">$/hr</th>
+                  <th style="box-sizing:border-box;width:119px;text-align:right;padding:9px 14px 9px 12px;font-size:10.5px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Payroll</th>
+                </tr></thead>
+                <tbody><tr>
+                  <td style="text-align:left;padding:9px 12px;color:#e6ece9;font-weight:600;">Tawny Vierra</td>
+                  <td></td>
+                  <td style="text-align:right;padding:9px 12px;color:#8a958f;font-variant-numeric:tabular-nums;border-left:1px solid #1c2320;">$336,000</td>
+                  <td style="text-align:right;padding:9px 12px;color:#e6ece9;font-variant-numeric:tabular-nums;">$359,940</td>
+                  <td style="text-align:right;padding:9px 12px;color:#4ade80;font-weight:600;font-variant-numeric:tabular-nums;">107.1%</td>
+                  <td colspan="4"></td>
+                  <td style="text-align: right; padding: 9px 12px; color: #e6ece9; font-variant-numeric: tabular-nums; border-left: 1px solid #1c2320; font-weight: 700">$300</td>
+                  <td style="text-align:right;padding:9px 12px;color:#5e6864;font-variant-numeric:tabular-nums;">$3.75</td>
+                  <td title="107.1% of target — tier $450, capped at $300" style="text-align:right;padding:9px 14px 9px 12px;font-weight:700;color:#4ade80;background:#101614;font-variant-numeric:tabular-nums;text-decoration:underline dotted #2e3733;text-underline-offset:3px;cursor:help;">$300</td>
+                </tr></tbody>
+              </table>
+            </div>
+
+            <!-- MANAGERS -->
+            <div style="display:flex;align-items:baseline;gap:9px;margin:22px 0 8px;">
+              <span style="font-size:11.5px;font-weight:700;color:#8a958f;text-transform:uppercase;letter-spacing:.1em;">Managers</span>
+              <span style="font-size:11.5px;color:#5e6864;">3 people</span>
+            </div>
+            <div style="overflow:hidden;border:1px solid #232a27;border-radius:9px;background:#0d1211;">
+              <table class="b-tbl" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
+                <thead><tr>
+                  <th style="box-sizing:border-box;width:186px;text-align:left;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Manager</th>
+                  <th style="box-sizing:border-box;width:143px;text-align:left;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Store</th>
+                  <th style="box-sizing:border-box;width:115px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;border-left:1px solid #232a27;">Target</th>
+                  <th style="box-sizing:border-box;width:115px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Sales</th>
+                  <th style="box-sizing:border-box;width:88px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">% Goal</th>
+                  <th style="box-sizing:border-box;width:99px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Discount</th>
+                  <th style="box-sizing:border-box;width:93px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">AOV</th>
+                  <th style="box-sizing:border-box;width:99px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Team att.</th>
+                  <th style="box-sizing:border-box;width:110px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">SPIFF</th>
+                  <th style="box-sizing:border-box;width:99px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;border-left:1px solid #232a27;">Bonus</th>
+                  <th style="box-sizing:border-box;width:88px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">$/hr</th>
+                  <th style="box-sizing:border-box;width:119px;text-align:right;padding:9px 14px 9px 12px;font-size:10.5px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Payroll</th>
+                </tr></thead>
+                <tbody>
+                  <sc-for list="{{ mgrs }}" as="m" hint-placeholder-count="3">
+                    <tr>
+                      <td style="text-align:left;padding:9px 12px;color:#e6ece9;font-weight:600;border-bottom:1px solid #1c2320;">{{ m.name }}</td>
+                      <td style="text-align:left;padding:9px 12px;color:#8a958f;border-bottom:1px solid #1c2320;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:{{ m.color }};"></span>{{ m.store }}</td>
+                      <td style="text-align:right;padding:9px 12px;color:#5e6864;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;border-left:1px solid #1c2320;">{{ m.target }}</td>
+                      <td style="text-align:right;padding:9px 12px;color:#e6ece9;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;">{{ m.sales }}</td>
+                      <td style="text-align:right;padding:9px 12px;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;{{ m.bPct }}">{{ m.pct }}</td>
+                      <td style="text-align:right;padding:9px 12px;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;{{ m.bDisc }}">{{ m.disc }}</td>
+                      <td style="text-align:right;padding:9px 12px;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;{{ m.bAov }}">{{ m.aov }}</td>
+                      <td style="text-align: right; padding: 9px 12px; color: #e6ece9; font-variant-numeric: tabular-nums; border-bottom: 1px solid #1c2320; font-weight: 700">{{ m.team }}</td>
+                      <td style="text-align:right;padding:9px 12px;border-bottom:1px solid #1c2320;">
+                        <span style="display:inline-flex;align-items:center;background:#1a221f;border:1px solid #232a27;border-radius:6px;padding:0 6px 0 7px;">
+                          <span style="font-size:11.5px;color:#5e6864;">$</span>
+                          <input type="number" min="0" step="5" value="{{ m.spiff }}" style="box-sizing:border-box;width:46px;text-align:right;background:transparent;border:0;color:#e6ece9;padding:4px 2px;font-size:12.5px;font-family:inherit;font-variant-numeric:tabular-nums;outline:none;">
+                        </span>
+                      </td>
+                      <td style="text-align: right; padding: 9px 12px; color: #e6ece9; font-variant-numeric: tabular-nums; border-bottom: 1px solid #1c2320; border-left: 1px solid #1c2320; font-weight: 700">{{ m.bonus }}</td>
+                      <td style="text-align:right;padding:9px 12px;color:#5e6864;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;">{{ m.hr }}</td>
+                      <td title="{{ m.tip }}" style="text-align:right;padding:9px 14px 9px 12px;font-weight:700;color:#4ade80;background:#101614;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;text-decoration:underline dotted #2e3733;text-underline-offset:3px;cursor:help;">{{ m.payroll }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- BUDTENDERS -->
+            <div style="display:flex;align-items:center;gap:9px;margin:22px 0 8px;">
+              <span style="font-size:11.5px;font-weight:700;color:#8a958f;text-transform:uppercase;letter-spacing:.1em;">Budtenders</span>
+              <span style="font-size:11.5px;color:#5e6864;">9 people</span>
+              <button type="button" onClick="{{ toggleGroup }}" style="margin-left:auto;background:#161c1a;border:1px solid #2e3733;border-radius:999px;color:#8a958f;font:inherit;font-size:11.5px;font-weight:600;padding:5px 12px;cursor:pointer;">{{ groupLabel }}</button>
+            </div>
+            <div style="overflow:hidden;border:1px solid #232a27;border-radius:9px;background:#0d1211;">
+              <table class="b-tbl" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
+                <thead><tr>
+                  <th style="box-sizing:border-box;width:186px;text-align:left;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Name</th>
+                  <th style="box-sizing:border-box;width:143px;text-align:left;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Store</th>
+                  <th style="box-sizing:border-box;width:115px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;border-left:1px solid #232a27;">Txn</th>
+                  <th style="box-sizing:border-box;width:115px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Sales</th>
+                  <th style="box-sizing:border-box;width:187px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Discount</th>
+                  <th style="box-sizing:border-box;width:93px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">AOV</th>
+                  <th style="box-sizing:border-box;width:99px;text-align:center;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Att.</th>
+                  <th style="box-sizing:border-box;width:110px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">SPIFF</th>
+                  <th style="box-sizing:border-box;width:99px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;border-left:1px solid #232a27;">Bonus</th>
+                  <th style="box-sizing:border-box;width:88px;text-align:right;padding:9px 12px;font-size:10.5px;font-weight:700;color:#5e6864;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">$/hr</th>
+                  <th style="box-sizing:border-box;width:119px;text-align:right;padding:9px 14px 9px 12px;font-size:10.5px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.07em;background:#121715;border-bottom:1px solid #232a27;">Payroll</th>
+                </tr></thead>
+                <tbody>
+                  <sc-for list="{{ budRows }}" as="b" hint-placeholder-count="9">
+                    <tr>
+                      <td colspan="11" style="padding:0;{{ b.groupWrap }}">
+                        <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;background:#101614;border-bottom:1px solid #1c2320;border-top:1px solid #1c2320;">
+                          <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:{{ b.color }};"></span>
+                          <span style="font-size:10px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:#8a958f;">{{ b.store }}</span>
+                          <span style="font-size:10.5px;color:#3d4744;font-variant-numeric:tabular-nums;">{{ b.groupCount }}</span>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="text-align:left;padding:9px 12px;color:#e6ece9;font-weight:600;border-bottom:1px solid #1c2320;">{{ b.name }}</td>
+                      <td style="text-align:left;padding:9px 12px;color:#8a958f;border-bottom:1px solid #1c2320;"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:middle;background:{{ b.color }};"></span>{{ b.store }}</td>
+                      <td style="text-align:right;padding:9px 12px;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;border-left:1px solid #1c2320;{{ b.bTxn }}">{{ b.txn }}</td>
+                      <td style="text-align:right;padding:9px 12px;color:#e6ece9;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;">{{ b.sales }}</td>
+                      <td style="text-align:right;padding:9px 12px;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;{{ b.bDisc }}">{{ b.disc }}</td>
+                      <td style="text-align:right;padding:9px 12px;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;{{ b.bAov }}">{{ b.aov }}</td>
+                      <td style="text-align:center;padding:9px 12px;border-bottom:1px solid #1c2320;"><input type="checkbox" checked="{{ b.att }}" aria-label="100% attendance" style="box-sizing:border-box;width:15px;height:15px;accent-color:#4ade80;cursor:pointer;"></td>
+                      <td style="text-align:right;padding:9px 12px;border-bottom:1px solid #1c2320;">
+                        <span style="display:inline-flex;align-items:center;background:#1a221f;border:1px solid #232a27;border-radius:6px;padding:0 6px 0 7px;">
+                          <span style="font-size:11.5px;color:#5e6864;">$</span>
+                          <input type="number" min="0" step="5" value="{{ b.spiff }}" style="box-sizing:border-box;width:46px;text-align:right;background:transparent;border:0;color:#e6ece9;padding:4px 2px;font-size:12.5px;font-family:inherit;font-variant-numeric:tabular-nums;outline:none;">
+                        </span>
+                      </td>
+                      <td style="text-align: right; padding: 9px 12px; color: #e6ece9; font-variant-numeric: tabular-nums; border-bottom: 1px solid #1c2320; border-left: 1px solid #1c2320; font-weight: 700">{{ b.bonus }}</td>
+                      <td style="text-align:right;padding:9px 12px;color:#5e6864;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;">{{ b.hr }}</td>
+                      <td title="{{ b.tip }}" style="text-align:right;padding:9px 14px 9px 12px;font-weight:700;background:#101614;font-variant-numeric:tabular-nums;border-bottom:1px solid #1c2320;text-decoration:underline dotted #2e3733;text-underline-offset:3px;cursor:help;{{ b.bPay }}">{{ b.payroll }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+
+            <p style="font-size:12px;color:#5e6864;margin:14px 0 0;max-width:760px;line-height:1.55;"><strong style="color:#8a958f;">Bonus</strong> is what the person earned in total. <strong style="color:#8a958f;">Payroll</strong> is the company’s share — it excludes SPIFF, which vendors fund — and it is the only figure the Capstone export carries. Hover a payroll figure to see what makes it up.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { grouped: true };
+
+  renderVals() {
+    const B_HIT = 'color:#4ade80;font-weight:600;';
+    const B_MISS = 'color:#8a958f;';
+    const C = { bend: '#22d3ee', center: '#60a5fa', 'river-rd': '#a78bfa' };
+
+    const mgrSrc = [
+      { name: 'Sam Okafor', slug: 'bend', store: 'Bend', target: '$128,000', sales: '$141,400',
+        pct: '110.5%', pctHit: true, disc: '0.9%', discHit: true, aov: '$36.40', aovHit: true,
+        team: '$50', spiff: 0, bonus: '$500', hr: '$6.25', payroll: '$500',
+        tip: 'sales $300 · discount $100 · AOV $50 · team attendance $50' },
+      { name: 'Lena Brooks', slug: 'center', store: 'Center', target: '$96,000', sales: '$99,840',
+        pct: '104.0%', pctHit: true, disc: '1.4%', discHit: true, aov: '$32.10', aovHit: false,
+        team: '$75', spiff: 30, bonus: '$255', hr: '$3.19', payroll: '$225',
+        tip: 'sales $100 · discount $50 · AOV $0 · team attendance $75' },
+      { name: 'Curtis Nance', slug: 'river-rd', store: 'River Rd', target: '$112,000', sales: '$118,700',
+        pct: '106.0%', pctHit: true, disc: '1.1%', discHit: true, aov: '$34.85', aovHit: true,
+        team: '$50', spiff: 0, bonus: '$350', hr: '$4.38', payroll: '$350',
+        tip: 'sales $200 · discount $50 · AOV $50 · team attendance $50' }
+    ];
+
+    const budSrc = [
+      { name: 'Dana Whitfield', slug: 'bend', store: 'Bend', txn: 412, txnHit: true, sales: '$16,050',
+        disc: '1.2%', discHit: true, aov: '$38.95', aovHit: true, att: true, spiff: 40,
+        bonus: '$105', hr: '$1.31', payroll: '$65',
+        tip: 'qualified · AOV $25 · discount $25 · attendance $15' },
+      { name: 'Marcus Iwu', slug: 'bend', store: 'Bend', txn: 268, txnHit: true, sales: '$9,120',
+        disc: '1.9%', discHit: false, aov: '$34.03', aovHit: true, att: true, spiff: 0,
+        bonus: '$40', hr: '$0.50', payroll: '$40',
+        tip: 'qualified · AOV $25 · discount $0 · attendance $15' },
+      { name: 'Priya Raman', slug: 'bend', store: 'Bend', txn: 331, txnHit: true, sales: '$10,400',
+        disc: '1.4%', discHit: true, aov: '$31.42', aovHit: false, att: false, spiff: 25,
+        bonus: '$50', hr: '$0.63', payroll: '$25',
+        tip: 'qualified · AOV $0 · discount $25 · attendance $0' },
+      { name: 'Tomas Vega', slug: 'center', store: 'Center', txn: 187, txnHit: true, sales: '$6,540',
+        disc: '1.1%', discHit: true, aov: '$34.97', aovHit: true, att: true, spiff: 0,
+        bonus: '$65', hr: '$0.81', payroll: '$65',
+        tip: 'qualified · AOV $25 · discount $25 · attendance $15' },
+      { name: 'Rebeka Alcott', slug: 'center', store: 'Center', txn: 142, txnHit: false, sales: '$4,380',
+        disc: '2.4%', discHit: false, aov: '$30.85', aovHit: false, att: true, spiff: 0,
+        bonus: '$15', hr: '$0.19', payroll: '$15',
+        tip: 'did not qualify — 142 transactions · AOV $0 · discount $0 · attendance $15' },
+      { name: 'Nina Sowell', slug: 'center', store: 'Center', txn: 205, txnHit: true, sales: '$7,220',
+        disc: '1.5%', discHit: true, aov: '$35.22', aovHit: true, att: true, spiff: 60,
+        bonus: '$125', hr: '$1.56', payroll: '$65',
+        tip: 'qualified · AOV $25 · discount $25 · attendance $15' },
+      { name: 'Elliot Frame', slug: 'river-rd', store: 'River Rd', txn: 388, txnHit: true, sales: '$13,900',
+        disc: '0.9%', discHit: true, aov: '$35.82', aovHit: true, att: true, spiff: 0,
+        bonus: '$65', hr: '$0.81', payroll: '$65',
+        tip: 'qualified · AOV $25 · discount $25 · attendance $15' },
+      { name: 'Jo Castellan', slug: 'river-rd', store: 'River Rd', txn: 244, txnHit: true, sales: '$7,980',
+        disc: '1.7%', discHit: false, aov: '$32.70', aovHit: false, att: false, spiff: 20,
+        bonus: '$20', hr: '$0.25', payroll: '—', zeroPay: true,
+        tip: 'qualified · AOV $0 · discount $0 · attendance $0' },
+      { name: 'Wes Duarte', slug: 'river-rd', store: 'River Rd', txn: 176, txnHit: false, sales: '$5,410',
+        disc: '1.3%', discHit: true, aov: '$30.74', aovHit: false, att: true, spiff: 0,
+        bonus: '$15', hr: '$0.19', payroll: '$15',
+        tip: 'did not qualify — 176 transactions · AOV $0 · discount $0 · attendance $15' }
+    ];
+
+    const mgrs = mgrSrc.map(m => Object.assign({}, m, {
+      color: C[m.slug],
+      bPct: m.pctHit ? B_HIT : B_MISS,
+      bDisc: m.discHit ? B_HIT : B_MISS,
+      bAov: m.aovHit ? B_HIT : B_MISS
+    }));
+
+    const grouped = this.state.grouped;
+    const counts = {};
+    budSrc.forEach(b => { counts[b.slug] = (counts[b.slug] || 0) + 1; });
+    let seen = null;
+
+
+    const budRows = budSrc.map(b => {
+      const head = grouped && b.slug !== seen;
+      if (head) seen = b.slug;
+      return Object.assign({}, b, {
+        color: C[b.slug],
+        groupWrap: head ? '' : 'display:none;',
+        groupCount: String(counts[b.slug]),
+        bTxn: b.txnHit ? B_HIT : B_MISS,
+        bDisc: b.discHit ? B_HIT : B_MISS,
+        bAov: b.aovHit ? B_HIT : B_MISS,
+        bPay: b.zeroPay ? 'color:#5e6864;font-weight:400;' : 'color:#4ade80;'
+      });
+    });
+
+    return {
+      mgrs, budRows,
+      groupLabel: grouped ? 'Grouped by store' : 'Group by store',
+      toggleGroup: () => this.setState(s => ({ grouped: !s.grouped }))
+    };
+  }
+}
+</script>
+</body>
+</html>
