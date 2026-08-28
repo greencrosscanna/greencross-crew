@@ -82,10 +82,15 @@ const HEADERS = (function () {
 function load(sheet) {
   const src = `
     var HISTORY_TAB = 'crew_incentive_history';
+    var SCHEME_TAB = 'crew_incentive_schemes';
+    var SCHEME_HEADERS = ['pp_start', 'thresholds_json', 'frozen_at', 'frozen_by'];
     var HISTORY_HEADERS = ${JSON.stringify(HEADERS)};
     function deploySecretOk_() { return true; }
     function sheetOf_() { return SHEET; }
     function readTab_(tab, headers) {
+      /* The stub holds ONE sheet — the history tab. Any other tab reads empty, which is exactly
+         right for the scheme lookup on an imported period: nobody recorded one. */
+      if (tab !== HISTORY_TAB) return [];
       var last = SHEET.getLastRow(); if (last < 2) return [];
       return SHEET.getRange(2, 1, last - 1, headers.length).getValues().map(function (r) {
         var o = {}; headers.forEach(function (h, i) { o[h] = String(r[i] == null ? '' : r[i]).trim(); });
@@ -93,6 +98,7 @@ function load(sheet) {
       });
     }
     ${grab('historyStoreId_')} ${grab('historySheet_')} ${grab('historyPeriods_')}
+    ${grab('schemeFor_')} ${grab('freezeScheme_')}
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
     ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
     ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('stampEmployeeIds_')}

@@ -3283,8 +3283,11 @@ function incentiveHistory_(p) {
       return o;
     });
   }
+  /* null for the 27 imported periods — nobody recorded their thresholds, and inventing them would
+     be a fabrication dressed as history. The screen marks no targets when it is absent. */
   return { ok: true, pp_start: want, pp_end: rows[0].pp_end, format: rows[0].format,
            imported_at: rows[0].imported_at, source: 'imported',
+           thresholds: schemeFor_(want),
            admin: group('admin')[0] || null, managers: group('manager'), budtenders: group('budtender') };
 }
 
@@ -3831,6 +3834,7 @@ function incentiveApprove_(p) {
   var sh = historySheet_();
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
+  freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
   wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split,
@@ -4272,6 +4276,43 @@ function thresholdProblems_(t) {
     bad.push('manager.discountTiers needs two entries (only their bonus amounts are used)');
   }
   return bad;
+}
+
+/* ══ The scheme a period was scored under ════════════════════════════════════════════════════════
+ *
+ * Performance froze, the goal froze, the inputs were per-period — and the THRESHOLDS floated. So
+ * editing the discount goal re-scored every period that had not yet been written to history, and
+ * every imported period was being marked against today's bar rather than the one that applied.
+ *
+ * Approval now records the scheme alongside the figures. Its own tab rather than a column on every
+ * row: it is one object per period, and repeating 600 bytes across 40 rows to say the same thing
+ * once is how a sheet becomes unreadable.
+ *
+ * The 27 IMPORTED periods have no scheme and never will — nobody recorded what the thresholds were
+ * in 2025, and the reports measured gross discount against a bar that no longer exists. That is
+ * left NULL rather than back-filled with today's numbers, which would be a fabrication dressed as
+ * history. The screen shows their figures and simply does not mark targets on them.
+ */
+var SCHEME_TAB = 'crew_incentive_schemes';
+var SCHEME_HEADERS = ['pp_start', 'thresholds_json', 'frozen_at', 'frozen_by'];
+
+function schemeFor_(pp) {
+  var rows = readTab_(SCHEME_TAB, SCHEME_HEADERS);
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].pp_start !== pp) continue;
+    try { return JSON.parse(rows[i].thresholds_json || 'null'); } catch (e) { return null; }
+  }
+  return null;
+}
+
+function freezeScheme_(pp, thresholds, by) {
+  if (!thresholds) return;
+  if (schemeFor_(pp)) return;            // written once, like everything else about a closed period
+  var sh = sheetOf_(SCHEME_TAB, SCHEME_HEADERS);
+  sh.getRange(sh.getLastRow() + 1, 1, 1, SCHEME_HEADERS.length).setValues([[
+    pp, JSON.stringify(thresholds), new Date().toISOString(), String(by || '')
+  ]]);
+  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@');
 }
 
 function hrImport_(p, body) {

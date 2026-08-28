@@ -310,5 +310,24 @@ ok('each block is sorted by surname, so a new starter lands in the right slot',
 ok('somebody whose store did not resolve is flagged, not dropped',
    big.some(r => r[0] === 'UNASSIGNED' && r[1] === 'Anywhere Nobody'));
 
+/* ── a period is marked against the rules that applied TO IT ──
+   Performance froze, the goal froze, the inputs were per-period — and the thresholds floated. So an
+   imported 2025 row was being marked green against today's 1.5% bar, a target that did not exist
+   when it was paid. Approval now freezes the scheme; the 27 imported periods have none and never
+   will, because nobody recorded theirs. */
+const histRow = { employee_id: 'h', pdf_name: 'Old Hand', store_label: 'Bend', store_id: 'bend',
+                  txn: 400, sales: 12000, discount_pct: 1.2, aov: 35,
+                  bonus: 40, payroll: 40, spiff: 0, per_hour: 0.5 };
+const calcHist = b => ({ bonus: b.bonus, payroll: b.payroll, spiff: b.spiff, hr: b.per_hour, qual: null });
+
+const noScheme = M.incBudTable([histRow], calcHist, true, false, null);
+ok('with no frozen scheme, nothing is marked as having hit a target',
+   !noScheme.includes('crew-inc-hit'));
+ok('but the figures are still all there', /1\.2%/.test(noScheme) && /\$35\.00/.test(noScheme));
+
+/* Same row, scored under a scheme that was actually frozen with it — now the marks mean something. */
+const withScheme = M.incBudTable([histRow], calcHist, true, false, T);
+ok('with a frozen scheme, targets it cleared are marked', withScheme.includes('crew-inc-hit'));
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);

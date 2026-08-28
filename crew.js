@@ -2425,6 +2425,10 @@
 
     var isImported = d.source === 'imported';
     var editable = !!d.can_edit && !isImported;
+    /* For a closed period this is the FROZEN scheme, and for the 27 imported ones it is null —
+       nobody recorded what the thresholds were in 2025, and the reports measured gross discount
+       against a bar that no longer exists. Marking those rows green against today's 1.5% would be
+       asserting they hit a target that did not apply to them. No scheme, no marks. */
     var T = d.thresholds || null;
     var buds = d.budtenders || [], mgrs = d.managers || [];
 
