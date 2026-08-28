@@ -3980,7 +3980,8 @@ function incentiveSend_(p) {
     ? String(p.to || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean)
     : wfApproverEmails_();
   if (preview && !to.length) return { ok: true, preview: true, pp_start: pp, rows: pre.rows,
-                                      payroll_total: pre.payroll_total, still_open: !!pre.still_open,
+                                      payroll_total: pre.payroll_total, split: pre.split,
+                                      still_open: !!pre.still_open,
                                       to: wfApproverEmails_(), html: html,
                                       note: 'nothing sent — add &to=someone@… to actually mail it' };
 
@@ -3999,9 +4000,13 @@ function incentiveSend_(p) {
                warning: 'the email failed: ' + String((e && e.message) || e) };
     }
   }
+  /* The split is echoed back, not just put in the email: a send that reports only a total cannot
+     be checked against the screen without opening the mail, and the whole reason it is in the
+     email is that the two must agree. */
   return { ok: true, preview: preview || undefined, pp_start: pp,
            status: preview ? 'preview' : 'pending', rows: pre.rows,
-           payroll_total: pre.payroll_total, mailed: mailed, still_open: !!pre.still_open,
+           payroll_total: pre.payroll_total, split: pre.split, mailed: mailed,
+           still_open: !!pre.still_open,
            warning: mailed.length ? '' : 'no approver is configured (cfg.crewApprover) — nobody was emailed' };
 }
 
