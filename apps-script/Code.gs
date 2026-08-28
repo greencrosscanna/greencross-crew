@@ -419,6 +419,7 @@ function route_(e) {
       case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
       // Comp thresholds: GX Core holds them, Crew edits them, Leaderboard reads them.
       case 'incentive_thresholds': return json_(incentiveThresholdsRoute_(p), p.callback);
+      case 'incentive_discounts':  return json_(incentiveDiscountsRoute_(p), p.callback);
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
       // record like the imported ones and can never be recomputed.
       case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
@@ -4189,6 +4190,64 @@ function incentiveThresholds_() {
     if (ok(t)) return t;
   } catch (e) {}
   return null;      // caller falls back to whatever Leaderboard sent
+}
+
+/**
+ * ?action=incentive_discounts            read the discount rules
+ * ?action=incentive_discounts&save=…     write them (approver only)
+ *
+ * These live in Leaderboard because they filter the TRANSACTION data — the half of the incentive
+ * that did not move — but they are set in Crew's tray beside the thresholds, because to whoever is
+ * deciding the scheme it is one screen and one decision.
+ *
+ * `save` is a NEWLINE-separated list of the discount names that COUNT — newline because the names
+ * themselves contain commas ("5 for $20 Gummies, same strain only"). Leaderboard stores the
+ * inverse (an exclusion map), and the flip happens here rather than in the browser: a UI that
+ * posts "excluded" while its checkboxes read "counted" is one inverted boolean away from grading
+ * every budtender against the opposite rule, and nothing about the result would look wrong.
+ */
+function incentiveDiscountsRoute_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  var base = '';
+  try { base = String(GXCore.getKv('lbGoals') || ''); } catch (e) {}
+  if (!base) return { ok: false, error: 'no Leaderboard engine URL in GX Core kv (key lbGoals)' };
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
+
+  var url;
+  if (p.save == null) {
+    url = base + '?action=discountrules&secret=' + encodeURIComponent(secret);
+  } else {
+    if (!canApprove_(auth)) return { ok: false, error: 'only the approver can change the discount rules' };
+    var counted = String(p.save).split('\n').map(function (x) { return x.trim(); })
+                                .filter(function (x) { return !!x; });
+    var all = incentiveDiscountsRoute_({ token: p.token });      // the current list, to invert against
+    if (all.ok === false) return all;
+    /* saveDiscountSettings_ takes an OVERRIDES map where true means EXCLUDED — the inverse of what
+       the checkboxes mean. Every discretionary name is sent, not just the changed ones: the store
+       merges by key, so omitting one leaves whatever was there before, and a rule that quietly kept
+       its old state while the screen showed the new one is the worst outcome here. */
+    var overrides = {};
+    (all.discretionary || []).forEach(function (x) {
+      overrides[x.name] = counted.indexOf(x.name) < 0;
+    });
+    url = base + '?action=discountrules_save&secret=' + encodeURIComponent(secret) +
+          '&overrides=' + encodeURIComponent(JSON.stringify(overrides));
+  }
+  try {
+    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) {
+      return { ok: false, error: 'Leaderboard returned HTTP ' + res.getResponseCode() };
+    }
+    var d = JSON.parse(res.getContentText());
+    if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'Leaderboard refused' };
+    d.can_edit = canApprove_(auth);
+    return d;
+  } catch (e) {
+    return { ok: false, error: 'could not reach Leaderboard: ' + String((e && e.message) || e) };
+  }
 }
 
 /**
