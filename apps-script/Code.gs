@@ -3770,10 +3770,19 @@ function incentiveApprove_(p) {
   }
 
   var total = rows.reduce(function (a, r) { return a + (Number(r[14]) || 0); }, 0);
+  /* Split the same three ways the screen's header does, so the approval email and the portal
+     cannot disagree about where the money went — column 2 is the section, 14 the payroll. */
+  function sectionTotal(name) {
+    return Math.round(rows.reduce(function (a, r) {
+      return a + (r[2] === name ? (Number(r[14]) || 0) : 0);
+    }, 0) * 100) / 100;
+  }
+  var split = { manager: sectionTotal('manager'), budtender: sectionTotal('budtender'),
+                admin: sectionTotal('admin') };
   if (String(p.confirm || '') !== 'yes') {
-    return { ok: true, dry_run: true, pp_start: pp, rows: rows.length,
-             payroll_total: Math.round(total * 100) / 100, unmatched: live.unmatched || [],
-             note: 'nothing written — re-send with confirm=yes' };
+    return { ok: true, dry_run: true, pp_start: pp, rows: rows.length, pp_end: live.payPeriod.end,
+             payroll_total: Math.round(total * 100) / 100, split: split,
+             unmatched: live.unmatched || [], note: 'nothing written — re-send with confirm=yes' };
   }
 
   /* An approve link from the email carries a single-use token. It is checked against the period
@@ -3798,7 +3807,8 @@ function incentiveApprove_(p) {
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
   wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
-           payroll_total: Math.round(total * 100) / 100, unmatched: live.unmatched || [] };
+           payroll_total: Math.round(total * 100) / 100, split: split,
+           unmatched: live.unmatched || [] };
 }
 
 /* ══ Approval — who prepares, who decides, and how a mistake gets undone ══════════════════════════
@@ -3938,14 +3948,16 @@ function incentiveSend_(p) {
     var live = fetchLivePerf_(pp);
     if (live.ok === false) return live;
     stampEmployeeIds_(live);
-    var T = live.thresholds, inputs = inputsFor_(pp), tot = 0, n = 0;
-    (live.budtenders || []).forEach(function (b) { tot += incCalcBud_(b, T, inputs).payroll || 0; n++; });
+    var T = live.thresholds, inputs = inputsFor_(pp), n = 0;
+    var sp = { budtender: 0, manager: 0, admin: 0 };
+    (live.budtenders || []).forEach(function (b) { sp.budtender += incCalcBud_(b, T, inputs).payroll || 0; n++; });
     (live.managers || []).forEach(function (m) {
-      tot += incCalcMgr_(m, T, inputs, live.budtenders || []).payroll || 0; n++;
+      sp.manager += incCalcMgr_(m, T, inputs, live.budtenders || []).payroll || 0; n++;
     });
-    if (live.admin) { tot += incCalcAdmin_(live.admin, T).bonus || 0; n++; }
-    pre = { ok: true, rows: n, payroll_total: Math.round(tot * 100) / 100,
-            pp_end: (live.payPeriod || {}).end || '', unmatched: live.unmatched || [],
+    if (live.admin) { sp.admin += incCalcAdmin_(live.admin, T).bonus || 0; n++; }
+    Object.keys(sp).forEach(function (k) { sp[k] = Math.round(sp[k] * 100) / 100; });
+    pre = { ok: true, rows: n, payroll_total: Math.round((sp.budtender + sp.manager + sp.admin) * 100) / 100,
+            split: sp, pp_end: (live.payPeriod || {}).end || '', unmatched: live.unmatched || [],
             still_open: !!(live.payPeriod || {}).current };
   } else {
     pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
@@ -4007,15 +4019,29 @@ function wfApprovalEmail_(pp, pre, sender, token, preview) {
     '<h2 style="margin:0 0 4px">Incentive ready for approval</h2>' +
     '<p style="margin:0 0 16px;color:#555">Pay period <strong>' + pp + ' → ' +
       (pre.pp_end || '') + '</strong>, prepared by ' + sender + '.</p>' +
-    '<table style="border-collapse:collapse;margin-bottom:16px">' +
-    '<tr><td style="padding:4px 16px 4px 0;color:#555">People</td><td style="font-weight:700">' +
-      pre.rows + '</td></tr>' +
-    '<tr><td style="padding:4px 16px 4px 0;color:#555">Total to Capstone</td>' +
-      '<td style="font-weight:700">' + wfMoney_(pre.payroll_total) + '</td></tr>' +
-    (pre.unmatched && pre.unmatched.length
-      ? '<tr><td style="padding:4px 16px 4px 0;color:#a33">Not on the roster</td><td>' +
-        pre.unmatched.join(', ') + '</td></tr>' : '') +
-    '</table>' +
+    /* The same breakdown, in the same order, as the header of the screen this links to. Reading
+       one figure in the email and four on the page invites a decision made on a number that was
+       never compared — and the split is where a wrong SPIFF or a missed attendance shows up. */
+    (function () {
+      var sp = pre.split || {};
+      function row(label, v, strong) {
+        return '<tr><td style="padding:5px 22px 5px 0;color:#555' +
+          (strong ? ';border-top:1px solid #ddd;padding-top:9px' : '') + '">' + label + '</td>' +
+          '<td style="text-align:right;font-weight:700;font-size:' + (strong ? '17px' : '15px') +
+          (strong ? ';border-top:1px solid #ddd;padding-top:9px' : '') + '">' + wfMoney_(v) + '</td></tr>';
+      }
+      return '<table style="border-collapse:collapse;margin-bottom:18px">' +
+        row('Manager bonuses', sp.manager || 0) +
+        row('Budtender bonuses', sp.budtender || 0) +
+        row('Admin', sp.admin || 0) +
+        row('Total', pre.payroll_total, true) +
+        '<tr><td style="padding:9px 22px 0 0;color:#555">People</td>' +
+          '<td style="text-align:right;padding-top:9px">' + pre.rows + '</td></tr>' +
+        (pre.unmatched && pre.unmatched.length
+          ? '<tr><td style="padding:5px 22px 0 0;color:#a33">Not on the roster</td>' +
+            '<td style="text-align:right;color:#a33">' + pre.unmatched.join(', ') + '</td></tr>' : '') +
+        '</table>';
+    })() +
     '<p style="margin:0 0 8px"><a href="' + approveLink + '" style="background:#22c55e;color:#04210f;' +
       'padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:700">Approve</a>' +
       '&nbsp;&nbsp;<a href="' + link + '" style="color:#0a7a3d">Open in GX Crew to review</a></p>' +
