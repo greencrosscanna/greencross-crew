@@ -2912,169 +2912,255 @@
      Every control writes into a working copy; nothing reaches GX Core until Save. The engine still
      validates the whole object — in particular it refuses an ascending tier list, which no amount
      of form design prevents. */
-  /* The tray's markup, split out so a test can round-trip it: build the controls from a scheme,
-     read them back by path, and assert nothing moved. That round trip is the only thing standing
-     between a mislabelled input and a bonus paid against the wrong number. */
+  /* ── Incentive settings tray ────────────────────────────────────────────────
+     LEADERBOARD'S TRAY, structure and CSS both. Sky designed it; my first attempt here was a
+     worse version of the same screen, and the CSS is now copied verbatim from that app with only
+     a variable-name bridge (see index.html). Keep the class names — they are what that stylesheet
+     targets, and renaming one silently unstyles a section.
+
+     Every control carries the path it writes to, so the scheme is assembled from what each input
+     SAYS IT IS rather than from where it sits. The engine still validates the result. */
+  function gstr_(v) { return (Math.round(v * 10) / 10).toString(); }
+
   function incTrayHtml(T) {
-    var b = T.budtender, m = T.manager, a = T.admin;
-    var goal = Number(b.discountMaxPct) || 0;
-    var mgrTight = Math.round(goal * 2 / 3 * 100) / 100;
-    function num(path, val, cls, step, min) {
-      return '<input type="number" data-path="' + esc(path) + '" ' +
-             'class="crew-tray-num' + (cls ? ' ' + cls : '') + '" ' +
-             'value="' + esc(String(val)) + '" step="' + (step || 1) + '"' +
-             (min == null ? '' : ' min="' + min + '"') + '>';
+    var B = T.budtender, M = T.manager, A = T.admin;
+    var goal = Number(B.discountMaxPct) || 0;
+    function tin(path, val, w) {
+      return '<input class="ist-inp" type="number" step="0.25" data-thr="' + esc(path) + '" value="' +
+             esc(String(val)) + '"' + (w ? ' style="width:' + w + 'px"' : '') + '>';
     }
-    function row(label, when, reward) {
-      return '<div class="crew-tray-row"><div>' + label + '</div>' +
-             '<div class="crew-tray-when">' + when + '</div>' +
-             '<div class="crew-tray-reward">$' + reward + '</div></div>';
+    function rin(path, val) {
+      return '<input class="ist-inp ist-rin" type="number" step="1" data-thr="' + esc(path) +
+             '" value="' + esc(String(val)) + '">';
     }
-      return '<div class="crew-tray-hd"><h3>Incentive settings</h3>' +
-        '<button type="button" class="crew-tray-x" id="incTrayX" aria-label="Close">✕</button></div>' +
-      '<div class="crew-tray-body">' +
+    var hrow = '<div class="ist-hl"></div><div class="ist-hr"></div>';
+    function tierLines(list, key, cls) {
+      return list.map(function (t, i) {
+        return '<div class="ist-ln"><span class="ist-op">≥</span>' +
+               tin(cls + '.' + i + '.pct', t.pct) + '<span class="ist-u">%</span></div>';
+      }).join('');
+    }
+    function tierRewards(list, cls) {
+      return list.map(function (t, i) {
+        return '<div class="ist-ln">$' + rin(cls + '.' + i + '.bonus', t.bonus) + '</div>';
+      }).join('');
+    }
 
-        '<div class="crew-tray-sec">Discount target</div>' +
-        '<div class="crew-tray-goal"><label for="thDisc">Discretionary discount goal</label>' +
-          '<span>' + num('budtender.discountMaxPct', b.discountMaxPct, '', 0.1, 0).replace('<input', '<input id="thDisc"') +
-          '<span class="crew-tray-pct">%</span></span></div>' +
-        '<div class="crew-tray-bands" id="thBands"></div>' +
-        '<p class="crew-tray-help">Budtenders earn the discount bonus at or under this. Manager ' +
-          'store-discount tiers follow this goal. Loyalty and automatic promos never count.</p>' +
+    return '<div class="inc-tray-head"><span>Incentive Settings</span>' +
+        '<button class="inc-tray-x" id="incTrayClose" title="Close">✕</button></div>' +
+      '<div class="ist-body">' +
 
-        '<div class="crew-tray-sec">Bonus thresholds<span>Earn it when → reward</span></div>' +
+      '<section class="ist-sec ist-sec-t">' +
+        '<div class="ist-seclabel">Discount target</div>' +
+        '<div class="ist-goalrow"><span class="ist-goallabel">Discretionary discount goal</span>' +
+          '<div class="ist-goalfield"><input class="ist-goalinp" type="number" step="0.1" min="0.5" ' +
+            'max="10" data-thr="budtender.discountMaxPct" value="' + esc(gstr_(goal)) + '">' +
+            '<span class="ist-pct">%</span></div></div>' +
+        '<div class="ist-chips"><div class="ist-chip g">≤ <span id="istGreen">' + esc(gstr_(goal)) + '</span>% GREEN</div>' +
+          '<div class="ist-chip a">≤ <span id="istRed">' + esc(gstr_(goal * 2)) + '</span>% AMBER</div>' +
+          '<div class="ist-chip r">&gt; <span id="istRed2">' + esc(gstr_(goal * 2)) + '</span>% RED</div></div>' +
+        '<p class="ist-sub">Budtenders earn the discount bonus at/under this. Manager store-discount ' +
+          'tiers follow this goal. Loyalty &amp; automatic promos never count.</p>' +
+      '</section>' +
 
-        '<div class="crew-tray-card">' +
-          '<div class="crew-tray-card-hd">Budtenders' +
-            '<span class="crew-tray-qual">Qualify: ≥ ' + num('budtender.txnQualify', b.txnQualify, 'sm', 1, 0) +
-            ' txns · low-vol ≥ ' + num('budtender.txnQualifyLowVol', b.txnQualifyLowVol, 'sm', 1, 0) + '</span></div>' +
-          row('AOV', '≥ $ ' + num('budtender.aovTarget', b.aovTarget, 'sm', 1, 0), num('budtender.aovBonus', b.aovBonus, 'sm money', 5, 0)) +
-          row('Discount', '≤ <span id="thDiscEcho">' + esc(String(goal)) + '</span>% ' +
-              '<span class="crew-tray-tag">GOAL</span>', num('budtender.discountBonus', b.discountBonus, 'sm money', 5, 0)) +
-          row('Attendance', '100%', num('budtender.attendanceBonus', b.attendanceBonus, 'sm money', 5, 0)) +
+      '<section class="ist-sec">' +
+        '<div class="ist-sechead"><div class="ist-seclabel">Bonus thresholds</div>' +
+          '<div class="ist-hint">Earn it when → reward</div></div>' +
+
+        '<div class="ist-role">' +
+          '<div class="ist-rhead"><span>Budtenders</span><span class="ist-qual">Qualify: ≥ ' +
+            tin('budtender.txnQualify', B.txnQualify, 52) + ' txns · low-vol ≥ ' +
+            tin('budtender.txnQualifyLowVol', B.txnQualifyLowVol, 52) + '</span></div>' +
+          '<div class="ist-grid">' + hrow +
+            '<div class="ist-c m">AOV</div><div class="ist-c t"><span class="ist-op">≥ $</span>' +
+              tin('budtender.aovTarget', B.aovTarget) + '</div><div class="ist-c r">$' +
+              rin('budtender.aovBonus', B.aovBonus) + '</div>' +
+            '<div class="ist-c m">Discount</div><div class="ist-c t"><span class="ist-op">≤</span>' +
+              '<span class="ist-mut" id="istBudDisc">' + esc(gstr_(goal)) + '%</span>' +
+              '<span class="ist-note u">goal</span></div><div class="ist-c r">$' +
+              rin('budtender.discountBonus', B.discountBonus) + '</div>' +
+            '<div class="ist-c m">Attendance</div><div class="ist-c t"><span class="ist-mut">100%</span></div>' +
+              '<div class="ist-c r">$' + rin('budtender.attendanceBonus', B.attendanceBonus) + '</div>' +
+          '</div>' +
         '</div>' +
 
-        '<div class="crew-tray-card">' +
-          '<div class="crew-tray-card-hd">Store Managers</div>' +
-          m.salesTiers.map(function (t, i) {
-            return row(i === 0 ? 'Sales vs<br>goal' : '',
-                       '≥ ' + num('manager.salesTiers.' + i + '.pct', t.pct, 'sm', 1, 0) + ' %',
-                       num('manager.salesTiers.' + i + '.bonus', t.bonus, 'sm money', 25, 0));
-          }).join('') +
-          row('Store<br>discount', '<span class="crew-tray-tag">−33%</span> ≤ ' + mgrTight + '%',
-              num('manager.discountTiers.0.bonus', m.discountTiers[0].bonus, 'sm money', 25, 0)) +
-          row('', '<span class="crew-tray-tag">GOAL</span> ≤ <span class="thGoalEcho">' +
-              esc(String(goal)) + '</span>%', num('manager.discountTiers.1.bonus', m.discountTiers[1].bonus, 'sm money', 25, 0)) +
-          row('AOV', '≥ $ ' + num('manager.aovTarget', m.aovTarget, 'sm', 1, 0), num('manager.aovBonus', m.aovBonus, 'sm money', 25, 0)) +
-          row('Team att.', 'per member · 100%', num('manager.teamAttendancePerHead', m.teamAttendancePerHead, 'sm money', 5, 0)) +
+        '<div class="ist-role">' +
+          '<div class="ist-rhead"><span>Store Managers</span></div>' +
+          '<div class="ist-grid">' + hrow +
+            '<div class="ist-c m tall">Sales vs goal</div>' +
+            '<div class="ist-c t tall">' + tierLines(M.salesTiers, 'pct', 'manager.salesTiers') + '</div>' +
+            '<div class="ist-c r tall">' + tierRewards(M.salesTiers, 'manager.salesTiers') + '</div>' +
+            '<div class="ist-c m tall">Store discount</div>' +
+            /* Cut-offs are DERIVED from the goal above — text, not inputs. Only the dollar amounts
+               are stored, so an editable field here would invite setting a value the math ignores. */
+            '<div class="ist-c t tall"><div class="ist-ln"><span class="ist-note">−33%</span>' +
+              '<span class="ist-op">≤</span><span class="ist-mut" id="istMgrD0">' +
+              esc(gstr_(goal * 2 / 3)) + '%</span></div>' +
+              '<div class="ist-ln"><span class="ist-note u">goal</span><span class="ist-op">≤</span>' +
+              '<span class="ist-mut" id="istMgrD1">' + esc(gstr_(goal)) + '%</span></div></div>' +
+            '<div class="ist-c r tall"><div class="ist-ln">$' +
+              rin('manager.discountTiers.0.bonus', M.discountTiers[0].bonus) + '</div>' +
+              '<div class="ist-ln">$' + rin('manager.discountTiers.1.bonus', M.discountTiers[1].bonus) +
+              '</div></div>' +
+            '<div class="ist-c m">AOV</div><div class="ist-c t"><span class="ist-op">≥ $</span>' +
+              tin('manager.aovTarget', M.aovTarget) + '</div><div class="ist-c r">$' +
+              rin('manager.aovBonus', M.aovBonus) + '</div>' +
+            '<div class="ist-c m">Team att.</div><div class="ist-c t">' +
+              '<span class="ist-mut">per member · 100%</span></div><div class="ist-c r">$' +
+              rin('manager.teamAttendancePerHead', M.teamAttendancePerHead) + '</div>' +
+          '</div>' +
         '</div>' +
 
-        '<div class="crew-tray-card">' +
-          '<div class="crew-tray-card-hd">Admin (Chain)</div>' +
-          a.tiers.map(function (t, i) {
-            return row(i === 0 ? 'Chain sales' : '',
-                       '≥ ' + num('admin.tiers.' + i + '.pct', t.pct, 'sm', 1, 0) + ' %',
-                       num('admin.tiers.' + i + '.bonus', t.bonus, 'sm money', 50, 0));
-          }).join('') +
+        '<div class="ist-role">' +
+          '<div class="ist-rhead"><span>Admin (Chain)</span></div>' +
+          '<div class="ist-grid">' + hrow +
+            '<div class="ist-c m tall">Chain sales</div>' +
+            '<div class="ist-c t tall">' + tierLines(A.tiers, 'pct', 'admin.tiers') + '</div>' +
+            '<div class="ist-c r tall">' + tierRewards(A.tiers, 'admin.tiers') + '</div>' +
+          '</div>' +
         '</div>' +
 
-        '<div class="crew-tray-hours"><span>Hours per period <span class="crew-tray-pct">(for $/hr)</span></span>' +
-          num('hoursPerPeriod', T.hoursPerPeriod, '', 1, 1) + '</div>' +
+        '<div class="ist-hoursrow"><span>Hours per period <span class="ist-mut2">(for $/hr)</span></span>' +
+          tin('hoursPerPeriod', T.hoursPerPeriod, 62) + '</div>' +
+      '</section>' +
 
-        /* Named rather than quietly missing. The discount RULES — which promos count as
-           discretionary — are still Leaderboard's: they feed the performance figures, which is the
-           half of this that did not move. Saying so beats a section that looks broken. */
-        '<p class="crew-tray-note"><strong>Discount rules</strong> — which promotions count against ' +
-          'a staff discount rate — still live in Leaderboard\'s settings, alongside the transaction ' +
-          'data they filter. They move here when the discount engine does.</p>' +
-        '<div class="crew-tray-msg" id="incTrayMsg"></div>' +
+      '<section class="ist-sec">' +
+        '<div class="ist-sechead"><div class="ist-seclabel">Discount rules</div>' +
+          '<div class="ist-hint"><b class="ist-cnt" id="istCounted">—</b> of <span id="istTotal">—</span> counted</div></div>' +
+        '<p class="ist-sub">Checked rules count against staff discount rates. Loyalty &amp; automatic ' +
+          'promos are always excluded.</p>' +
+        '<div class="ist-role" id="istDiscList"><div class="ist-msg">Loading discount list…</div></div>' +
+      '</section>' +
+
       '</div>' +
-      '<div class="crew-tray-foot">' +
-        '<button type="button" class="gx-btn gx-btn-green" id="incTraySave">Save &amp; recalculate</button>' +
-      '</div>';
+      '<div class="ist-footer"><button class="ist-savebtn" id="istSave">Save &amp; recalculate</button>' +
+        '<span class="ist-savenote" id="istSaveNote"></span></div>';
   }
 
-  /* Read the controls back into a scheme, by PATH. */
+  /* Read the controls back by PATH, never by position. */
   function incTrayRead(base, inputs) {
     var out = JSON.parse(JSON.stringify(base));
     Array.prototype.forEach.call(inputs, function (n) {
-      var path = n.getAttribute('data-path');
+      var path = n.getAttribute('data-thr');
       if (!path) return;
       var parts = path.split('.'), ref = out;
       for (var k = 0; k < parts.length - 1; k++) ref = ref[parts[k]];
-      ref[parts[parts.length - 1]] = Number(n.value);
+      var v = Number(n.value);
+      if (isNaN(v)) return;                 // a blank box leaves the stored value alone
+      ref[parts[parts.length - 1]] = v;
     });
     out.manager.discountTiers[0].maxPct = Math.round(out.budtender.discountMaxPct * 2 / 3 * 100) / 100;
     out.manager.discountTiers[1].maxPct = out.budtender.discountMaxPct;
     return out;
   }
 
+  function incDiscListHtml(d) {
+    var rows = (d.discretionary || []).map(function (x) {
+      return '<label class="ist-dr' + (x.excluded ? ' off' : '') + '">' +
+        '<input type="checkbox" class="ist-tog" data-name="' + esc(x.name) + '"' +
+        (x.excluded ? '' : ' checked') + '>' +
+        '<span class="ist-dr-name">' + esc(x.name) + '</span>' +
+        (x.code ? '<span class="ist-code">' + esc(x.code) + '</span>' : '') + '</label>';
+    }).join('');
+    var auto = d.autoExcluded || { loyalty: [], automatic: [] };
+    var counts = d.counts || { loyalty: 0, automatic: 0 };
+    return (rows || '<div class="ist-msg">No discretionary discounts.</div>') +
+      '<div class="ist-locked" title="' + esc(auto.loyalty.concat(auto.automatic).join(' · ')) + '">' +
+      'Always excluded — Loyalty (' + counts.loyalty + ') · Automatic promos (' + counts.automatic + ')</div>';
+  }
+
   function incTray(d) {
-    if (document.getElementById('incTrayScrim')) return;
-    /* Deep copy: abandoning the tray must leave the live thresholds untouched, and these nest. */
+    if (document.getElementById('incTray')) return;
     var T = JSON.parse(JSON.stringify(d.thresholds || {}));
     if (!T.budtender || !T.manager || !T.admin) { toast('No thresholds to edit', true); return; }
 
-    var scrim = el('div', 'crew-tray-scrim'); scrim.id = 'incTrayScrim';
-    var tray  = el('div', 'crew-tray');
-    tray.setAttribute('role', 'dialog');
-    tray.setAttribute('aria-label', 'Incentive settings');
-
-    /* Each input carries the PATH it writes to. The first version read the inputs back in DOM
-       order, which meant reordering a row — or adding one — silently shifted every value after it:
-       an AOV bonus landing in attendance, with nothing to see. A path is verbose and cannot do
-       that. */
-    var b = T.budtender, m = T.manager, a = T.admin;
-    var goal = Number(b.discountMaxPct) || 0;
-    /* The manager's store-discount tiers are DERIVED from this goal (goal × ⅔ and goal), which is
-       why they are shown as computed text rather than as editable numbers — only their dollar
-       amounts are stored. Making them look editable would invite somebody to set a cut-off that
-       the math then ignores. */
-    var mgrTight = Math.round(goal * 2 / 3 * 100) / 100;
-
+    var back = el('div', 'inc-tray-back'); back.id = 'incTrayBack';
+    var tray = el('aside', 'inc-tray ist-tray'); tray.id = 'incTray';
     tray.innerHTML = incTrayHtml(T);
-    document.body.appendChild(scrim);
+    document.body.appendChild(back);
     document.body.appendChild(tray);
-
-    var inputs = tray.querySelectorAll('input');
-    function bands() {
-      var g = Number(tray.querySelector('#thDisc').value) || 0;
-      var amber = Math.round(g * 2 * 100) / 100;
-      tray.querySelector('#thBands').innerHTML =
-        '<div class="crew-tray-band g">≤ ' + g + '% GREEN</div>' +
-        '<div class="crew-tray-band a">≤ ' + amber + '% AMBER</div>' +
-        '<div class="crew-tray-band r">&gt; ' + amber + '% RED</div>';
-      tray.querySelector('#thDiscEcho').textContent = g;
-      Array.prototype.forEach.call(tray.querySelectorAll('.thGoalEcho'), function (n) { n.textContent = g; });
-    }
-    bands();
-    tray.querySelector('#thDisc').addEventListener('input', bands);
+    /* Next frame, so the transform transition actually runs rather than the tray appearing. */
+    setTimeout(function () { back.classList.add('open'); tray.classList.add('open'); }, 10);
 
     function close() {
-      if (scrim.parentNode) scrim.parentNode.removeChild(scrim);
-      if (tray.parentNode) tray.parentNode.removeChild(tray);
+      back.classList.remove('open'); tray.classList.remove('open');
       document.removeEventListener('keydown', onKey);
+      setTimeout(function () {
+        if (back.parentNode) back.parentNode.removeChild(back);
+        if (tray.parentNode) tray.parentNode.removeChild(tray);
+      }, 240);
     }
     function onKey(e) { if (e.key === 'Escape') close(); }
     document.addEventListener('keydown', onKey);
-    scrim.addEventListener('click', close);
-    tray.querySelector('#incTrayX').addEventListener('click', close);
+    back.addEventListener('click', close);
+    tray.querySelector('#incTrayClose').addEventListener('click', close);
 
-    tray.querySelector('#incTraySave').addEventListener('click', async function () {
-      var out = incTrayRead(T, inputs);
+    function setText(id, txt) { var n = tray.querySelector('#' + id); if (n) n.textContent = txt; }
+    function goalDerived() {
+      var g = Number(tray.querySelector('[data-thr="budtender.discountMaxPct"]').value);
+      if (isNaN(g)) return;
+      setText('istGreen', gstr_(g)); setText('istRed', gstr_(g * 2)); setText('istRed2', gstr_(g * 2));
+      setText('istBudDisc', gstr_(g) + '%');
+      setText('istMgrD0', gstr_(g * 2 / 3) + '%'); setText('istMgrD1', gstr_(g) + '%');
+    }
+    tray.querySelector('[data-thr="budtender.discountMaxPct"]').addEventListener('input', goalDerived);
 
-      var msg = tray.querySelector('#incTrayMsg');
-      msg.className = 'crew-tray-msg'; msg.textContent = 'Saving…';
+    function counted() {
+      var n = 0;
+      Array.prototype.forEach.call(tray.querySelectorAll('.ist-tog'), function (cb) { if (cb.checked) n++; });
+      setText('istCounted', n);
+    }
+    /* Loaded when the tray opens, not with the dashboard: it is a Leaderboard round trip that
+       rebuilds a discount registry, and nobody waits for it unless they came here to look. */
+    (async function () {
       try {
+        var r = await Engine.jsonp('incentive_discounts', { token: token() },
+                                   { timeoutMs: 45000, retries: 1 });
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'could not load');
+        var host = tray.querySelector('#istDiscList');
+        host.innerHTML = incDiscListHtml(r);
+        setText('istTotal', (r.discretionary || []).length);
+        counted();
+        Array.prototype.forEach.call(host.querySelectorAll('.ist-tog'), function (cb) {
+          cb.addEventListener('change', function () {
+            var lab = cb.parentNode;
+            if (lab && lab.classList) lab.classList.toggle('off', !cb.checked);
+            counted();
+          });
+        });
+      } catch (e) {
+        tray.querySelector('#istDiscList').innerHTML =
+          '<div class="ist-msg">Could not load the discount list: ' + esc((e && e.message) || '') + '</div>';
+      }
+    })();
+
+    tray.querySelector('#istSave').addEventListener('click', async function () {
+      var note = tray.querySelector('#istSaveNote');
+      note.textContent = 'Saving…';
+      try {
+        var out = incTrayRead(T, tray.querySelectorAll('input[data-thr]'));
         var r = await Engine.jsonp('incentive_thresholds',
           { token: token(), save: JSON.stringify(out) }, { timeoutMs: 30000, retries: 1 });
         if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
+
+        /* Only if the list actually loaded. Posting an empty set because the fetch failed would
+           silently switch every discount rule off. */
+        var togs = tray.querySelectorAll('.ist-tog');
+        if (togs.length) {
+          var keep = [];
+          Array.prototype.forEach.call(togs, function (cb) {
+            if (cb.checked) keep.push(cb.getAttribute('data-name'));
+          });
+          var r2 = await Engine.jsonp('incentive_discounts',
+            { token: token(), save: keep.join('\\n') }, { timeoutMs: 45000, retries: 1 });
+          if (!r2 || r2.ok === false) throw new Error((r2 && r2.error) || 'discount rules failed to save');
+        }
+        note.textContent = '';
         close();
-        toast('Thresholds saved — open periods recalculated');
+        toast('Saved — open periods recalculated');
         await loadIncentive(inc.pp || '');
       } catch (e) {
-        msg.className = 'crew-tray-msg is-bad';
-        msg.textContent = (e && e.message) || 'Could not save';
+        note.textContent = (e && e.message) || 'Could not save';
       }
     });
   }

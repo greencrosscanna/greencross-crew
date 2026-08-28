@@ -31,7 +31,7 @@ const M = (function () {
   src = src.slice(0, cut) +
         '\n; return { incBudTable, incMgrTable, incAdminTable, incCsvRows, incDiscPct,\n' +
         '           incHeadActions, incMMDDYY, legalSortName, CAPSTONE_SECTIONS,\n' +
-        '           incTrayHtml, incTrayRead,\n' +
+        '           incTrayHtml, incTrayRead, incDiscListHtml,\n' +
         '           calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
   const doc = { readyState: 'loading', currentScript: { src: 'crew.js?v=99' },
@@ -365,13 +365,13 @@ ok('the base cell rule is still the thing to beat', !!BASE);
    to, and this asserts the trip out and back is lossless. */
 function parseInputs(html) {
   const out = [];
-  const re = /<input\b[^>]*data-path="([^"]+)"[^>]*value="([^"]*)"[^>]*>/g;
+  const re = /<input\b[^>]*data-thr="([^"]+)"[^>]*value="([^"]*)"[^>]*>/g;
   let m;
   /* Capture per iteration — `m` is reassigned by exec, so a closure over it reads the LAST match
      for every entry (and null once the loop ends). */
   while ((m = re.exec(html))) {
     const path = m[1], value = m[2];
-    out.push({ getAttribute: k => (k === 'data-path' ? path : null), value: value });
+    out.push({ getAttribute: k => (k === "data-thr" ? path : null), value: value });
   }
   return out;
 }
@@ -387,7 +387,7 @@ ok('every threshold survives a trip through the tray untouched',
 
 /* Every editable threshold must actually HAVE a control — one silently missing means a value that
    can never be changed from the screen it is displayed on. */
-const paths = parseInputs(trayHtml).map(i => i.getAttribute('data-path'));
+const paths = parseInputs(trayHtml).map(i => i.getAttribute('data-thr'));
 ['budtender.discountMaxPct', 'budtender.txnQualify', 'budtender.txnQualifyLowVol',
  'budtender.aovTarget', 'budtender.aovBonus', 'budtender.discountBonus', 'budtender.attendanceBonus',
  'manager.aovTarget', 'manager.aovBonus', 'manager.teamAttendancePerHead',
@@ -408,10 +408,39 @@ ok('the derived manager discount cut-offs are NOT editable',
    paths.indexOf('manager.discountTiers.1.maxPct') < 0);
 /* An edit lands where it says it does. */
 const edited = parseInputs(trayHtml);
-edited.filter(i => i.getAttribute('data-path') === 'budtender.aovBonus')[0].value = '40';
+edited.filter(i => i.getAttribute('data-thr') === 'budtender.aovBonus')[0].value = '40';
 ok('changing one control changes only that threshold',
    M.incTrayRead(JSON.parse(JSON.stringify(T)), edited).budtender.aovBonus === 40 &&
    M.incTrayRead(JSON.parse(JSON.stringify(T)), edited).budtender.attendanceBonus === T.budtender.attendanceBonus);
+
+/* ── the tray is Leaderboard's, and the class names are load-bearing ──
+   The CSS is copied verbatim from that app; it targets .ist-* and .inc-tray-*. Renaming one class
+   here silently unstyles a whole section rather than erroring, so the markup and the stylesheet are
+   checked against each other. */
+['ist-body', 'ist-sec', 'ist-seclabel', 'ist-goalrow', 'ist-chips', 'ist-chip', 'ist-role',
+ 'ist-rhead', 'ist-grid', 'ist-c', 'ist-inp', 'ist-rin', 'ist-ln', 'ist-hoursrow', 'ist-footer',
+ 'ist-savebtn'].forEach(function (cls) {
+  ok('the tray still uses .' + cls + ', which the copied CSS targets',
+     trayHtml.indexOf(cls) >= 0 && html.indexOf('.' + cls) >= 0);
+});
+
+/* The discount rules section: checkbox CHECKED means the rule COUNTS. Leaderboard stores the
+   inverse, and the flip happens in the engine — but the list rendering has to get the direction
+   right too, or every rule shows the opposite of its real state. */
+const discs = M.incDiscListHtml({
+  discretionary: [{ name: 'Employee Discount', code: 'Employee25', excluded: true },
+                  { name: 'Volume - All Items', code: 'Vol', excluded: false }],
+  autoExcluded: { loyalty: ['Points'], automatic: ['BOGO'] },
+  counts: { loyalty: 11, automatic: 21 } });
+ok('an EXCLUDED rule renders unchecked and dimmed',
+   /class="ist-dr off"[\s\S]*?Employee Discount/.test(discs) &&
+   !/data-name="Employee Discount"[^>]*checked/.test(discs));
+ok('a COUNTED rule renders checked and undimmed',
+   /data-name="Volume - All Items"[^>]*checked/.test(discs));
+ok('the always-excluded footer states both counts',
+   /Loyalty \(11\)/.test(discs) && /Automatic promos \(21\)/.test(discs));
+ok('discount codes are shown, since two rules can share a name',
+   /ist-code">Employee25</.test(discs));
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);
