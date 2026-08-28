@@ -585,7 +585,11 @@
        full-bleed, which prints as a wall of ink and loses the right-hand columns —
        so print is a genuinely different layout, not the screen with a filter over it. */
     @media print {
-      @page { size: letter landscape; margin: 0.4in; }
+      /* Margin only — NOT `size: letter landscape`. Forcing the size rotated the whole page 90°
+         against a print dialog set to portrait, so the first real PDF came out sideways: readable
+         only by turning your head, and useless as a filed record. Chrome's own Landscape checkbox
+         drives it now, which is what the archived Leaderboard PDFs sit upright from. */
+      @page { margin: 0.4in; }
       html, body { background: #fff !important; color: #000 !important; }
       /* Everything that is not the report */
       /* gx-bugreport.js names its launcher `gx-bug-fab` / #gxBugFab — NOT the .gx-bugreport-btn
@@ -656,6 +660,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.328"></script>
+  <script src="crew.js?v=1.329"></script>
 </body>
 </html>

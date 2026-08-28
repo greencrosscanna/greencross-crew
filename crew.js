@@ -2347,8 +2347,30 @@
      same blue here as on the kiosk. Imported rows print the store label the REPORT used ("Hillsboro"
      for what is now Baseline) but colour the dot by the resolved store_id — so a year of history
      groups by eye against today's stores even though the names moved. */
+  function incStoreId(r) { return r.store_id || r.storeSlug || ''; }
+
+  /* NEVER the label the row arrived with. GX Core's registry is the one place store names live, and
+     both sources here disagree with it: an imported row carries the name the 2025 report printed
+     ("Hillsboro" for what is now Baseline, "Center St" for Center), and a live row carries
+     Leaderboard's own storeName. Rendering either means Crew shows a store called something nobody
+     calls it, and a rename in Command Center never reaches this screen — which is the whole reason
+     the no-hardcoded-stores rule exists.
+     The original label is kept in the data as provenance and surfaces on hover, because on a
+     historical payout report it is genuinely what the document said. */
+  function incStoreName(r) {
+    var id = incStoreId(r);
+    var raw = String(r.storeName || r.store_label || '');
+    var reg = '';
+    try { reg = (window.GXStores && GXStores.name && GXStores.name(id)) || ''; } catch (e) { reg = ''; }
+    if (!reg) return esc(raw || id);
+    if (raw && raw !== reg) {
+      return '<span title="' + esc('Recorded as “' + raw + '” on this report') + '">' + esc(reg) + '</span>';
+    }
+    return esc(reg);
+  }
+
   function incDot(r) {
-    var id = r.store_id || r.storeSlug || '';
+    var id = incStoreId(r);
     if (!id) return '';
     var c = storeColor(id);
     return '<span class="crew-inc-dot" style="background:' +
@@ -2489,7 +2511,7 @@
         ' · team attendance ' + m0(c.teamA)) + '"';
       return '<tr>' +
         '<td class="l crew-inc-name">' + esc(incName(m)) + '</td>' +
-        '<td class="l">' + incDot(m) + esc(m.storeName || m.store_label || '') + '</td>' +
+        '<td class="l">' + incDot(m) + incStoreName(m) + '</td>' +
         '<td>' + incDash(m.target) + '</td><td>' + incDash(m.sales) + '</td>' +
         '<td' + (c.pct != null && c.pct >= 100 ? ' class="crew-inc-hit"' : '') + '>' +
           (c.pct == null ? '—' : esc(pct1(c.pct))) + '</td>' +
@@ -2517,7 +2539,7 @@
         ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
       return '<tr>' +
         '<td class="l crew-inc-name">' + esc(incName(b)) + '</td>' +
-        '<td class="l">' + incDot(b) + esc(b.storeName || b.store_label || '') + '</td>' +
+        '<td class="l">' + incDot(b) + incStoreName(b) + '</td>' +
         '<td' + (!isImported && c.qual ? ' class="crew-inc-hit"' : '') + '>' + esc(b.txn || 0) + '</td>' +
         '<td>' + incDash(b.sales) + '</td>' +
         '<td' + (T && dp <= T.budtender.discountMaxPct ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
@@ -2603,9 +2625,46 @@
   }
 
   /* Split out from the download so the file that reaches payroll can be asserted in a test rather
-     than eyeballed once. Everything that decides an AMOUNT lives here. */
+     than eyeballed once. Everything that decides an AMOUNT lives here.
+
+     THE SHAPE IS CAPSTONE'S, NOT OURS. It mirrors the sheet Capstone already keys off: an ADMIN
+     block, then one block per store in THEIR order, each sorted by surname, so a new starter at
+     River lands in the River block in the right alphabetical slot without anyone re-sorting it.
+     The section labels are Capstone's own words too — SOUTH for Commercial, BEND for what GX Core
+     calls Century, HILLSBORO for Baseline. That is deliberately NOT the store registry: it is a
+     third party's import format, and it must not drift when a store is renamed in Command Center.
+     Renaming a store is a GX decision; renaming a Capstone column is Capstone's. */
+  var CAPSTONE_SECTIONS = [
+    { id: '',            label: 'ADMIN' },
+    { id: 'bend',        label: 'BEND' },
+    { id: 'hillsboro',   label: 'HILLSBORO' },
+    { id: 'river-rd',    label: 'RIVER' },
+    { id: 'center',      label: 'CENTER' },
+    { id: 'commercial',  label: 'SOUTH' },
+    { id: 'portland-rd', label: 'PORTLAND' }
+  ];
+
+  /* "Kettler Mike C" — surname, first name, middle initial. Payroll matches on the legal name, so
+     this deliberately uses full_name and NOT the nickname the rest of Crew leads with: the roster
+     shows "Nate Wydick", and the person Capstone pays is Wydick Robert N.
+     A middle initial is only emitted when full_name actually carries a middle name. Nobody stores
+     one today, so most rows are "Surname First" — which is correct rather than approximate, and an
+     invented initial on a payroll file is worse than a missing one. */
+  function legalSortName(row) {
+    var full = String(row.full_name || row.legal_name || row.pdf_name || row.name || '').trim();
+    if (!full) return '';
+    var parts = full.split(/\s+/);
+    if (parts.length === 1) return parts[0];
+    var last = parts[parts.length - 1];
+    var first = parts[0];
+    var mid = parts.length > 2 ? parts[1].charAt(0).toUpperCase() : '';
+    return last + ' ' + first + (mid ? ' ' + mid : '');
+  }
+
   function incCsvRows(d, isImported) {
-    var rows = [['Section', 'Name', 'Store', 'Payroll']];
+    /* Header says BONUS. Capstone's column is what the company pays, which is the payroll figure —
+       their sheet just calls it that, and the file has to speak their language, not ours. */
+    var rows = [['Section', 'Name', 'Store', 'Bonus']];
     var T = d.thresholds || null, buds = d.budtenders || [];
     function pay(r, kind) {
       if (isImported) return r.payroll;
@@ -2613,27 +2672,40 @@
            : kind === 'mgr' ? calcMgr(r, T, incInputs(), buds).payroll
            : calcAdmin(r, T).bonus;
     }
-    if (d.admin) rows.push(['Admin', incName(d.admin), 'All', (pay(d.admin, 'adm') || 0).toFixed(2)]);
-    (d.managers || []).forEach(function (m) {
-      rows.push(['Manager', incName(m), m.storeName || m.store_label || '', (pay(m, 'mgr') || 0).toFixed(2)]);
+    function money(v) { return v == null ? '' : v.toFixed(2); }
+
+    var people = [];
+    if (d.admin) people.push({ row: d.admin, kind: 'adm', store: '' });
+    (d.managers || []).forEach(function (m) { people.push({ row: m, kind: 'mgr', store: incStoreId(m) }); });
+    buds.forEach(function (b) { people.push({ row: b, kind: 'bud', store: incStoreId(b) }); });
+
+    CAPSTONE_SECTIONS.forEach(function (sec) {
+      var inSec = people.filter(function (x) { return x.store === sec.id; });
+      if (!inSec.length) return;
+      inSec.sort(function (a, b) {
+        var an = legalSortName(a.row).toLowerCase(), bn = legalSortName(b.row).toLowerCase();
+        return an < bn ? -1 : an > bn ? 1 : 0;
+      });
+      inSec.forEach(function (x) {
+        /* A row whose payroll the source never recorded is exported EMPTY, not 0.00 — a zero here
+           tells payroll to pay nothing, which is a different claim from "not recorded". */
+        rows.push([sec.label, legalSortName(x.row), sec.label, money(pay(x.row, x.kind))]);
+      });
     });
-    buds.forEach(function (b) {
-      /* A row whose payroll the source never recorded is exported EMPTY, not 0.00 — a zero here
-         tells payroll to pay nothing, which is a different claim from "not recorded". */
-      var v = pay(b, 'bud');
-      rows.push(['Budtender', incName(b), b.storeName || b.store_label || '',
-                 v == null ? '' : v.toFixed(2)]);
+
+    /* Anyone whose store did not resolve would otherwise vanish from the file entirely — a silent
+       omission on a payroll export, which is the worst way for this to fail. They go at the end,
+       flagged, so the gap is visible before the file is imported. */
+    var placed = {};
+    CAPSTONE_SECTIONS.forEach(function (sec) { placed[sec.id] = 1; });
+    people.filter(function (x) { return !placed[x.store]; }).forEach(function (x) {
+      rows.push(['UNASSIGNED', legalSortName(x.row), String(x.row.store_label || x.row.storeName || ''),
+                 money(pay(x.row, x.kind))]);
     });
     return rows;
   }
 
-  /* APPROVE & PRINT.
-     An already-closed record just prints — it was approved when it was written, and there is
-     nothing left to decide. A live period that has ENDED is approved first: the engine recomputes
-     it from the performance slice and the saved inputs and writes it into history, after which it
-     is a record like the imported ones and can never be recomputed. Then it prints.
-     The confirm is not ceremony. Approving is the one irreversible action on this screen, and the
-     figures it freezes are what people get paid. */
+
   /* MMDDYY, the convention the archived reports already use — "Incentive Dashboard -
      030226-031526.pdf". Chrome names a Save-as-PDF from document.title, so the file lands with the
      right name instead of "GX Crew.pdf" and whoever files it does not have to retype it. Restored
@@ -2659,6 +2731,13 @@
     setTimeout(restore, 4000);
   }
 
+  /* APPROVE & PRINT.
+     An already-closed record just prints — it was approved when it was written, and there is
+     nothing left to decide. A live period that has ENDED is approved first: the engine recomputes
+     it from the performance slice and the saved inputs and writes it into history, after which it
+     is a record like the imported ones and can never be recomputed. Then it prints.
+     The confirm is not ceremony. Approving is the one irreversible action on this screen, and the
+     figures it freezes are what people get paid. */
   async function incApproveAndPrint(d, isImported) {
     if (isImported) { incPrintWithName(d); return; }
     var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
@@ -2691,8 +2770,7 @@
     } catch (e) {
       toast('Could not approve: ' + ((e && e.message) || 'unknown'), true);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Approve & Print PDF'; }   // reset; the
-      // next paint relabels it to "Print PDF" now that the period is a record
+      if (btn) { btn.disabled = false; btn.textContent = 'Approve & Print PDF'; }
     }
   }
 

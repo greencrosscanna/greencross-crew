@@ -3232,6 +3232,16 @@ function incentiveHistory_(p) {
   if (!want) return { ok: true, periods: historyPeriods_() };
   var rows = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
   if (!rows.length) return { ok: false, error: 'no imported history for ' + want };
+  /* Imported rows store the name the REPORT printed, which is what the document said and what the
+     screen shows. The export needs the legal name, so the registry is joined in here rather than
+     the history tab carrying a copy that would go stale the next time somebody is renamed. */
+  var legalById = Object.create(null);
+  try {
+    (GXCore.getEmployees() || []).forEach(function (e) {
+      if (e.employee_id) legalById[String(e.employee_id)] = String(e.full_name || '');
+    });
+  } catch (e) {}
+
   function group(section) {
     return rows.filter(function (r) { return r.section === section; }).map(function (r) {
       var o = {};
@@ -3240,6 +3250,7 @@ function incentiveHistory_(p) {
                 h === 'spiff' || h === 'bonus' || h === 'per_hour' || h === 'payroll')
                ? (r[h] === '' ? null : Number(r[h])) : r[h];
       });
+      o.full_name = legalById[String(r.employee_id || '')] || '';
       return o;
     });
   }
@@ -3350,8 +3361,9 @@ function stampEmployeeIds_(live) {
      been looked up under a key nothing wrote. Caught by incentive_probe reporting the impossible
      pair `stamped: 0, unmatched: []`. */
   var roster = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
-  var byKey = Object.create(null);
+  var byKey = Object.create(null), legalById = Object.create(null);
   roster.forEach(function (e) {
+    if (e.employee_id) legalById[String(e.employee_id)] = String(e.full_name || '');
     /* The name people are CALLED by, as well as the legal one: the registry's Robert Wydick is
        "Nate Wydick" on the board and "Nathan Wydick" in the payout reports, and Thomas Peterson is
        "TJ Peterson". Matching only full_name reaches neither.
@@ -3381,6 +3393,10 @@ function stampEmployeeIds_(live) {
       }
     }
     r.employee_id = hit || '';
+    /* The LEGAL name, which only the registry holds. Leaderboard sends whatever Dutchie calls the
+       person and the payout reports print the nickname; Capstone pays "Wydick Robert N". The
+       screen keeps leading with the name people use — this rides alongside for the export. */
+    r.full_name = hit ? (legalById[hit] || '') : '';
     if (!hit) unmatched.push(r.name);
   }
   (live.budtenders || []).forEach(stamp);
@@ -3466,10 +3482,57 @@ function getIncentive_(p) {
    cannot offer a period that neither side can serve. Leaderboard's own list overlaps the imported
    range (it offers the last 8 regardless), and where they overlap the IMPORT wins: it is what was
    actually paid, and the live path would re-derive it against today's thresholds. */
+/* Every pay period from the anchor to the one running today, newest first. Dates are TEXT and the
+ * arithmetic runs at NOON UTC on purpose: a period boundary computed at midnight lands on the wrong
+ * side of a DST change twice a year, which would shift a whole fortnight's worth of sales into the
+ * neighbouring period. `back` limits how far the picker reaches; imported periods are added
+ * separately and are not bounded by it. */
+function computedPeriods_(back) {
+  var anchorStr = '', days = 14;
+  try { anchorStr = String(GXCore.getKv('cfg.payPeriodAnchor') || ''); } catch (e) {}
+  try { days = Number(GXCore.getKv('cfg.payPeriodDays')) || 14; } catch (e) {}
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(anchorStr)) return [];
+
+  function noonUTC(iso) {
+    return Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12);
+  }
+  function iso(ms) {
+    var d = new Date(ms);
+    return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) +
+           '-' + ('0' + d.getUTCDate()).slice(-2);
+  }
+  var DAY = 86400000, span = days * DAY;
+  var a = noonUTC(anchorStr), now = noonUTC(Utilities.formatDate(new Date(), STORE_TZ, 'yyyy-MM-dd'));
+  /* Math.floor, so a date BEFORE the anchor still lands on a real period rather than rounding
+     toward zero into the one after it. */
+  var n = Math.floor((now - a) / span);
+  var out = [];
+  var limit = back == null ? 12 : back;
+  for (var i = 0; i <= limit; i++) {
+    var startMs = a + (n - i) * span;
+    if (startMs < a) break;
+    out.push({ start: iso(startMs), end: iso(startMs + span - DAY), current: i === 0 });
+  }
+  return out;
+}
+
 function periodList_(imported, livePeriods) {
   var seen = Object.create(null), out = [];
-  (livePeriods || []).forEach(function (x) {
+  /* THE CALENDAR IS COMPUTED, NOT BORROWED FROM THE FETCH. Viewing an imported period served no
+     live payload, so livePeriods was null and the picker lost every period Leaderboard would have
+     offered — including the CURRENT one. Selecting a 2025 period therefore stranded you there with
+     no way back, which is exactly the sort of dead end a payroll screen must not have.
+     Pay periods are a fixed 14-day cadence from a known anchor (GX Core cfg.payPeriodAnchor /
+     cfg.payPeriodDays — the same two values Leaderboard derives its own list from), so Crew can
+     work them out for itself in a millisecond instead of paying for a cross-app round trip just to
+     populate a dropdown. */
+  computedPeriods_().forEach(function (x) {
     if (imported.some(function (h) { return h.pp_start === x.start; })) return;
+    seen[x.start] = 1;
+    out.push({ pp_start: x.start, pp_end: x.end, current: !!x.current, source: 'live' });
+  });
+  (livePeriods || []).forEach(function (x) {
+    if (seen[x.start] || imported.some(function (h) { return h.pp_start === x.start; })) return;
     seen[x.start] = 1;
     out.push({ pp_start: x.start, pp_end: x.end, current: !!x.current, source: 'live' });
   });

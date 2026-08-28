@@ -30,7 +30,8 @@ const M = (function () {
   const cut = src.lastIndexOf(TAIL);
   src = src.slice(0, cut) +
         '\n; return { incBudTable, incMgrTable, incAdminTable, incCsvRows, incDiscPct,\n' +
-        '           incHeadActions, incMMDDYY, calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
+        '           incHeadActions, incMMDDYY, legalSortName, CAPSTONE_SECTIONS,\n' +
+        '           calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
   const doc = { readyState: 'loading', currentScript: { src: 'crew.js?v=99' },
                 body: { classList: { add() {}, remove() {} } },
@@ -102,12 +103,15 @@ ok('a $500 SPIFF lands in Bonus but not Payroll', c.bonus === 565 && c.payroll =
 
 const csv = M.incCsvRows({
   thresholds: T, admin: null, managers: [],
-  budtenders: [budWithSpiff], payPeriod: { start: '2026-08-17' },
+  budtenders: [Object.assign({}, budWithSpiff, { store_id: 'bend', full_name: 'Zed Quill' })],
+  payPeriod: { start: '2026-08-17' },
 }, false);
-ok('the Capstone export carries Payroll, never Bonus',
+ok('the export carries the PAYROLL figure, never the bonus',
    csv[1][3] === '65.00' && !csv.some(r => r[3] === '565.00'));
-ok('the export has exactly the four columns payroll expects',
-   csv[0].join(',') === 'Section,Name,Store,Payroll');
+/* The header says Bonus because that is Capstone's column name; the VALUE is payroll. The file has
+   to speak their language, not ours. */
+ok('the header uses Capstone\'s own column names',
+   csv[0].join(',') === 'Section,Name,Store,Bonus');
 
 /* ── "not recorded" is not zero ──
    The oldest report has no payroll column. Exporting 0.00 for those rows instructs payroll to pay
@@ -115,8 +119,9 @@ ok('the export has exactly the four columns payroll expects',
 const noPayroll = { employee_id: 'g', pdf_name: 'Old Timer', store_label: 'Bend',
                     txn: 145, sales: null, discount_pct: 2.97, aov: 27.83,
                     bonus: 0, payroll: null, spiff: null, per_hour: 0 };
-const csv2 = M.incCsvRows({ admin: null, managers: [], budtenders: [noPayroll],
-                            pp_start: '2025-08-04' }, true);
+const csv2 = M.incCsvRows({ admin: null, managers: [],
+  budtenders: [Object.assign({}, noPayroll, { store_id: 'bend', full_name: 'Old Timer' })],
+  pp_start: '2025-08-04' }, true);
 ok('an unrecorded payroll exports EMPTY, not 0.00', csv2[1][3] === '');
 const oldHtml = M.incBudTable([noPayroll], b => ({ bonus: b.bonus, payroll: b.payroll,
   spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
@@ -228,6 +233,48 @@ ok('an open period offers Print PDF too — it cannot be approved yet',
    headOf({ source: 'live', payPeriod: { start: '2026-08-17', current: true } }).includes('>Print PDF<'));
 ok('a CLOSED live period is the only one that offers Approve',
    /Approve/.test(headOf({ source: 'live', payPeriod: { start: '2026-08-03', current: false } })));
+
+/* ── the export is shaped like CAPSTONE'S sheet, not ours ──
+   Sky supplied their template: an ADMIN block, then one block per store in THEIR order, each sorted
+   by surname, so a new starter at River lands in the River block in the right alphabetical slot
+   without anyone re-sorting the file by hand. */
+ok('surname first, then given name and a middle initial',
+   M.legalSortName({ full_name: 'Michael C Kettler' }) === 'Kettler Michael C');
+/* Nobody stores a middle name today, so most rows are "Surname First" — correct rather than
+   approximate. An invented initial on a payroll file is worse than a missing one. */
+ok('no middle name means no invented initial',
+   M.legalSortName({ full_name: 'Robert Wydick' }) === 'Wydick Robert');
+ok('a single-word name survives intact', M.legalSortName({ full_name: 'Cher' }) === 'Cher');
+/* Payroll matches on the LEGAL name. The roster leads with "Nate Wydick"; Capstone pays
+   Wydick Robert. Preferring the display name here would send the wrong person's name to payroll. */
+ok('the legal name wins over the name the screen shows',
+   M.legalSortName({ full_name: 'Robert Wydick', name: 'Nate Wydick', pdf_name: 'Nathan Wydick' })
+     === 'Wydick Robert');
+
+const big = M.incCsvRows({
+  admin: { pdf_name: 'Mike Kettler', full_name: 'Michael C Kettler', payroll: 300 },
+  managers: [{ full_name: 'Thomas Peterson', store_id: 'river-rd', payroll: 50 }],
+  budtenders: [
+    { full_name: 'Noah Pinkerton',   store_id: 'river-rd',  payroll: 15 },
+    { full_name: 'Kristin Bailey',   store_id: 'river-rd',  payroll: 40 },
+    { full_name: 'Zachary Babcock',  store_id: 'hillsboro', payroll: 40 },
+    { full_name: 'Shane Styrt',      store_id: 'commercial', payroll: 25 },
+    { full_name: 'Nobody Anywhere',  store_id: 'atlantis',  payroll: 10 },
+  ], pp_start: '2026-08-03' }, true);
+const sections = big.slice(1).map(r => r[0]);
+ok('ADMIN leads, then the stores in Capstone\'s order',
+   sections.join(',') === 'ADMIN,HILLSBORO,RIVER,RIVER,RIVER,SOUTH,UNASSIGNED');
+/* Commercial is SOUTH on their sheet, Baseline is HILLSBORO, Century is BEND. Deliberately NOT the
+   store registry — it is a third party's import format and must not move when a store is renamed
+   in Command Center. */
+ok('Commercial exports as SOUTH, their label not ours', sections.indexOf('SOUTH') > -1);
+const river = big.slice(1).filter(r => r[0] === 'RIVER').map(r => r[1]);
+ok('each block is sorted by surname, so a new starter lands in the right slot',
+   river.join(' | ') === 'Bailey Kristin | Peterson Thomas | Pinkerton Noah');
+/* An unresolvable store would otherwise drop the person from the file entirely — a silent omission
+   on a payroll export is the worst way for this to fail. */
+ok('somebody whose store did not resolve is flagged, not dropped',
+   big.some(r => r[0] === 'UNASSIGNED' && r[1] === 'Anywhere Nobody'));
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);
