@@ -35,7 +35,15 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           'birthday', 'work_anniversary', 'employee_number', 'wage',
                           'permit_number', 'permit_granted', 'permit_expires', 'permit_status',
                           'celebrations_opt_out', 'not_on_payroll', 'pay_type', 'digest_opt_in',
-                          'updated_at', 'updated_by'];
+                          'updated_at', 'updated_by',
+                          /* APPENDED 2026-08-27, after ATTR_HEADERS' own rule: only ever append.
+                             Payroll matches on the legal name and Capstone's sheet writes it
+                             "Kettler Michael C", so the initial is a real field, not something to
+                             parse out of full_name — most people simply do not have a middle name
+                             recorded, and guessing one onto a payroll file is worse than leaving it
+                             out. Crew owns it because it is an HR attribute; GX Core's identity
+                             slice stays exactly as it is. */
+                          'middle_initial'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
  *
@@ -2078,6 +2086,7 @@ function rosterJoin_() {
       employee_id: id, name_key: nameToKey_(r.full_name), name: String(r.full_name || ''),
       store: String(r.home_store || ''),
       preferred_name: String(r.preferred_name || ''),
+      middle_initial: String(a.middle_initial || '').trim().toUpperCase().slice(0, 1),
       avatar_config: String(r.avatar_config || ''),
       /* THE AVATAR SEED. DiceBear generates a face from a seed, and Leaderboard historically
          seeded on nameKey — which derives from the NAME, so a rename or one of our merges
@@ -2485,6 +2494,11 @@ function saveRosterAttrs_(p) {
     digest_opt_in:      p.digest_opt_in == null
                         ? (existing.digest_opt_in || '')
                         : (isTruthyFlag_(p.digest_opt_in) ? 'yes' : ''),
+    /* One letter, upper case. Normalised on the way in rather than trusted: the payroll export
+       reads this straight into a name and "j." or "James" would land in the file as typed. */
+    middle_initial:     p.middle_initial == null
+                        ? (existing.middle_initial || '')
+                        : String(p.middle_initial).replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 1),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };

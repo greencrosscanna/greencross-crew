@@ -1749,6 +1749,17 @@
         },
         read: function (r) { return r.name || ''; } },
 
+      /* Beside the legal name, not the nickname: this exists for payroll and METRC, and it is
+         deliberately absent from every friendly-name surface — displayName() joins the NICKNAME to
+         the surname, and an initial in the middle of "Nate Wydick" would be noise. */
+      { label: 'Middle initial', route: 'roster_save', field: 'middle_initial',
+        value: row.middle_initial, placeholder: '—', maxlength: 1,
+        note: function (r) {
+          return r.middle_initial ? { text: 'Used on the payroll export only', kind: '' }
+                                  : { text: 'Only if payroll has one', kind: '' };
+        },
+        read: function (r) { return r.middle_initial || ''; } },
+
       { label: 'Nickname', route: 'identity', field: 'preferred_name', value: row.preferred_name,
         placeholder: 'shown on the board', renames: true,
         note: function () { return { text: 'What the kiosk and this roster call them', kind: '' }; },
@@ -2654,11 +2665,16 @@
     var full = String(row.full_name || row.legal_name || row.pdf_name || row.name || '').trim();
     if (!full) return '';
     var parts = full.split(/\s+/);
-    if (parts.length === 1) return parts[0];
-    var last = parts[parts.length - 1];
-    var first = parts[0];
-    var mid = parts.length > 2 ? parts[1].charAt(0).toUpperCase() : '';
-    return last + ' ' + first + (mid ? ' ' + mid : '');
+    var last = parts.length === 1 ? parts[0] : parts[parts.length - 1];
+    var first = parts.length === 1 ? '' : parts[0];
+    /* The STORED initial, not one parsed out of full_name. A middle name inside full_name is rare
+       and unreliable — full_name is the column METRC and payroll match on and it holds exactly what
+       those systems hold — so the initial is its own roster field. Falls back to a genuine middle
+       name if one happens to be in there, and to nothing at all otherwise: an invented initial on a
+       payroll file is worse than a missing one. */
+    var mid = String(row.middle_initial || '').trim().toUpperCase().slice(0, 1);
+    if (!mid && parts.length > 2) mid = parts[1].charAt(0).toUpperCase();
+    return (last + (first ? ' ' + first : '') + (mid ? ' ' + mid : '')).trim();
   }
 
   function incCsvRows(d, isImported) {
