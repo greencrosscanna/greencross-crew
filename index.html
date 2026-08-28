@@ -547,17 +547,24 @@
     .crew-inc-tbl tbody tr:hover td { background: #101614; }
     .crew-inc-name { font-weight: 600; }
     .crew-inc-nostore { color: var(--gx-text-mute); font-style: italic; }
-    /* A met target reads green ON THE NUMBER ITSELF, not as a separate tick column — the question
-       is always "did THIS figure clear its bar", and the answer belongs on the figure. */
-    .crew-inc-hit { color: var(--gx-green); font-weight: 700; }
-    .crew-inc-miss { color: var(--gx-text); }
-    .crew-inc-zero { color: var(--gx-text-mute); }
+    /* EVERY COLOUR RULE BELOW IS QUALIFIED `.crew-inc-tbl td.…`, and that is not style — it is the
+       bug that shipped. The base cell rule is `.crew-inc-tbl td`, a class PLUS an element, so it
+       specifies at (0,1,1); a bare `.crew-inc-hit` is (0,1,0) and loses to it no matter what order
+       they appear in. The classes were all present in the DOM and not one of them painted, so the
+       screen was entirely grey while the markup said otherwise — which is exactly why the DOM tests
+       passed. Specificity is not visible from the HTML.
+       A met target reads green ON THE NUMBER ITSELF, not as a separate tick column: the question is
+       always "did THIS figure clear its bar", and the answer belongs on the figure. */
+    .crew-inc-tbl td.crew-inc-hit { color: var(--gx-green); font-weight: 700; }
+    .crew-inc-tbl td.crew-inc-miss { color: var(--gx-text); }
+    .crew-inc-tbl td.crew-inc-zero,
+    .crew-inc-tbl td .crew-inc-zero { color: var(--gx-text-mute); }
     /* PAYROLL is the money the company actually pays and the only column the Capstone export
        carries, so it is the one that gets the colour — the same green LB used. Bonus sits beside
        it in plain white precisely so the difference between them (SPIFF, which vendors fund) is
        visible at a glance rather than needing the footnote. */
-    .crew-inc-pay { font-weight: 700; color: var(--gx-green); }
-    .crew-inc-pay .crew-inc-zero { color: var(--gx-text-mute); font-weight: 400; }
+    .crew-inc-tbl td.crew-inc-pay { font-weight: 700; color: var(--gx-green); }
+    .crew-inc-tbl td.crew-inc-pay .crew-inc-zero { color: var(--gx-text-mute); font-weight: 400; }
     .crew-inc-grand { color: var(--gx-green); }
     /* Store colour from the shared registry, so Century is the same blue here as on the kiosk. */
     .crew-inc-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
@@ -639,11 +646,12 @@
       @media print { .crew-inc-printpp { display: inline !important; font-weight: 600; } }
       .crew-inc-tot { gap: 26px; margin-bottom: 12px; }
       .crew-inc-tot dt { color: #555 !important; }
-      .crew-inc-grand, .crew-inc-pay { color: #000 !important; }
+      .crew-inc-grand, .crew-inc-tbl td.crew-inc-pay { color: #000 !important; }
       /* The green that means "hit a target" is the one colour worth the ink — it is the
          difference between a bonus earned and not, and a grey copy cannot show it. */
-      .crew-inc-hit { color: #0a7a3d !important; font-weight: 700; }
-      .crew-inc-zero { color: #999 !important; }
+      .crew-inc-tbl td.crew-inc-hit { color: #0a7a3d !important; font-weight: 700; }
+      .crew-inc-tbl td.crew-inc-zero,
+      .crew-inc-tbl td .crew-inc-zero { color: #999 !important; }
       .crew-inc-wrap { overflow: visible !important; border: 1px solid #bbb !important;
         border-radius: 0 !important; }
       .crew-inc-tbl { font-size: 9.5px; }
@@ -685,6 +693,6 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.332"></script>
+  <script src="crew.js?v=1.333"></script>
 </body>
 </html>

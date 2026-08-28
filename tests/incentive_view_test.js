@@ -329,5 +329,32 @@ ok('but the figures are still all there', /1\.2%/.test(noScheme) && /\$35\.00/.t
 const withScheme = M.incBudTable([histRow], calcHist, true, false, T);
 ok('with a frozen scheme, targets it cleared are marked', withScheme.includes('crew-inc-hit'));
 
+/* ── the colour classes must actually WIN against the base cell rule ──
+   This is the bug the DOM assertions above cannot see, and it shipped. `.crew-inc-tbl td` is a
+   class plus an element — specificity (0,1,1). A bare `.crew-inc-hit` is (0,1,0) and loses to it
+   regardless of source order. So every colour class was present in the markup and not one of them
+   painted: the screen was entirely grey while every test asserting the class name passed.
+
+   Specificity is not visible from the HTML, so it has to be asserted from the STYLESHEET. */
+function spec(sel) {                       // [ids, classes, elements] — enough for this sheet
+  var ids = (sel.match(/#[\w-]+/g) || []).length;
+  var cls = (sel.match(/\.[\w-]+/g) || []).length + (sel.match(/\[[^\]]+\]/g) || []).length;
+  var els = (sel.replace(/[#.][\w-]+/g, ' ').match(/\b[a-z]+\b/g) || []).length;
+  return [ids, cls, els];
+}
+function beats(a, b) {
+  const x = spec(a), y = spec(b);
+  for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] > y[i]; }
+  return true;                             // equal specificity: later wins, and ours are later
+}
+/* Pulled from the sheet rather than hardcoded, so a renamed base rule fails here loudly. */
+const BASE = (html.match(/(\.crew-inc-tbl td)\s*\{[^}]*color:/) || [])[1];
+ok('the base cell rule is still the thing to beat', !!BASE);
+['crew-inc-hit', 'crew-inc-pay', 'crew-inc-zero'].forEach(function (cls) {
+  const rule = (html.match(new RegExp('([^\\n{}]*\\.' + cls + '[^\\n{}]*)\\s*\\{[^}]*color:')) || [])[1];
+  ok(cls + ' has a colour rule that out-specifies the base cell',
+     !!rule && !!BASE && beats(rule.trim(), BASE));
+});
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);
