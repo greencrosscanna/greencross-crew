@@ -420,6 +420,11 @@ function route_(e) {
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
       // record like the imported ones and can never be recomputed.
       case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
+      // The approval loop: prepare -> send -> approve, or send back with a reason.
+      case 'incentive_send':    return json_(incentiveSend_(p), p.callback);
+      case 'incentive_return':  return json_(incentiveReturn_(p), p.callback);
+      // Break glass. Deploy-secret only, never a button — see the header on incentiveUnapprove_.
+      case 'incentive_unapprove': return json_(incentiveUnapprove_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'thresholds':   return json_(getThresholds_(p), p.callback);      // editable comp thresholds
@@ -3502,7 +3507,14 @@ function getIncentive_(p) {
   live.source = 'live';
   stampEmployeeIds_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
-  live.can_edit = canEdit_(auth);
+  var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
+  live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
+                    decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',
+                    note: wf.note || '' };
+  live.can_approve = canApprove_(auth);
+  /* Locked while pending — for everyone, including the approver. Sky editing a figure he is about
+     to approve is the same problem as Mike editing one he already sent. */
+  live.can_edit = canEdit_(auth) && wf.status !== 'pending';
   live.periods = periodList_(imported, live.periods);
   return live;
 }
@@ -3593,6 +3605,14 @@ function saveIncentiveInput_(p) {
   if (!pp || !eid) return { ok: false, error: 'pp_start and employee_id required' };
   if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
     return { ok: false, error: pp + ' is an imported (closed) period — its figures are what was paid and cannot be edited' };
+  }
+  /* LOCKED WHILE AWAITING APPROVAL. Otherwise the numbers being approved are not the ones that
+     were sent: a tick between the email and the click changes what gets frozen, and nothing
+     anywhere would say so. */
+  var _wf = wfGet_(pp);
+  if (_wf && _wf.status === 'pending') {
+    return { ok: false, error: pp + ' was sent for approval on ' + _wf.sent_at +
+             ' and is locked until it is approved or sent back' };
   }
 
   var sh = sheetOf_(INPUTS_TAB, INPUTS_HEADERS);
@@ -3698,6 +3718,15 @@ function incentiveApprove_(p) {
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+  /* APPROVING IS THE OWNER'S CALL. Preparing is any editor's — that separation is the entire
+     point of the workflow, and without this check Mike approves his own work. Deliberately a
+     ROLE from GX Core's app_access rather than a username: Leaderboard gated its copy on a
+     hardcoded sky/mike list and that is what this replaced. */
+  if (!canApprove_(auth)) {
+    return { ok: false, error: approverIds_().length
+      ? 'only the named approver can approve — use “Send for approval” instead'
+      : 'no approver is configured — set cfg.crewApprover in the Command Center to a GX user_id' };
+  }
 
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
@@ -3747,12 +3776,289 @@ function incentiveApprove_(p) {
              note: 'nothing written — re-send with confirm=yes' };
   }
 
+  /* An approve link from the email carries a single-use token. It is checked against the period
+     AND against the total that was sent: if anything moved between the email and the click, the
+     link refuses and Sky goes and looks instead of approving a number he never saw. */
+  var wf = wfGet_(pp);
+  var tok = String(p.approve_token || '').trim();
+  if (tok) {
+    if (!wf || wf.status !== 'pending') return { ok: false, error: 'this period is no longer awaiting approval' };
+    if (tok !== String(wf.token || '')) return { ok: false, error: 'that approval link is not valid any more' };
+    if (wf.token_expires && new Date(wf.token_expires).getTime() < new Date().getTime()) {
+      return { ok: false, error: 'that approval link has expired — open the period in Crew to approve it' };
+    }
+    if (Math.abs(Number(wf.sent_total || 0) - total) > 0.005) {
+      return { ok: false, error: 'the figures have changed since that email was sent (was ' +
+               wfMoney_(wf.sent_total) + ', now ' + wfMoney_(total) + ') — open it in Crew and review' };
+    }
+  }
+
   var sh = historySheet_();
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
+  wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, unmatched: live.unmatched || [] };
 }
+
+/* ══ Approval — who prepares, who decides, and how a mistake gets undone ══════════════════════════
+ *
+ * Mike prepares a closed period; Sky approves it. Before this, anyone with edit rights approved
+ * their own work and nobody was told, which is not an approval process — it is a button.
+ *
+ *     draft ──Mike sends──► pending ──Sky approves──► approved   (immutable, in history)
+ *       ▲                      │
+ *       └──Sky sends back──────┘  with a reason
+ *
+ * SENDING LOCKS THE INPUTS. Otherwise the numbers Sky approves are not necessarily the ones Mike
+ * sent — an attendance tick between the email and the click would change what gets frozen, and
+ * nothing would say so.
+ *
+ * SENDING BACK IS A FIRST-CLASS ACTION, not an escape hatch. Nothing has been written to history at
+ * that point, so there is nothing to undo — which is the whole reason approval is the only thing
+ * that writes. The reason and both timestamps stay on the period, so one that bounced twice shows
+ * that it did.
+ *
+ * APPROVAL IS THE IRREVERSIBLE ONE, and `incentive_unapprove` is the break-glass Sky asked for. It
+ * is DEPLOY-SECRET ONLY — not a button anywhere, because a screen that can un-pay people is a
+ * screen where that happens by accident — and it VOIDS rather than deletes: every row it removes is
+ * copied to crew_incentive_voided first, with who did it and why. Break glass, and there is glass
+ * on the floor afterwards. */
+var WF_TAB = 'crew_incentive_workflow';
+var WF_HEADERS = ['pp_start', 'status', 'sent_by', 'sent_at', 'decided_by', 'decided_at',
+                  'note', 'token', 'token_expires', 'sent_total'];
+var VOID_TAB = 'crew_incentive_voided';
+
+function wfSheet_() { return sheetOf_(WF_TAB, WF_HEADERS); }
+
+function wfGet_(pp) {
+  var rows = readTab_(WF_TAB, WF_HEADERS);
+  for (var i = 0; i < rows.length; i++) if (rows[i].pp_start === pp) return rows[i];
+  return null;
+}
+
+function wfSet_(pp, patch) {
+  var sh = wfSheet_();
+  var rows = readTab_(WF_TAB, WF_HEADERS);
+  var idx = -1;
+  for (var i = 0; i < rows.length; i++) if (rows[i].pp_start === pp) { idx = i; break; }
+  var cur = idx >= 0 ? rows[idx] : { pp_start: pp, status: 'draft' };
+  Object.keys(patch).forEach(function (k) { cur[k] = patch[k] == null ? '' : String(patch[k]); });
+  var line = WF_HEADERS.map(function (h) { return cur[h] == null ? '' : cur[h]; });
+  if (idx >= 0) sh.getRange(idx + 2, 1, 1, WF_HEADERS.length).setValues([line]);
+  else          sh.getRange(sh.getLastRow() + 1, 1, 1, WF_HEADERS.length).setValues([line]);
+  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@');
+  return cur;
+}
+
+/* WHO APPROVES — and why this is not a role check.
+ *
+ * The obvious answer was `role === 'owner'`, and it is wrong twice over. GX Core's role vocabulary
+ * is viewer / editor / admin / director; there is no `owner`, so that check would have been false
+ * for everybody and nothing could ever have been approved. And Crew is admin-only by design — Sky
+ * and Mike hold the SAME grant — so no role can tell the approver from the preparer. That is the
+ * exact situation Leaderboard solved with a hardcoded sky/mike allowlist in its source.
+ *
+ * So the approver is named in GX Core kv (`cfg.crewApprover`, a user_id or a comma-separated few).
+ * That is a list, like Leaderboard's — but it is DATA Sky edits in the Command Center cockpit
+ * rather than a constant that needs a deploy, which is the part that actually mattered.
+ *
+ * Unset, NOBODY can approve, and the screen says so. Failing closed is right here: the alternative
+ * is a default that quietly lets the preparer approve their own work, which is the one outcome this
+ * whole workflow exists to prevent. */
+function approverIds_() {
+  var raw = '';
+  try { raw = String(GXCore.getKv('cfg.crewApprover') || ''); } catch (e) {}
+  return raw.split(',').map(function (x) { return x.trim().toLowerCase(); })
+            .filter(function (x) { return !!x; });
+}
+function canApprove_(auth) {
+  var me = String((auth && auth.user) || '').trim().toLowerCase();
+  if (!me) return false;
+  return approverIds_().indexOf(me) >= 0;
+}
+
+/** Addresses for the approvers, from the same one source of truth. */
+function wfApproverEmails_() {
+  var want = approverIds_();
+  if (!want.length) return [];
+  var rows = rosterJoin_().rows || [];
+  var out = [];
+  rows.forEach(function (r) {
+    var uid = String(r.user_id || '').trim().toLowerCase();
+    if (!uid || want.indexOf(uid) < 0) return;
+    out.push(accountEmail_(r));
+  });
+  /* A named approver with no roster row still gets mail — the convention that builds the address
+     is the same one createAccounts_ used, and refusing to send because HR has not caught up is a
+     worse failure than sending to an address that might bounce. */
+  want.forEach(function (uid) {
+    var addr = uid.indexOf('@') > 0 ? uid : uid + '@' + ACCOUNT_DOMAIN;
+    if (out.indexOf(addr) < 0) out.push(addr);
+  });
+  return out.filter(function (e) { return /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(e); });
+}
+
+function wfMoney_(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
+
+/**
+ * ?action=incentive_send&pp_start=…  — Mike hands a closed period to Sky.
+ * Computes it exactly as approval will, so the email says what approval would write.
+ */
+function incentiveSend_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+  var pp = String(p.pp_start || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+  if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+    return { ok: false, error: pp + ' is already a closed record' };
+  }
+  var wf = wfGet_(pp);
+  if (wf && wf.status === 'pending') {
+    return { ok: false, error: 'already sent for approval on ' + wf.sent_at + ' by ' + wf.sent_by };
+  }
+
+  var pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
+  if (pre.ok === false) return pre;
+
+  /* Single-use, 72 hours, and bound to the TOTAL that was sent. If anything about the period
+     changes after the email goes out, the link refuses and sends Sky into the app to look —
+     a standing key to payroll in an inbox is the thing to avoid, not the click. */
+  var token = Utilities.getUuid().replace(/-/g, '');
+  var expires = new Date(new Date().getTime() + 72 * 3600 * 1000).toISOString();
+  wfSet_(pp, { status: 'pending', sent_by: auth.user || '', sent_at: new Date().toISOString(),
+               decided_by: '', decided_at: '', note: '', token: token, token_expires: expires,
+               sent_total: String(pre.payroll_total) });
+
+  var to = wfApproverEmails_();
+  var link = CREW_URL + '#incentive/' + encodeURIComponent(pp);
+  var approveLink = CREW_URL + '#approve/' + encodeURIComponent(pp) + '/' + token;
+  var html =
+    '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px">' +
+    '<h2 style="margin:0 0 4px">Incentive ready for approval</h2>' +
+    '<p style="margin:0 0 16px;color:#555">Pay period <strong>' + pp + ' → ' +
+      (pre.pp_end || '') + '</strong>, prepared by ' + (auth.user || 'a manager') + '.</p>' +
+    '<table style="border-collapse:collapse;margin-bottom:16px">' +
+    '<tr><td style="padding:4px 16px 4px 0;color:#555">People</td><td style="font-weight:700">' +
+      pre.rows + '</td></tr>' +
+    '<tr><td style="padding:4px 16px 4px 0;color:#555">Total to Capstone</td>' +
+      '<td style="font-weight:700">' + wfMoney_(pre.payroll_total) + '</td></tr>' +
+    (pre.unmatched && pre.unmatched.length
+      ? '<tr><td style="padding:4px 16px 4px 0;color:#a33">Not on the roster</td><td>' +
+        pre.unmatched.join(', ') + '</td></tr>' : '') +
+    '</table>' +
+    '<p style="margin:0 0 8px"><a href="' + approveLink + '" style="background:#22c55e;color:#04210f;' +
+      'padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:700">Approve</a>' +
+      '&nbsp;&nbsp;<a href="' + link + '" style="color:#0a7a3d">Open in GX Crew to review</a></p>' +
+    '<p style="color:#777;font-size:12px;margin:14px 0 0">Approving freezes these figures as the ' +
+      'record of what was paid. If something needs fixing, open it in Crew and send it back to ' +
+      (auth.user || 'the sender') + ' with a note. This link works once and expires in 72 hours.</p>' +
+    '</div>';
+  var mailed = [];
+  if (to.length) {
+    try {
+      MailApp.sendEmail({ to: to.join(','), subject: 'Approve incentive — ' + pp, htmlBody: html,
+                          name: 'GX Crew' });
+      mailed = to;
+    } catch (e) {
+      /* The state is already `pending`, which is correct — it WAS sent for approval. Report the
+         mail failure rather than throwing, so the sender learns to nudge in person instead of
+         believing an email went out. */
+      return { ok: true, pp_start: pp, status: 'pending', rows: pre.rows,
+               payroll_total: pre.payroll_total, mailed: [],
+               warning: 'marked pending, but the email failed: ' + String((e && e.message) || e) };
+    }
+  }
+  return { ok: true, pp_start: pp, status: 'pending', rows: pre.rows,
+           payroll_total: pre.payroll_total, mailed: mailed,
+           warning: mailed.length ? '' : 'no approver is configured (cfg.crewApprover) — nobody was emailed' };
+}
+
+/** ?action=incentive_return&pp_start=…&note=…  — Sky sends it back for a fix. */
+function incentiveReturn_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canApprove_(auth)) return { ok: false, error: 'only the named approver can send a period back' };
+  var pp = String(p.pp_start || '').trim();
+  var note = String(p.note || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+  /* A reason is required. "Sent back" with no note is a period that bounces again for the same
+     thing, and the person fixing it has to guess what was wrong. */
+  if (!note) return { ok: false, error: 'a reason is required — it is what the sender has to work from' };
+  var wf = wfGet_(pp);
+  if (!wf || wf.status !== 'pending') {
+    return { ok: false, error: pp + ' is not awaiting approval' };
+  }
+  wfSet_(pp, { status: 'draft', decided_by: auth.user || '', decided_at: new Date().toISOString(),
+               note: note, token: '', token_expires: '' });
+
+  var rows = rosterJoin_().rows || [];
+  var sender = null;
+  rows.forEach(function (r) { if (String(r.user_id || '') === wf.sent_by) sender = r; });
+  var to = sender ? accountEmail_(sender) : '';
+  if (to) {
+    try {
+      MailApp.sendEmail({ to: to, subject: 'Incentive ' + pp + ' sent back', name: 'GX Crew',
+        htmlBody: '<div style="font-family:system-ui,sans-serif;max-width:520px">' +
+          '<h2 style="margin:0 0 4px">Sent back for a fix</h2>' +
+          '<p style="margin:0 0 12px;color:#555">Pay period <strong>' + pp + '</strong>, returned by ' +
+            (auth.user || 'the owner') + '.</p>' +
+          '<blockquote style="margin:0 0 16px;padding:10px 14px;background:#f5f5f5;' +
+            'border-left:3px solid #999">' + note.replace(/</g, '&lt;') + '</blockquote>' +
+          '<p><a href="' + CREW_URL + '#incentive/' + encodeURIComponent(pp) + '">Open in GX Crew</a>' +
+          '</p><p style="color:#777;font-size:12px">It is editable again. Nothing was written to the ' +
+          'payroll record.</p></div>' });
+    } catch (e) { /* the state change is what matters; a failed nudge is not a failed return */ }
+  }
+  return { ok: true, pp_start: pp, status: 'draft', returned_to: wf.sent_by, note: note, mailed: to };
+}
+
+/**
+ * ?action=incentive_unapprove&pp_start=…&reason=…&secret=…&confirm=yes
+ *
+ * THE BREAK GLASS. Deploy-secret only and deliberately not wired to any button: a screen that can
+ * un-pay people is a screen where that eventually happens by accident.
+ *
+ * VOIDS, never deletes. Every row is copied to crew_incentive_voided with who did it and why,
+ * before it leaves history — so the period can be rebuilt, and so an approved figure that somebody
+ * removed leaves a trace rather than a gap. A `reason` is required for the same purpose.
+ */
+function incentiveUnapprove_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var pp = String(p.pp_start || '').trim();
+  var reason = String(p.reason || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+  if (!reason) return { ok: false, error: 'reason required — voiding a paid period must say why' };
+
+  var sh = historySheet_();
+  var all = sh.getDataRange().getValues();
+  var hit = [];
+  for (var i = 1; i < all.length; i++) if (String(all[i][0]) === pp) hit.push(i);
+  if (!hit.length) return { ok: false, error: 'no approved or imported history for ' + pp };
+
+  var total = hit.reduce(function (a, i) { return a + (Number(all[i][14]) || 0); }, 0);
+  if (String(p.confirm || '') !== 'yes') {
+    return { ok: true, dry_run: true, pp_start: pp, rows: hit.length,
+             payroll_total: Math.round(total * 100) / 100,
+             note: 'nothing voided — re-send with confirm=yes' };
+  }
+
+  var now = new Date().toISOString();
+  var vh = VOID_HEADERS();
+  var vsh = sheetOf_(VOID_TAB, vh);
+  var copies = hit.map(function (i) { return all[i].concat([now, reason]); });
+  vsh.getRange(vsh.getLastRow() + 1, 1, copies.length, vh.length).setValues(copies);
+  /* Bottom-up: deleting top-down shifts every row beneath and walks off its own indices. */
+  for (var j = hit.length - 1; j >= 0; j--) sh.deleteRow(hit[j] + 1);
+
+  wfSet_(pp, { status: 'draft', decided_by: '', decided_at: '', note: 'VOIDED: ' + reason,
+               token: '', token_expires: '' });
+  return { ok: true, pp_start: pp, voided: copies.length,
+           payroll_total: Math.round(total * 100) / 100, reason: reason,
+           note: 'copied to ' + VOID_TAB + ' — the period is editable again' };
+}
+function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reason']); }
 
 function hrImport_(p, body) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };

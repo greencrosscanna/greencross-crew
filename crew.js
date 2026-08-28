@@ -2173,6 +2173,7 @@
 
   function render() {
     initBugReport();          // no-op once wired; here so a late gx-bugreport.js still gets picked up
+    incReadHash();            // an emailed link decides which tab opens, before the shell is built
     renderWorkspace();
     /* renderWorkspace rebuilds the shell from scratch, so the visible tab has to be re-applied.
        Without this, any repaint — a roster reload, a resolved review item — drops you back onto
@@ -2325,7 +2326,28 @@
      Editing follows the roster's rule — no Edit mode, no Save button. A checkbox commits on
      change, a SPIFF field on a 600ms pause and on blur, and a toast names what was written. */
 
-  var inc = { data: null, pp: '', loading: false, error: '' };
+  var inc = { data: null, pp: '', loading: false, error: '',
+              approvePp: '', approveToken: '' };
+
+  /* The two links Crew emails out:
+       #incentive/<pp>        open that period to look at it
+       #approve/<pp>/<token>  open it AND carry the one-time approval token
+     The token is read once and the hash is cleared immediately, so it does not sit in the address
+     bar to be bookmarked, shared or replayed — and a refresh after approving does not try again. */
+  function incReadHash() {
+    var h = String((window.location && window.location.hash) || '');
+    var m = /^#approve\/([0-9-]+)\/([a-z0-9]+)$/i.exec(h);
+    if (m) {
+      inc.approvePp = m[1]; inc.approveToken = m[2]; inc.pp = m[1];
+      state.tab = 'incentive';
+      try { history.replaceState(null, '', window.location.pathname + window.location.search); }
+      catch (e) { window.location.hash = ''; }
+      return true;
+    }
+    m = /^#incentive(?:\/([0-9-]+))?$/i.exec(h);
+    if (m) { inc.pp = m[1] || ''; state.tab = 'incentive'; return true; }
+    return false;
+  }
   var incTimers = Object.create(null);
 
   function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
@@ -2473,11 +2495,44 @@
      open period cannot be approved yet. Both just print, so the button says what it will actually
      do rather than offering an action the engine will refuse. */
   function incHeadActions(d, isImported) {
-    var canApprove = !isImported && !(d.payPeriod && d.payPeriod.current);
-    return '<div class="crew-inc-actions">' +
-      '<button type="button" class="gx-btn gx-btn-green" id="incPrint">' +
-      (canApprove ? 'Approve &amp; Print PDF' : 'Print PDF') + '</button>' +
-      '<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button></div>';
+    var wf = d.workflow || { status: 'draft' };
+    var open = !!(d.payPeriod && d.payPeriod.current);
+    var closed = !isImported && !open;              // ended, not yet a record
+    var h = ['<div class="crew-inc-actions">'];
+
+    if (closed && wf.status === 'pending') {
+      /* Waiting on the approver. The preparer sees who and when, and no action — the inputs are
+         locked server-side too, so there is nothing here that would half-work. */
+      if (d.can_approve) {
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">Approve &amp; Print PDF</button>');
+        h.push('<button type="button" class="gx-btn" id="incReturn">Send back…</button>');
+      } else {
+        h.push('<span class="crew-inc-wait">Sent to the approver' +
+               (wf.sent_at ? ' ' + esc(wf.sent_at.slice(0, 10)) : '') + ' — locked until they decide</span>');
+      }
+    } else if (closed) {
+      /* Ready to go up. The approver gets to approve directly — making Sky email himself would be
+         ceremony, not a control. */
+      if (d.can_approve) {
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">Approve &amp; Print PDF</button>');
+      } else {
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="incSend">Send for approval</button>');
+      }
+      h.push('<button type="button" class="gx-btn" id="incPrint">Print PDF</button>');
+    } else {
+      h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Print PDF</button>');
+    }
+    h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
+    h.push('</div>');
+
+    /* A returned period carries the reason it came back. It sits with the buttons rather than in a
+       toast, because the person who has to act on it is not the person who was looking when it
+       arrived. */
+    if (wf.status === 'draft' && wf.note) {
+      h.push('<div class="crew-inc-returned"><strong>Sent back' +
+             (wf.decided_by ? ' by ' + esc(wf.decided_by) : '') + ':</strong> ' + esc(wf.note) + '</div>');
+    }
+    return h.join('');
   }
 
   function incInputs() { return (inc.data && inc.data.inputs) || {}; }
@@ -2585,7 +2640,13 @@
     var csv = host.querySelector('#incCsv');
     if (csv) csv.addEventListener('click', function () { incExportCsv(d, isImported); });
     var pr = host.querySelector('#incPrint');
-    if (pr) pr.addEventListener('click', function () { incApproveAndPrint(d, isImported); });
+    if (pr) pr.addEventListener('click', function () { incPrintWithName(d); });
+    var ap = host.querySelector('#incApprove');
+    if (ap) ap.addEventListener('click', function () { incApproveAndPrint(d, isImported); });
+    var sd = host.querySelector('#incSend');
+    if (sd) sd.addEventListener('click', function () { incSendForApproval(d); });
+    var rt = host.querySelector('#incReturn');
+    if (rt) rt.addEventListener('click', function () { incSendBack(d); });
     if (!editable) return;
     /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
        again on blur, so tabbing away never loses the last keystroke. */
@@ -2764,6 +2825,7 @@
     }
     var btn = document.getElementById('incPrint');
     try {
+      var appr = (inc.approveToken && inc.approvePp === pp) ? inc.approveToken : '';
       var pre = await Engine.jsonp('incentive_approve',
         { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
       if (!pre || pre.ok === false) throw new Error((pre && pre.error) || 'could not approve');
@@ -2775,8 +2837,10 @@
                    ? '\n\nNot matched to a roster record: ' + pre.unmatched.join(', ') : '');
       if (!window.confirm(msg)) return;
       if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
-      var r = await Engine.jsonp('incentive_approve',
-        { token: token(), pp_start: pp, confirm: 'yes' }, { timeoutMs: 45000, retries: 1 });
+      var params = { token: token(), pp_start: pp, confirm: 'yes' };
+      if (appr) params.approve_token = appr;
+      var r = await Engine.jsonp('incentive_approve', params, { timeoutMs: 45000, retries: 1 });
+      inc.approveToken = ''; inc.approvePp = '';      // single use, whatever the outcome
       if (!r || r.ok === false) throw new Error((r && r.error) || 'approve failed');
       toast('Approved — ' + r.written + ' rows frozen for ' + pp);
       /* Reload before printing: the period is now a record, so it must print as one — badged
@@ -2790,11 +2854,48 @@
     }
   }
 
+  async function incSendForApproval(d) {
+    var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
+    var btn = document.getElementById('incSend');
+    try {
+      var r = await Engine.jsonp('incentive_send',
+        { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send');
+      if (btn) btn.disabled = true;
+      /* The warning matters more than the success: "sent" with nobody emailed looks identical to
+         "sent" from here, and the difference is whether anyone knows to look. */
+      toast(r.warning ? ('Marked sent — ' + r.warning)
+                      : ('Sent for approval — emailed ' + (r.mailed || []).join(', ')), !!r.warning);
+      await loadIncentive(pp);
+    } catch (e) {
+      toast('Could not send: ' + ((e && e.message) || 'unknown'), true);
+    } finally { if (btn) btn.disabled = false; }
+  }
+
+  async function incSendBack(d) {
+    var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
+    /* A reason is required by the engine too — this prompt is the convenience, not the rule. */
+    var note = window.prompt('Send ' + pp + ' back for a fix.\n\nWhat needs changing? ' +
+                             '(this is emailed to whoever prepared it)');
+    if (note == null) return;
+    if (!note.trim()) { toast('A reason is required — it is what they have to work from', true); return; }
+    try {
+      var r = await Engine.jsonp('incentive_return',
+        { token: token(), pp_start: pp, note: note.trim() }, { timeoutMs: 30000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send back');
+      toast('Sent back to ' + (r.returned_to || 'the sender'));
+      await loadIncentive(pp);
+    } catch (e) {
+      toast('Could not send back: ' + ((e && e.message) || 'unknown'), true);
+    }
+  }
+
   async function loadIncentive(ppStart) {
     inc.loading = true; inc.error = ''; paintIncentive();
     try {
       var params = { token: token() };
       if (ppStart) params.pp_start = ppStart;
+      if (inc.approveToken && ppStart === inc.approvePp) params.approve_token = inc.approveToken;
       var r = await Engine.jsonp('incentive', params, { timeoutMs: 45000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not load');
       inc.data = r;

@@ -224,15 +224,49 @@ ok('the pay period becomes the archive filename convention',
 ok('a malformed date yields no filename rather than a wrong one', M.incMMDDYY('') === '' &&
    M.incMMDDYY('3/2/26') === '');
 
-/* The button offers only what it will actually do: a closed record has nothing left to approve,
-   and an open period cannot be approved yet. */
+/* ── the action bar offers only what the viewer can actually do ──
+   Mike prepares and Sky approves, so the same period shows different buttons to each of them, and
+   a period awaiting a decision shows almost none. Every wrong combination here is either a dead
+   button or — worse — the preparer approving their own work. */
 function headOf(d) { M.inc.data = d; return M.incHeadActions(d, d.source === 'imported'); }
-ok('a closed record offers Print PDF, not Approve',
+const CLOSED = { start: '2026-08-03', current: false };
+const OPEN   = { start: '2026-08-17', current: true };
+
+ok('a closed record offers Print PDF and nothing to approve',
    headOf({ source: 'imported', pp_start: '2026-08-03' }).includes('>Print PDF<'));
-ok('an open period offers Print PDF too — it cannot be approved yet',
-   headOf({ source: 'live', payPeriod: { start: '2026-08-17', current: true } }).includes('>Print PDF<'));
-ok('a CLOSED live period is the only one that offers Approve',
-   /Approve/.test(headOf({ source: 'live', payPeriod: { start: '2026-08-03', current: false } })));
+ok('an open period cannot be approved — it is still selling',
+   !/Approve|Send for approval/.test(headOf({ source: 'live', payPeriod: OPEN })));
+
+/* The preparer sends; they never see an Approve button, which is the whole control. */
+const mike = headOf({ source: 'live', payPeriod: CLOSED, can_edit: true, can_approve: false,
+                      workflow: { status: 'draft' } });
+ok('the preparer is offered Send for approval', mike.includes('id="incSend"'));
+ok('and is NOT offered Approve', !mike.includes('id="incApprove"'));
+
+/* The approver approves directly. Making Sky email himself would be ceremony, not a control. */
+const sky = headOf({ source: 'live', payPeriod: CLOSED, can_edit: true, can_approve: true,
+                     workflow: { status: 'draft' } });
+ok('the approver approves without sending it to themselves',
+   sky.includes('id="incApprove"') && !sky.includes('id="incSend"'));
+
+/* Pending: locked for the preparer, decidable for the approver. */
+const pendingMike = headOf({ source: 'live', payPeriod: CLOSED, can_edit: false, can_approve: false,
+                             workflow: { status: 'pending', sent_by: 'mike', sent_at: '2026-08-31T10:00:00Z' } });
+ok('once sent, the preparer gets no buttons — only who has it',
+   !pendingMike.includes('id="incApprove"') && !pendingMike.includes('id="incSend"') &&
+   /locked until/.test(pendingMike));
+const pendingSky = headOf({ source: 'live', payPeriod: CLOSED, can_edit: false, can_approve: true,
+                            workflow: { status: 'pending', sent_by: 'mike' } });
+ok('the approver gets both Approve and Send back',
+   pendingSky.includes('id="incApprove"') && pendingSky.includes('id="incReturn"'));
+
+/* A returned period carries its reason where the person who must act on it will see it. */
+const returned = headOf({ source: 'live', payPeriod: CLOSED, can_edit: true, can_approve: false,
+                          workflow: { status: 'draft', note: 'Zach\'s attendance is wrong',
+                                      decided_by: 'sky' } });
+ok('the reason it came back is shown with the buttons, not in a toast',
+   /Sent back by sky/.test(returned) && /attendance is wrong/.test(returned));
+ok('and it is editable again — Send for approval is back', returned.includes('id="incSend"'));
 
 /* ── the export is shaped like CAPSTONE'S sheet, not ours ──
    Sky supplied their template: an ADMIN block, then one block per store in THEIR order, each sorted
