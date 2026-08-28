@@ -3498,6 +3498,8 @@ function incentiveProbe_(p) {
     spiff: live.spiff ? { ok: live.spiff.ok, error: live.spiff.error || '',
                           refreshed_at: live.spiff.refreshed_at || '',
                           matched: live.spiff.matched, people: live.spiff.people,
+                          rows_in_cache: live.spiff.rows_in_cache,
+                          rows_in_window: live.spiff.rows_in_window,
                           unmatched: live.spiff.unmatched,
                           earning: withSpiff.map(function (r) { return r.name; }) } : null,
     source: live.source || 'leaderboard',
@@ -3533,8 +3535,12 @@ function spiffProgressFor_(ppStart) {
   if (!base) return { ok: false, error: 'no SPIFF engine URL in GX Core kv (key spiffProgress)' };
   var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
   if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
-  var url = base + '?action=progress&secret=' + encodeURIComponent(secret) +
-            (ppStart ? '&pay_period=' + encodeURIComponent(ppStart) : '');
+  /* NO pay_period FILTER. SPIFF stores it as a human-readable RANGE — "2026-08-17 - 2026-08-30" —
+     not a start date, so asking for "2026-08-17" matched nothing and the column read $0 for
+     everyone: indistinguishable from a fortnight where nobody earned. Crew filters on the WINDOW
+     instead, which is the fact rather than its formatting, and survives whatever string SPIFF
+     chooses next. */
+  var url = base + '?action=progress&secret=' + encodeURIComponent(secret);
   try {
     var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
     if (res.getResponseCode() !== 200) return { ok: false, error: 'SPIFF returned HTTP ' + res.getResponseCode() };
@@ -3558,11 +3564,46 @@ function applySpiffEarnings_(live, ppStart) {
   var sp = spiffProgressFor_(ppStart);
   if (sp.ok === false) { live.spiff = { ok: false, error: sp.error }; return; }
 
+  /* Sky: SPIFFs run concurrent to the pay period, and a historical date that does not line up is a
+     typo. So a program counts for this period when its window OVERLAPS — not when a string matches. */
+  var d10 = function (v) { return String(v || '').slice(0, 10); };
+  var ppEnd = d10((live.payPeriod || {}).end);
+  var ppFrom = d10(ppStart);
+  var rows = (sp.rows || []).filter(function (r) {
+    var a = d10(r.start_date), b = d10(r.end_date);
+    if (!a || !b) return false;
+    return a <= ppEnd && b >= ppFrom;
+  });
+
+  /* SPIFF's employee_id is DUTCHIE'S numeric id (42790), not GX Core's slug (tyler_goldsmith) —
+     it attributes from Dutchie's own export. The registry already carries dutchie_employee_id for
+     exactly this join; CLAUDE.md calls it out as the column SPIFF and Leaderboard resolve through,
+     and it is why a partial write blanking it is treated as a bug. Matching on the raw value would
+     have found nobody, then quietly fallen through to names. */
+  var dutchieToId = Object.create(null);
+  try {
+    (GXCore.getEmployees() || []).forEach(function (e) {
+      var d = String(e.dutchie_employee_id || '').trim();
+      if (d && e.employee_id) dutchieToId[d] = String(e.employee_id);
+    });
+  } catch (e) {}
+
   var byId = Object.create(null), byName = Object.create(null);
-  (sp.by_employee || []).forEach(function (e) {
+  var agg = Object.create(null);
+  rows.forEach(function (r) {
+    var gxId = dutchieToId[String(r.employee_id || '').trim()] || '';
+    var key = gxId || ('name:' + nameToKey_(r.name));
+    var e = agg[key] || (agg[key] = { employee_id: gxId, name: r.name, earned: 0, programs: [] });
+    e.earned += Number(r.earned) || 0;
+    e.programs.push({ program_id: r.program_id, vendor: r.vendor, name: r.program_name,
+                      units: r.units, target: r.target, hit: r.hit, earned: r.earned });
+  });
+  Object.keys(agg).forEach(function (k) {
+    var e = agg[k];
     if (e.employee_id) byId[String(e.employee_id)] = e;
     if (e.name) byName[nameToKey_(e.name)] = e;
   });
+  sp.by_employee = Object.keys(agg).map(function (k) { return agg[k]; });
   var matched = 0, unmatched = [];
   function fold(r) {
     if (!r) return;
@@ -3586,7 +3627,8 @@ function applySpiffEarnings_(live, ppStart) {
     if (!onBoard && (Number(e.earned) || 0) > 0) unmatched.push(e.name + ' ($' + e.earned + ')');
   });
   live.spiff = { ok: true, refreshed_at: sp.refreshed_at || '', matched: matched,
-                 unmatched: unmatched, people: (sp.by_employee || []).length };
+                 unmatched: unmatched, people: (sp.by_employee || []).length,
+                 rows_in_window: rows.length, rows_in_cache: (sp.rows || []).length };
 }
 
 /**
