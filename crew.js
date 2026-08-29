@@ -2253,7 +2253,7 @@
      he would fix it, watch it come back, and stop trusting the column. */
   function incInput(inputs, key, row) {
     var i = inputs && inputs[key];
-    var manual = i && i.spiff !== '' && i.spiff != null ? +i.spiff : null;
+    var manual = i && i.spiff !== '' && i.spiff != null ? +i.spiff : null;   // null = no override
     var earned = row && row.spiff_earned != null ? Number(row.spiff_earned) : null;
     return { att: !!(i && i.att),
              spiff: manual != null ? manual : (earned || 0),
@@ -2363,6 +2363,9 @@
     return false;
   }
   var incTimers = Object.create(null);
+  /* Which cells the approver has deliberately unlocked this sitting. Not persisted: an unlock is
+     permission to make ONE edit, not a mode the screen stays in. */
+  var incUnlocked = Object.create(null);
 
   function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
   function m2(n) { return '$' + (Math.round((n || 0) * 100) / 100).toFixed(2); }
@@ -2627,7 +2630,7 @@
         '<td' + (goal != null && dp <= goal ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
         '<td' + (T && m.aov >= T.manager.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(m.aov)) + '</td>' +
         incMoneyCell(c.teamA, false) +
-        incSpiffCell(m, c) +
+        incSpiffCell(m, c, editable) +
         '<td>' + incDash(c.bonus) + '</td>' +
         '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
         '<td class="crew-inc-pay"' + tip + '>' + incDash(c.payroll) + '</td></tr>';
@@ -2657,7 +2660,7 @@
                              : '<input type="checkbox" class="crew-inc-att" data-k="' +
                                esc(b.employee_id || b.nameKey) + '"' + (i.att ? ' checked' : '') +
                                (editable ? '' : ' disabled') + ' aria-label="100% attendance">') + '</td>' +
-        incSpiffCell(b, c) +
+        incSpiffCell(b, c, editable) +
         '<td>' + incDash(c.bonus) + '</td>' +
         '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
         '<td class="crew-inc-pay"' + tip + '>' +
@@ -2670,30 +2673,51 @@
       '<th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
-  /* SPIFF IS NOT EDITABLE. It was a number Mike typed; it is now a number SPIFF measured, and once
-     a figure comes from a system there is no version of typing over it that is not a way to
-     introduce the error the automation removed. Sky, 2026-08-28: the only manual edit left on this
-     screen is attendance.
+  /* SPIFF IS MEASURED, NOT TYPED — but an override has to exist, because a vendor occasionally
+     does not credit what the numbers say and somebody has to be able to say so.
+     Sky, 2026-08-28: an edit button, with a confirm warning that this affects payroll.
 
-     Earned reads BOLD GREEN, the same mark every other cleared target on this row uses — a SPIFF
-     paid out IS an achieved goal, and it should look like one rather than like a data-entry field
-     that happens to have a number in it.
+     So it is a DELIBERATE ACT, not an open field. Read-only by default; the pencil unlocks one
+     cell after a confirm that names the person and the measured figure. That difference is the
+     whole design — an always-editable box invites a stray keystroke on a payroll screen, and this
+     column exists precisely to stop numbers being typed.
 
-     A stored override still WINS in the math, and still shows amber here. Removing the input takes
-     away the way to make one; it deliberately does not hide one that already exists, because a
-     figure quietly overriding the measurement with nothing on screen to say so is worse than the
-     typing this replaced. Clearing one is an incentive_save with an empty spiff. */
-  function incSpiffCell(r, c) {
+     An override reads AMBER and offers ↺ to put the measured figure back, so it is never a
+     one-way door and never silent. Who and when are recorded by incentive_save's own audit stamp.
+
+     Earned reads BOLD GREEN — the same mark every other cleared target uses, because a SPIFF paid
+     out IS an achieved goal, not a field that happens to hold a number. */
+  function incSpiffCell(r, c, editable) {
+    var key = incKey(r);
     var earned = c.spiffEarned, manual = c.spiffManual;
     var overridden = manual != null && earned != null && manual !== earned;
+    var unlocked = incUnlocked[key];
+
+    if (unlocked && editable) {
+      return '<td class="crew-inc-over"><input type="number" min="0" step="5" ' +
+             'class="crew-inc-spiff" data-k="' + esc(key) + '" value="' + esc(String(c.spiff || 0)) +
+             '" aria-label="Override SPIFF for ' + esc(incName(r)) + '" autofocus></td>';
+    }
+
+    var edit = editable
+      ? '<button type="button" class="crew-inc-edit" data-edit="' + esc(key) + '" ' +
+        'data-name="' + esc(incName(r)) + '" data-measured="' + esc(String(earned == null ? '' : earned)) +
+        '" title="Override this figure" aria-label="Override SPIFF for ' + esc(incName(r)) + '">✎</button>'
+      : '';
+    var revert = (overridden && editable)
+      ? '<button type="button" class="crew-inc-revert" data-revert="' + esc(key) + '" ' +
+        'title="' + esc('Put back the measured figure (' + m0(earned) + ')') + '" ' +
+        'aria-label="Restore the measured SPIFF">↺</button>'
+      : '';
+
     if (overridden) {
       return '<td class="crew-inc-over" title="' +
              esc('SPIFF measured ' + m0(earned) + ' — overridden to ' + m0(manual)) + '">' +
-             esc(m0(c.spiff)) + '</td>';
+             esc(m0(c.spiff)) + revert + '</td>';
     }
-    if (!c.spiff) return '<td class="crew-inc-zero">—</td>';
+    if (!c.spiff) return '<td class="crew-inc-zero">—' + edit + '</td>';
     return '<td class="crew-inc-hit" title="Earned on the SPIFF programs running this period">' +
-           esc(m0(c.spiff)) + '</td>';
+           esc(m0(c.spiff)) + edit + '</td>';
   }
 
   function incWire(host, d, isImported, editable) {
@@ -2718,8 +2742,43 @@
     Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-att'), function (cb) {
       cb.addEventListener('change', function () { incSave(cb.getAttribute('data-k'), 'att', cb.checked ? '1' : ''); });
     });
-    /* Nothing to wire for SPIFF any more — it is measured, not typed. Attendance is the only
-       manual input left on this screen. */
+    /* SPIFF: the pencil unlocks one cell after a confirm; the field itself commits like any other. */
+    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-edit'), function (btn) {
+      btn.addEventListener('click', function () {
+        var name = btn.getAttribute('data-name');
+        var meas = btn.getAttribute('data-measured');
+        if (!window.confirm(
+              'Override the SPIFF figure for ' + name + '?\n\n' +
+              (meas === '' ? 'SPIFF has not measured anything for this person.'
+                           : 'SPIFF measured $' + meas + '.') + '\n\n' +
+              'This is a payroll figure. Overriding it changes what they are paid and what the ' +
+              'Capstone export carries. Only do this when the vendor number genuinely differs from ' +
+              'what was measured.')) return;
+        incUnlocked[btn.getAttribute('data-edit')] = true;
+        paintIncentive();
+      });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-revert'), function (btn) {
+      btn.addEventListener('click', function () {
+        var k = btn.getAttribute('data-revert');
+        delete incUnlocked[k];
+        /* An empty value clears the override; the math falls back to the measurement. */
+        incSave(k, 'spiff', '');
+      });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-spiff'), function (inp) {
+      var k = inp.getAttribute('data-k');
+      function commit() {
+        delete incUnlocked[k];                       // one unlock, one edit
+        incSave(k, 'spiff', inp.value === '' ? '' : String(Number(inp.value) || 0));
+      }
+      inp.addEventListener('blur', commit);
+      inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
+        if (e.key === 'Escape') { delete incUnlocked[k]; paintIncentive(); }
+      });
+      try { inp.focus(); inp.select(); } catch (e) {}
+    });
   }
 
   async function incSave(employeeId, field, value) {
@@ -2734,7 +2793,10 @@
          round trip — the edit is the point of doing the math client-side. */
       var cur = incInputs();
       cur[employeeId] = cur[employeeId] || {};
-      cur[employeeId][field] = field === 'att' ? !!value : (value === '' ? 0 : Number(value));
+      /* '' CLEARS an override — it must not become 0, which is itself a valid override meaning
+         "they earned nothing". Storing null lets incInput fall back to the measurement. */
+      cur[employeeId][field] = field === 'att' ? !!value
+                             : (value === '' ? null : Number(value));
       paintIncentive();
       toast(field === 'att' ? 'Attendance saved' : 'SPIFF saved');
     } catch (e) {

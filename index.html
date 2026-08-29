@@ -578,6 +578,19 @@
     /* An overridden SPIFF reads amber — not an error, but a human decision that replaced a
        measurement, and the one thing on this column worth spotting from across the table. */
     .crew-inc-tbl td.crew-inc-over { color: #eab308; font-weight: 700; }
+    /* The pencil is quiet until you go looking for it — visible on hover or focus, never a
+       standing invitation to type on a payroll screen. Focus matters: keyboard users get no
+       hover, and an affordance they cannot reach is not an affordance. */
+    .crew-inc-edit, .crew-inc-revert { background: none; border: 0; padding: 0 0 0 6px;
+      color: var(--gx-text-mute); cursor: pointer; font-size: 11px; opacity: 0;
+      transition: opacity .12s ease; font-family: inherit; }
+    .crew-inc-tbl tr:hover .crew-inc-edit, .crew-inc-edit:focus,
+    .crew-inc-tbl tr:hover .crew-inc-revert, .crew-inc-revert:focus { opacity: 1; }
+    .crew-inc-edit:hover, .crew-inc-revert:hover { color: var(--gx-text); }
+    .crew-inc-revert { opacity: .7; color: #eab308; }
+    .crew-inc-spiff { width: 62px; text-align: right; background: var(--gx-surface-3);
+      border: 1px solid #6b5a1f; border-radius: 5px; color: #eab308; padding: 3px 5px;
+      font-size: 12px; font-family: inherit; }
     .crew-inc-warn { color: #f0a6a6; }
     .crew-inc-refresh { background: none; border: 1px solid var(--gx-border); border-radius: 5px;
       color: var(--gx-text-dim); font-size: 11.5px; padding: 2px 8px; margin-left: 6px;
@@ -651,6 +664,11 @@
       .crew-inc-sec { page-break-after: avoid; margin: 14px 0 5px; color: #000 !important; }
       /* Inputs are controls, not values. On paper they must read as what they hold. */
         .crew-inc-att { -webkit-appearance: none; appearance: none; width: auto; }
+      /* Controls are not values; paper shows what they hold. */
+      .crew-inc-edit, .crew-inc-revert { display: none !important; }
+      .crew-inc-spiff { border: 0 !important; background: transparent !important;
+        color: #000 !important; width: auto !important; padding: 0 !important;
+        -webkit-appearance: none; appearance: none; }
       .crew-inc-att::after { content: '—'; color: #999; }
       .crew-inc-att:checked::after { content: '✓'; color: #0a7a3d; font-weight: 700; }
       .crew-inc-badge.is-imported { background: #fff !important; color: #8a5a12 !important;
@@ -885,6 +903,6 @@
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.338"></script>
+  <script src="crew.js?v=1.339"></script>
 </body>
 </html>

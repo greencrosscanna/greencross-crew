@@ -481,12 +481,31 @@ ok('an earned SPIFF is bold green on the cell itself',
    /<td class="crew-inc-hit"[^>]*>\$25</.test(earnedHtml));
 const noneHtml = M.incBudTable([Object.assign({}, spRow, { spiff_earned: 0 })],
                                b => M.calcBud(b, T, {}), false, true, T);
-ok('nothing earned is a muted dash, not $0', /<td class="crew-inc-zero">—<\/td>/.test(noneHtml));
-/* Removing the input takes away the way to MAKE an override; it deliberately does not hide one
-   that already exists — a figure quietly overriding the measurement with nothing on screen to say
-   so is worse than the typing this replaced. */
-ok('an existing override still shows, in amber, and says what was measured',
+ok('nothing earned is a muted dash, not $0', /<td class="crew-inc-zero">—/.test(noneHtml));
+ok('an existing override shows in amber and says what was measured',
    /crew-inc-over/.test(over) && /SPIFF measured \$25/.test(over));
+
+/* ── overriding is a DELIBERATE ACT, not an open field ──
+   Sky asked for an edit button with a payroll warning. The difference is the whole design: an
+   always-editable box invites a stray keystroke on a payroll screen, and this column exists
+   precisely to stop numbers being typed. */
+ok('an editable row offers the pencil, not a field',
+   /crew-inc-edit/.test(earnedHtml) && !/crew-inc-spiff/.test(earnedHtml));
+ok('the pencil carries what the confirm has to name — who, and what was measured',
+   /data-name="Sold Lots"/.test(earnedHtml) && /data-measured="25"/.test(earnedHtml));
+const roSpiff = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, false, T);
+ok('a read-only session is offered no pencil at all', !/crew-inc-edit/.test(roSpiff));
+/* Never a one-way door: an override offers ↺ to put the measured figure back. */
+ok('an override offers a way back to the measured figure',
+   /crew-inc-revert/.test(over) && /Put back the measured figure/.test(over));
+ok('and an un-overridden cell has nothing to revert', !/crew-inc-revert/.test(earnedHtml));
+
+/* '' CLEARS an override and must not become 0 — zero is itself a valid override meaning "they
+   earned nothing", and collapsing the two would make reverting impossible. */
+ok('an empty override falls back to the measurement',
+   M.calcBud(spRow, T, { sp1: { att: false, spiff: '' } }).spiff === 25);
+ok('an explicit zero override still means zero',
+   M.calcBud(spRow, T, { sp1: { att: false, spiff: 0 } }).spiff === 0);
 M.inc.data = { inputs: {} };
 const plain = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
 ok('an un-overridden one is not marked', !/is-over/.test(plain));
