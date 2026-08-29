@@ -254,6 +254,11 @@ const sky = headOf({ source: 'live', payPeriod: CLOSED, can_edit: true, can_appr
                      workflow: { status: 'draft' } });
 ok('the approver approves without sending it to themselves',
    sky.includes('id="incApprove"') && !sky.includes('id="incSend"'));
+/* The gear is LAST in the action row, right of Export — Sky, 2026-08-28. It used to float over the
+   table; a control with no home in the row ends up nowhere. */
+ok('the gear sits right of Export Payroll CSV',
+   sky.indexOf('id="incCsv"') > -1 && sky.indexOf('id="incGear"') > sky.indexOf('id="incCsv"'));
+ok('and only the approver gets one', !mike.includes('id="incGear"'));
 
 /* Pending: locked for the preparer, decidable for the approver. */
 const pendingMike = headOf({ source: 'live', payPeriod: CLOSED, can_edit: false, can_approve: false,

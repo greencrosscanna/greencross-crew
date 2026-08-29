@@ -2472,14 +2472,6 @@
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (adm.payroll == null ? adm.bonus : adm.payroll) : 0;
 
-    /* Top-right of the pane, under the nav — where Leaderboard put it, and out of the row of
-       per-period actions: the scheme is not a thing you do to this pay period. Approver only,
-       because Mike prepares a period and does not move the bar people are measured against. */
-    if (d.can_approve) {
-      h.push('<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
-             'title="Incentive settings — targets, tiers and bonus amounts" ' +
-             'aria-label="Incentive settings">⚙</button>');
-    }
     h.push('<div class="crew-inc-band"><div class="crew-inc-head"><div class="crew-inc-headl">');
     h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive</span>' +
            '<span class="crew-inc-badge ' + (isImported ? 'is-imported">As paid'
@@ -2573,6 +2565,15 @@
       h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Print PDF</button>');
     }
     h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
+    /* Last in the row, right of Export. Approver-only: Mike prepares a period, he does not move
+       the bar people are measured against. It sits with the actions rather than floating over the
+       table because the scheme is not something you do to this pay period — but it is still a
+       thing you reach for from here, and a control with no home ends up nowhere. */
+    if (d.can_approve) {
+      h.push('<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
+             'title="Incentive settings — targets, tiers and bonus amounts" ' +
+             'aria-label="Incentive settings">⚙</button>');
+    }
     h.push('</div>');
 
     /* A returned period carries the reason it came back. It sits with the buttons rather than in a
