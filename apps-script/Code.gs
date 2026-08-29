@@ -249,6 +249,19 @@ function normRole_(v) {
 /** How far ahead `celebrations` looks. Kiosk wants "today + coming up this week or so". */
 var CELEBRATION_HORIZON_DAYS = 14;
 
+/* The Monday digest's own window, deliberately SHORTER than the kiosk's 14.
+ *
+ * The kiosk is looked at all day and wants a bit of runway. The digest arrives once a week, so a
+ * 14-day window prints every birthday in TWO consecutive Mondays — and a reader who learns that
+ * half the list is a repeat starts skimming the whole email, which is the one thing this digest
+ * cannot afford. Seven days is Monday through Sunday: each celebration appears exactly once, in
+ * the week it happens.
+ *
+ * SEVEN DAYS MEANS TODAY PLUS THE NEXT SIX, so the comparison below is `< days`, not `<= days`.
+ * Inclusive-of-seven reaches next Monday from this Monday — an eight-day window that reintroduces
+ * the duplicate on the one day it matters most, the day the next digest sends. */
+var DIGEST_CELEBRATION_DAYS = 7;
+
 function doGet(e)  { return route_(e); }
 function doPost(e) { return route_(e); }
 
@@ -2518,9 +2531,15 @@ function saveRosterAttrs_(p) {
 
 // ─── Monday digest: "Everything that needs a person", by email ──────────────────
 /*
- * The same recap the roster's overview shows, minus Employee of the Month — that is a nice thing
- * to look at, not a thing that needs doing, and a digest that mixes the two teaches people to
- * skim it.
+ * The same recap the roster's overview shows.
+ *
+ * IT USED TO EXCLUDE EMPLOYEE OF THE MONTH, on the grounds that a nice thing to look at mixed
+ * into a list of things to do teaches people to skim. That reasoning stands and the distinction
+ * it draws is the one that let EoM back in (Sky, 2026-08-29): the roster's EoM PANEL — who holds
+ * it, the reign log — is decoration and is still not here. The first-Monday REMINDER is not; it
+ * is an ask with a deadline, and the only line in this email that expires. Same test applied to
+ * celebrations: a birthday on Thursday needs a person to say it, so it belongs — but below the
+ * queue, not inside it.
  *
  * WHY EMAIL AT ALL, given the app already says this. Because the app only says it to somebody
  * who opens the app. A permit expiring in 36 days is not urgent enough to make anyone open Crew
@@ -2559,6 +2578,109 @@ function digestRecipients_(rows) {
 var LAST_DIGEST_PROP = 'CREW_LAST_DIGEST';
 var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';
 
+/* ─── Celebrations in the digest, and the opt-out that still applies ─────────────────────────────
+ *
+ * Birthdays and work anniversaries for the week ahead, computed off the join digestData_ already
+ * did rather than by calling getCelebrations_ — that route re-reads GXCore.getEmployees() and
+ * readAttrs_() to rebuild a roster this function is holding.
+ *
+ * `celebrations_opt_out` IS HONOURED HERE. The flag's declaration scopes it to "the kiosk
+ * celebrations feed", and one could argue a private managers' email is the opposite of the
+ * all-staff screen it was written against — it is how Mike knows to buy a card. It is honoured
+ * anyway, for two reasons. The flag is named for celebrations and this is a celebrations
+ * section; and the person who ticked it is Sky, who is also the person the digest is mailed to,
+ * so ignoring it would show him his own anniversary in an email he asked for — exactly the
+ * awkwardness the flag exists to prevent. If managers should see suppressed people, that is a
+ * deliberate second decision and a second flag, not an inference from this one.
+ *
+ * Dates never leave: same derived shape the kiosk gets — name, store, type, days away, and years
+ * of service for an anniversary. No DOB, no birth year, nothing to reconstruct one from. An
+ * email forwards more easily than a kiosk does, so this matters more here, not less. */
+var DOW_ = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/* "Today" / "Tomorrow" / the weekday name. Resolved HERE rather than in the template because
+   `today` is the only thing that can name the day an offset lands on, and the template has no
+   business recomputing a date it was handed a count for. */
+function celebrationWhen_(daysAway, today) {
+  if (daysAway === 0) return 'Today';
+  if (daysAway === 1) return 'Tomorrow';
+  var on = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysAway);
+  return DOW_[on.getDay()];
+}
+
+function digestCelebrations_(rows, today, horizon) {
+  var days = horizon == null ? DIGEST_CELEBRATION_DAYS : horizon;
+  var out = [];
+  (rows || []).forEach(function (r) {
+    if (r.retired || r.merged) return;
+    if (r.celebrations_opt_out) return;
+    var who = displayNameOf_(r) || r.employee_id;
+
+    var bday = normBirthday_(r.birthday);
+    if (bday) {
+      var bd = daysUntilMonthDay_(bday, today);
+      if (bd >= 0 && bd < days) {
+        out.push({ name: who, store: r.store || '', type: 'birthday',
+                   days_away: bd, when: celebrationWhen_(bd, today) });
+      }
+    }
+
+    /* rosterJoin_ already folded work_anniversary down to hire_date where no override is set, so
+       this reads one field and not two. A year-zero anniversary is not one — somebody hired six
+       days ago has an anniversary "in 359 days", not a first anniversary this week. */
+    var anniv = normDate_(r.work_anniversary);
+    if (anniv) {
+      var parts = anniv.split('-');
+      var ad = daysUntilMonthDay_(parts[1] + '-' + parts[2], today);
+      if (ad >= 0 && ad < days) {
+        var on = new Date(today.getFullYear(), today.getMonth(), today.getDate() + ad);
+        var years = on.getFullYear() - Number(parts[0]);
+        if (years > 0) {
+          out.push({ name: who, store: r.store || '', type: 'anniversary',
+                     days_away: ad, years: years, when: celebrationWhen_(ad, today) });
+        }
+      }
+    }
+  });
+  out.sort(function (x, y) {
+    return x.days_away - y.days_away || x.name.localeCompare(y.name);
+  });
+  return out;
+}
+
+/* First Monday of the month — when the EoM reminder fires.
+ *
+ * Both halves are checked, and the day-of-month one is not redundant: the digest also runs from
+ * `?action=digest` on any day somebody asks for it, and "the 3rd is a Monday" must not make a
+ * Wednesday preview print a reminder that the real send would not have carried. A preview should
+ * show what Monday's email says, and on a Wednesday the honest answer is "not this one". */
+function isFirstMondayOfMonth_(today) {
+  return today.getDay() === 1 && today.getDate() <= 7;
+}
+
+var MONTH_NAMES_ = ['January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+
+/* The EoM reminder: pick this month's, and who is still holding last month's.
+ *
+ * The holder is context, not the point — the ASK is the pick. cfg.eom holding nothing is a
+ * perfectly good state to be reminded from, so an unset or deliberately-nobody value still
+ * produces a reminder rather than suppressing it.
+ *
+ * A cfg.eom that cannot be read degrades to the bare reminder. The alternative — dropping the
+ * block, or printing the error into an email — turns a GX Core hiccup into a missed month. */
+function digestEom_(byId, today) {
+  var cur = {};
+  try { cur = eomCurrent_() || {}; } catch (e) { cur = { error: String((e && e.message) || e) }; }
+  var holder = '';
+  if (cur.state === 'held') {
+    var row = byId[String(cur.employee_id)];
+    holder = (row && displayNameOf_(row)) || String(cur.employee_id || '');
+  }
+  return { month: MONTH_NAMES_[today.getMonth()], holder: holder,
+           state: cur.error ? 'unknown' : (cur.state || 'unset'), since: cur.since || '' };
+}
+
 function digestData_() {
   var joined = rosterJoin_();
   var live = joined.rows.filter(function (r) { return !r.retired; });
@@ -2572,12 +2694,16 @@ function digestData_() {
     (GXCore.getStores() || []).forEach(function (x) { stores[x.store_id] = x.display_name || x.store_id; });
   } catch (e) { /* labels are a nicety; the slug still reads */ }
   stores.corporate = stores.corporate || 'Corporate';
+  var today = todayInStoreTz_();
   return {
     active: live.length,
     questions: items,
     expiring: expiring,
     gaps: live.filter(function (r) { return (r.flags || []).length; }).length,
     fresh: live.filter(function (r) { return r.needs_setup; }),
+    celebrations: digestCelebrations_(live, today),
+    /* null on every other Monday of the month, so the template has one thing to test. */
+    eom: isFirstMondayOfMonth_(today) ? digestEom_(byId, today) : null,
     byId: byId, stores: stores, all: joined.rows
   };
 }
@@ -2635,6 +2761,25 @@ function digestHtml_(d) {
     tile(d.gaps, 'records with a gap', d.gaps ? GOLD : GREEN) +
     '</tr></table>';
 
+  /* EoM sits ABOVE the questions, not below, and only on the one Monday it fires. It is a
+     once-a-month ask with a deadline attached; under a long questions list it is the line
+     somebody scrolls past, and then the month has no Employee of the Month. */
+  if (d.eom) {
+    var eomLine = d.eom.state === 'held'
+      ? esc(d.eom.holder) + ' has held it since last month.'
+      : d.eom.state === 'unknown'
+        ? 'Could not read the current holder just now.'
+        : 'Nobody holds it at the moment.';
+    h += '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-left:3px solid ' +
+      GOLD + ';border-radius:9px;padding:14px 16px;margin:18px 0 0">' +
+      '<div style="font:700 9.5px/1.4 Helvetica,Arial,sans-serif;letter-spacing:.9px;' +
+      'text-transform:uppercase;color:' + GOLD + '">First Monday</div>' +
+      '<div style="font:600 14px/1.4 Helvetica,Arial,sans-serif;color:' + TXT + ';padding:2px 0 4px">' +
+      'Pick ' + esc(d.eom.month) + '&rsquo;s Employee of the Month</div>' +
+      '<div style="font:400 12.5px/1.5 Helvetica,Arial,sans-serif;color:' + DIM + '">' +
+      eomLine + '</div></div>';
+  }
+
   if (d.fresh.length) {
     h += section('New here', 'arrived, profile not finished');
     d.fresh.forEach(function (r) {
@@ -2664,6 +2809,22 @@ function digestHtml_(d) {
       var row = d.byId[String(it.employee_id)];
       h += card(edge, KIND_LABEL_[it.kind] || it.kind, edge,
                 (row && displayNameOf_(row)) || it.name, it.detail);
+    });
+  }
+
+  /* Celebrations LAST, below the questions, and that ordering is the compromise this section had
+     to make. The digest's title is "Everything that needs a person" and its first note says EoM
+     was left out because mixing a nice-to-look-at with a to-do teaches people to skim. A birthday
+     on Thursday genuinely is a thing that needs a person — somebody has to say it — but it is not
+     a record that needs fixing, so it goes after the queue rather than into it. */
+  if (d.celebrations.length) {
+    h += section('This week', 'birthdays and work anniversaries');
+    d.celebrations.forEach(function (c) {
+      var what = c.type === 'birthday'
+        ? 'Birthday'
+        : c.years + ' year' + (c.years === 1 ? '' : 's') + ' with the company';
+      h += card(GREEN, c.when + ' · ' + (c.store ? (d.stores[c.store] || c.store) : 'no store'),
+                MUTE, c.name, what);
     });
   }
 
@@ -2743,12 +2904,25 @@ function mailCheck_() {
 
 function sendDigest_(p) {
   var to = String(p.to || '').trim();
+  /* WHERE it ran, recorded because the two contexts fail identically and are fixed differently:
+     an editor run is authorised by the signed-in owner, a web-app run by the deployment. Passed
+     in rather than sniffed — there is no scope-free way to ask, and the caller always knows.
+     Declared HERE, above the preview return that reads it: `var` hoists but the assignment did
+     not, so every preview reported `source: undefined`. */
+  var source = String(p.source || 'webapp');
   var d = digestData_();
   var recipients = to ? to.split(/[,;\s]+/).filter(function (x) { return x; })
                       : digestRecipients_(d.all);
   var html = digestHtml_(d);
   var open = d.questions.length;
-  var subject = 'GX Crew — ' + (open ? open + ' open question' + (open === 1 ? '' : 's') : 'all clear') +
+  /* The EoM ask leads the subject on the one Monday it fires. Everything else in this email is a
+     standing queue that keeps until next week; picking the month's Employee is the only line with
+     a deadline, and a subject that buries it behind "3 open questions" is how a month goes by
+     without one. Celebrations deliberately stay OUT of the subject — a birthday is not why
+     somebody should open their email, and it would push the queue count out on most weeks. */
+  var subject = 'GX Crew — ' +
+                (d.eom ? 'pick ' + d.eom.month + '\u2019s Employee of the Month \u00b7 ' : '') +
+                (open ? open + ' open question' + (open === 1 ? '' : 's') : 'all clear') +
                 (d.expiring.length ? ', ' + d.expiring.length + ' permit' +
                  (d.expiring.length === 1 ? '' : 's') + ' inside 90 days' : '');
   if (!recipients.length) {
@@ -2759,6 +2933,15 @@ function sendDigest_(p) {
     return { ok: true, mode: 'preview', source: source, would_send_to: recipients, subject: subject,
              active: d.active, open_questions: open, expiring: d.expiring.length,
              gaps: d.gaps, new_here: d.fresh.length,
+             celebrations: d.celebrations.length, eom_reminder: !!d.eom,
+             /* WHO, not just how many. A preview that says "celebrations: 1" cannot be checked
+                against anything — the first cross-check against ?action=celebrations found a
+                count that disagreed, and the payload gave nothing to find the missing person
+                with. Names and offsets only, the same shape that route already returns to this
+                same secret-gated caller; still no dates. Preview only. */
+             celebration_list: d.celebrations.map(function (c) {
+               return c.when + ' · ' + c.name + ' · ' + c.type + (c.years ? ' ' + c.years + 'y' : '');
+             }),
              note: 'Nothing sent. Repeat with send=yes.' };
   }
   /* EVERY attempt is recorded, successful or not. An editor run returns its result to a window
@@ -2771,11 +2954,7 @@ function sendDigest_(p) {
     } catch (e) { /* the record is a nicety; never fail the send over it */ }
     return res;
   }
-  /* WHERE it ran, recorded because the two contexts fail identically and are fixed differently:
-     an editor run is authorised by the signed-in owner, a web-app run by the deployment. Passed
-     in rather than sniffed — there is no scope-free way to ask, and the caller always knows. */
   var at = new Date().toISOString();
-  var source = String(p.source || 'webapp');
   try {
     MailApp.sendEmail({ to: recipients.join(','), subject: subject, htmlBody: html,
                         name: 'GX Crew' });
@@ -2789,7 +2968,8 @@ function sendDigest_(p) {
   try { quota = MailApp.getRemainingDailyQuota(); } catch (e) {}
   return note({ ok: true, at: at, source: source, mode: 'sent', to: recipients, subject: subject,
                 remaining_daily_quota: quota,
-                open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length });
+                open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length,
+                celebrations: d.celebrations.length, eom_reminder: !!d.eom });
 }
 
 /* Trigger entry point, and the editor-runnable twin for the one-time mail authorisation. */
