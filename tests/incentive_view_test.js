@@ -31,6 +31,7 @@ const M = (function () {
   src = src.slice(0, cut) +
         '\n; return { incBudTable, incMgrTable, incAdminTable, incCsvRows, incDiscPct,\n' +
         '           incHeadActions, incMMDDYY, legalSortName, CAPSTONE_SECTIONS,\n' +
+        '           incPeriodLabel, incFacts, INC_COLS, incGoal,\n' +
         '           incTrayHtml, incTrayRead, incDiscListHtml,\n' +
         '           calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
@@ -524,6 +525,56 @@ ok('and initialised with this app key', /GXMaintenance\.init\([\s\S]{0,200}app: 
 const maintInit = html.slice(html.indexOf('GXMaintenance.init('), html.indexOf('GXMaintenance.init(') + 500);
 ok('the GX Core URL is a literal, not a constant that is not in scope here',
    /gxcore:\s*'https:/.test(maintInit) && !/gxcore:\s*GXCORE_URL/.test(maintInit));
+
+/* ── the polish pass (design_handoff_incentive_polish) ──
+   Same tables, same math, same routes; what changed is that the screen stops reading like the
+   spreadsheet it was ported from. These pin the parts that would regress silently. */
+
+/* ONE GRID ACROSS ALL THREE TABLES is the whole point of the layout — the money block has to line
+   up down the screen, and a column added to one table without the others breaks it invisibly. */
+ok('the shared grid has twelve slots', M.INC_COLS.length === 12);
+ok('the widths sum to something the percentages can divide',
+   M.INC_COLS.reduce((a, c) => a + c.w, 0) === 1354);
+ok('exactly two vertical rules — identity | performance | money',
+   M.INC_COLS.filter(c => c.rule).length === 2);
+const mgrH = M.incMgrTable([], () => ({}), false, true, T);
+const budH = M.incBudTable([], () => ({}), false, true, T);
+const admH = M.incAdminTable({ pdf_name: 'A', target: 1, actual: 1 }, { pct: 100, bonus: 0, hr: 0, payroll: 0 }, true);
+[mgrH, budH, admH].forEach(function (t, i) {
+  const widths = (t.match(/width:([\d.]+)%/g) || []).length;
+  ok('table ' + i + ' sets its column widths on the header', widths >= 10);
+});
+/* Admin leaves its unused slots EMPTY rather than stretching — stretching is what broke the
+   alignment with the two tables below it. */
+ok('admin spans its unused middle slots rather than widening the used ones',
+   /colspan="4"/.test(admH));
+ok('budtenders span Discount across the % Goal slot they do not have',
+   /colspan="2"[^>]*>|colspan="2">/.test(budH) && /Discount/.test(budH));
+
+/* A MISS RECEDES. Before, five columns could go green at once and nothing stood out; the contrast
+   between met and missed is the information. */
+ok('a met target is green and a missed one is dimmed, not merely un-green',
+   M.incGoal(true) === 'crew-inc-hit' && M.incGoal(false) === 'crew-inc-miss');
+ok('and "no bar to clear" is neither', M.incGoal(null) === '');
+ok('the Payroll header is the only green column header', /crew-inc-payh/.test(budH));
+
+/* The period reads as a person would say it, not as the engine stores it. */
+ok('the period label is human', M.incPeriodLabel('2026-08-17', '2026-08-30') === 'Aug 17 – Aug 30, 2026');
+ok('a malformed period falls back rather than inventing a date',
+   M.incPeriodLabel('', '') === ' → ');
+
+/* The facts line is derived from what is already loaded — never a new fetch, and never nonsense
+   on a closed period ("closes in -4 days"). */
+ok('a live period counts down and counts people',
+   /Current period/.test(M.incFacts({ source: 'live', payPeriod: { current: true, end: '2099-01-30' } },
+                                    [{}, {}], [{}])) &&
+   /3 people/.test(M.incFacts({ source: 'live', payPeriod: { current: true, end: '2099-01-30' } },
+                              [{}, {}], [{}])));
+ok('an imported period says so instead of counting down',
+   /^Imported/.test(M.incFacts({ source: 'imported' }, [{}], [])));
+ok('a closed live period does not count down into the past',
+   /^Closed period/.test(M.incFacts({ source: 'live', payPeriod: { current: false } }, [{}], [])));
+ok('one person is not "1 people"', /1 person/.test(M.incFacts({ source: 'imported' }, [{}], [])));
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);

@@ -511,76 +511,110 @@
     }
 
     /* ── Incentive ────────────────────────────────────────────────────────────────
-       Full width, not the roster's rail+pane: this is a whole-company table and the
-       eye reads across a row, so nothing may steal 340px from it. */
-    .crew-inc { flex: 1 1 auto; overflow-y: auto; min-height: 0; background: var(--gx-bg);
-      padding: 18px 22px 60px; }
-    .crew-inc-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap;
-      margin-bottom: 16px; }
-    .crew-inc-title { font-size: 18px; font-weight: 700; color: var(--gx-text); }
-    .crew-inc-sub { font-size: 12.5px; color: var(--gx-text-mute); margin-top: 3px;
-      display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .crew-inc-spacer { flex: 1 1 auto; }
-    /* An imported period is a RECORD, a live one is still moving. The badge is the only thing
-       telling you which, and the read-only-ness of the whole screen follows from it. */
-    .crew-inc-badge { display: inline-block; padding: 2px 8px; border-radius: 999px;
-      font-size: 11px; font-weight: 700; letter-spacing: .02em; }
-    .crew-inc-badge.is-imported { background: #2a2118; color: #e0a458; border: 1px solid #4a3a24; }
+       Rebuilt to design_handoff_incentive_polish (2026-08-28). Same three tables, same
+       columns, same math, same routes — what changed is that it stops reading like the
+       spreadsheet it was ported from and starts reading like a payout screen.
+
+       THE HIGHLIGHT BUDGET IS THE POINT. Five columns used to go green at once and Payroll
+       was green too, so nothing stood out. Now a MET target is --gx-green at 600 and a MISSED
+       one recedes to --gx-text-dim; PAYROLL alone gets weight 700, a tinted column and a green
+       header, because it is the only figure the Capstone export carries.
+
+       Every colour is a --gx-* token. The specificity trap still applies to every one of them:
+       `.crew-inc-tbl td` is (0,1,1), so a bare `.crew-inc-hit` loses and paints nothing. */
+    .crew-inc { flex: 1 1 auto; overflow-y: auto; min-height: 0; background: var(--gx-bg); }
+
+    /* Header band — title, state, period, actions and totals, off the tables. */
+    .crew-inc-band { background: var(--crew-rail); border-bottom: 1px solid var(--gx-border);
+      padding: 16px 22px 18px; }
+    .crew-inc-head { display: flex; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+    .crew-inc-headl { display: flex; flex-direction: column; gap: 9px; }
+    .crew-inc-titlerow { display: flex; align-items: center; gap: 10px; }
+    .crew-inc-title { font-size: 20px; font-weight: 700; letter-spacing: -.3px; color: var(--gx-text); }
+    .crew-inc-badge { display: inline-flex; align-items: center; gap: 6px;
+      padding: 3px 9px 3px 7px; border-radius: 999px; font-size: 10.5px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em; }
     .crew-inc-badge.is-live { background: #14251c; color: var(--gx-green); border: 1px solid #24503a; }
-    .crew-inc-tot { display: flex; gap: 22px; flex-wrap: wrap; margin: 0 0 16px; }
-    .crew-inc-tot div { min-width: 96px; }
-    .crew-inc-tot dt { font-size: 11px; color: var(--gx-text-mute); text-transform: uppercase;
-      letter-spacing: .05em; margin: 0 0 2px; }
-    .crew-inc-tot dd { margin: 0; font-size: 19px; font-weight: 700; color: var(--gx-text); }
-    .crew-inc-sec { font-size: 12px; font-weight: 700; color: var(--gx-text-mute);
-      text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 7px; }
-    .crew-inc-wrap { overflow-x: auto; border: 1px solid var(--gx-border); border-radius: 8px; }
-    .crew-inc-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; white-space: nowrap; }
-    .crew-inc-tbl th { text-align: right; padding: 8px 10px; font-size: 11px; font-weight: 700;
-      color: var(--gx-text-mute); text-transform: uppercase; letter-spacing: .04em;
-      background: var(--crew-rail); border-bottom: 1px solid var(--gx-border);
-      position: sticky; top: 0; z-index: 1; }
+    .crew-inc-badge.is-imported { background: #2a2118; color: #e0a458; border: 1px solid #4a3a24; }
+    .crew-inc-dotlive { width: 6px; height: 6px; border-radius: 50%; background: var(--gx-green); }
+    .crew-inc-sub { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    /* One bordered group: ‹ · select · › — the arrows step the same array the select holds. */
+    .crew-inc-per { display: inline-flex; align-items: stretch; background: var(--gx-surface-2);
+      border: 1px solid var(--gx-border); border-radius: var(--gx-radius-md, 8px); overflow: hidden; }
+    .crew-inc-per select { background: transparent; border: 0; color: var(--gx-text);
+      font-size: 13px; font-weight: 600; padding: 6px 8px; font-family: inherit; outline: none; }
+    .crew-inc-nav { background: none; border: 0; color: var(--gx-text-dim); cursor: pointer;
+      padding: 6px 10px; font-size: 13px; font-family: inherit; }
+    .crew-inc-nav.l { border-right: 1px solid var(--gx-border); }
+    .crew-inc-nav.r { border-left: 1px solid var(--gx-border); }
+    .crew-inc-nav:disabled { color: var(--gx-border-strong); cursor: default; }
+    .crew-inc-facts { font-size: 12px; color: var(--gx-text-mute); }
+    .crew-inc-spacer { flex: 1 1 auto; }
+    .crew-inc-actions { display: flex; gap: 8px; align-items: flex-start; }
+    .crew-inc-actions .gx-btn { padding: 8px 14px; border-radius: 7px; font-size: 12.5px; }
+    .crew-inc-gear { width: 34px; height: 34px; padding: 0; display: flex;
+      align-items: center; justify-content: center; font-size: 15px; }
+    .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
+
+    /* Totals as tiles, the same shape the roster overview uses. */
+    .crew-inc-tot { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr));
+      gap: 10px; max-width: 820px; margin: 16px 0 0; }
+    .crew-inc-tot div { background: var(--gx-surface); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-lg, 10px); padding: 12px 14px; }
+    .crew-inc-tot dd { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.4px;
+      font-variant-numeric: tabular-nums; color: var(--gx-text); }
+    .crew-inc-tot dt { margin: 3px 0 0; font-size: 10.5px; color: var(--gx-text-mute);
+      text-transform: uppercase; letter-spacing: .06em; }
+    .crew-inc-tot .is-total { border-color: #24503a; }
+    .crew-inc-tot .is-total dd { color: var(--gx-green); }
+
+    .crew-inc-body { padding: 20px 22px 60px; }
+    .crew-inc-sec { display: flex; align-items: center; gap: 9px; margin: 22px 0 8px; }
+    .crew-inc-sec:first-child { margin-top: 0; }
+    .crew-inc-sec b { font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .1em; color: var(--gx-text-dim); }
+    .crew-inc-seccount { font-size: 11.5px; color: var(--gx-text-mute); }
+    .crew-inc-group { margin-left: auto; background: var(--gx-surface-2);
+      border: 1px solid var(--gx-border-strong); border-radius: 999px; padding: 5px 12px;
+      font-size: 11.5px; font-weight: 600; color: var(--gx-text-dim); cursor: pointer;
+      font-family: inherit; }
+    .crew-inc-group.is-on { color: var(--gx-text); }
+
+    .crew-inc-wrap { overflow: hidden; border: 1px solid var(--gx-border); border-radius: 9px;
+      background: var(--crew-rail); }
+    .crew-inc-tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12.5px; }
+    .crew-inc-tbl th { padding: 9px 12px; font-size: 10.5px; font-weight: 700; text-align: right;
+      text-transform: uppercase; letter-spacing: .07em; color: var(--gx-text-mute);
+      background: var(--gx-surface); border-bottom: 1px solid var(--gx-border);
+      position: sticky; top: 0; z-index: 1; box-sizing: border-box; }
     .crew-inc-tbl th.l, .crew-inc-tbl td.l { text-align: left; }
-    .crew-inc-tbl td { text-align: right; padding: 7px 10px; color: var(--gx-text);
-      border-bottom: 1px solid var(--crew-rule); }
+    .crew-inc-tbl th.c, .crew-inc-tbl td.c { text-align: center; }
+    .crew-inc-tbl td { padding: 9px 12px; text-align: right; color: var(--gx-text);
+      border-bottom: 1px solid var(--crew-rule); font-variant-numeric: tabular-nums;
+      box-sizing: border-box; }
     .crew-inc-tbl tr:last-child td { border-bottom: 0; }
-    .crew-inc-tbl tbody tr:hover td { background: #101614; }
+    .crew-inc-tbl tbody tr:hover td { background: #121917; }
+    /* Two vertical rules: identity | performance | money. */
+    .crew-inc-tbl th.rule { border-left: 1px solid var(--gx-border); }
+    .crew-inc-tbl td.rule { border-left: 1px solid var(--crew-rule); }
     .crew-inc-name { font-weight: 600; }
-    .crew-inc-nostore { color: var(--gx-text-mute); font-style: italic; }
-    /* EVERY COLOUR RULE BELOW IS QUALIFIED `.crew-inc-tbl td.…`, and that is not style — it is the
-       bug that shipped. The base cell rule is `.crew-inc-tbl td`, a class PLUS an element, so it
-       specifies at (0,1,1); a bare `.crew-inc-hit` is (0,1,0) and loses to it no matter what order
-       they appear in. The classes were all present in the DOM and not one of them painted, so the
-       screen was entirely grey while the markup said otherwise — which is exactly why the DOM tests
-       passed. Specificity is not visible from the HTML.
-       A met target reads green ON THE NUMBER ITSELF, not as a separate tick column: the question is
-       always "did THIS figure clear its bar", and the answer belongs on the figure. */
-    .crew-inc-tbl td.crew-inc-hit { color: var(--gx-green); font-weight: 700; }
-    .crew-inc-tbl td.crew-inc-miss { color: var(--gx-text); }
-    .crew-inc-tbl td.crew-inc-zero,
-    .crew-inc-tbl td .crew-inc-zero { color: var(--gx-text-mute); }
-    /* PAYROLL is the money the company actually pays and the only column the Capstone export
-       carries, so it is the one that gets the colour — the same green LB used. Bonus sits beside
-       it in plain white precisely so the difference between them (SPIFF, which vendors fund) is
-       visible at a glance rather than needing the footnote. */
-    .crew-inc-tbl td.crew-inc-pay { font-weight: 700; color: var(--gx-green); }
-    .crew-inc-tbl td.crew-inc-pay .crew-inc-zero { color: var(--gx-text-mute); font-weight: 400; }
-    .crew-inc-grand { color: var(--gx-green); }
-    /* Store colour from the shared registry, so Century is the same blue here as on the kiosk. */
     .crew-inc-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
       margin-right: 7px; vertical-align: middle; flex: none; }
-    /* The payroll figure is a sum of four or five separate rules and none of them are visible.
-       The underline is the affordance; the breakdown is in the title attribute. */
-    .crew-inc-pay[title] { text-decoration: underline dotted var(--gx-border-strong);
+
+    /* A met target reads green; a missed one recedes. That contrast IS the information. */
+    .crew-inc-tbl td.crew-inc-hit { color: var(--gx-green); font-weight: 600; }
+    .crew-inc-tbl td.crew-inc-miss { color: var(--gx-text-dim); font-weight: 400; }
+    .crew-inc-tbl td.crew-inc-bar { color: var(--gx-text-mute); }   /* the bar, not the result */
+    .crew-inc-tbl td.crew-inc-zero,
+    .crew-inc-tbl td .crew-inc-zero { color: var(--gx-text-mute); font-weight: 400; }
+    /* PAYROLL is the only figure the export carries, so it is the only one that looks like money. */
+    .crew-inc-tbl th.crew-inc-payh { color: var(--gx-green); }
+    .crew-inc-tbl td.crew-inc-pay { color: var(--gx-green); font-weight: 700; background: #101614; }
+    .crew-inc-tbl td.crew-inc-pay[title] { text-decoration: underline dotted var(--gx-border-strong);
       text-underline-offset: 3px; cursor: help; }
-    .crew-inc-att { width: 15px; height: 15px; accent-color: var(--gx-green); cursor: pointer; }
-    .crew-inc-att:disabled { cursor: default; }
-    /* An overridden SPIFF reads amber — not an error, but a human decision that replaced a
-       measurement, and the one thing on this column worth spotting from across the table. */
+    .crew-inc-tbl td.crew-inc-pay .crew-inc-zero { color: var(--gx-text-mute); font-weight: 400; }
+    /* An override is a human decision that replaced a measurement — amber, and never silent. */
     .crew-inc-tbl td.crew-inc-over { color: #eab308; font-weight: 700; }
-    /* The pencil is quiet until you go looking for it — visible on hover or focus, never a
-       standing invitation to type on a payroll screen. Focus matters: keyboard users get no
-       hover, and an affordance they cannot reach is not an affordance. */
     .crew-inc-edit, .crew-inc-revert { background: none; border: 0; padding: 0 0 0 6px;
       color: var(--gx-text-mute); cursor: pointer; font-size: 11px; opacity: 0;
       transition: opacity .12s ease; font-family: inherit; }
@@ -589,31 +623,32 @@
     .crew-inc-edit:hover, .crew-inc-revert:hover { color: var(--gx-text); }
     .crew-inc-revert { opacity: .7; color: #eab308; }
     .crew-inc-spiff { width: 62px; text-align: right; background: var(--gx-surface-3);
-      border: 1px solid #6b5a1f; border-radius: 5px; color: #eab308; padding: 3px 5px;
-      font-size: 12px; font-family: inherit; }
+      border: 1px solid #6b5a1f; border-radius: var(--gx-radius, 6px); color: #eab308;
+      padding: 3px 5px; font-size: 12.5px; font-family: inherit; }
+    .crew-inc-att { width: 15px; height: 15px; accent-color: var(--gx-green); cursor: pointer; }
+    .crew-inc-att:disabled { cursor: default; }
+    /* Group rows: the same treatment as the roster rail's sticky store header. */
+    .crew-inc-grouprow td { background: #101614; border-top: 1px solid var(--crew-rule);
+      border-bottom: 1px solid var(--crew-rule); padding: 7px 12px; }
+    .crew-inc-grouplbl { font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.2px; color: var(--gx-text-dim); }
+    .crew-inc-groupn { font-size: 10.5px; color: var(--crew-count); margin-left: 7px; }
+    .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 14px 0 0;
+      max-width: 760px; line-height: 1.55; }
     .crew-inc-warn { color: #f0a6a6; }
     .crew-inc-refresh { background: none; border: 1px solid var(--gx-border); border-radius: 5px;
       color: var(--gx-text-dim); font-size: 11.5px; padding: 2px 8px; margin-left: 6px;
       cursor: pointer; font-family: inherit; }
     .crew-inc-refresh:hover { border-color: var(--gx-border-strong); color: var(--gx-text); }
     .crew-inc-refresh:disabled { cursor: default; opacity: .6; }
-    .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 10px 0 0;
-      max-width: 760px; line-height: 1.5; }
-    .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
-    /* The reason a period came back sits with the buttons, not in a toast: the person who has to
-       act on it is usually not the person who was looking when it arrived. */
     .crew-inc-returned { margin: 10px 0 0; padding: 9px 12px; border-radius: 7px;
       background: #2a1f18; border: 1px solid #55402c; color: #e8c9a6; font-size: 12.5px;
       max-width: 760px; line-height: 1.5; }
     .crew-inc-msg { padding: 30px 4px; color: var(--gx-text-mute); font-size: 13.5px; }
     .crew-inc-err { color: #f0a6a6; }
-    @media (max-width: 720px) { .crew-inc { padding: 14px 12px 50px; } }
+    @media (max-width: 900px) { .crew-inc-wrap { overflow-x: auto; }
+      .crew-inc-tbl { min-width: 1100px; } }
 
-    /* ── Printing an incentive period ─────────────────────────────────────────────
-       The PDFs in Drive are the payroll record, so this has to produce something worth
-       filing: black on white, every row on the page, no chrome. The app is dark and
-       full-bleed, which prints as a wall of ink and loses the right-hand columns —
-       so print is a genuinely different layout, not the screen with a filter over it. */
     @media print {
       /* Margin only — NOT `size: letter landscape`. Forcing the size rotated the whole page 90°
          against a print dialog set to portrait, so the first real PDF came out sideways: readable
@@ -629,7 +664,9 @@
       .gx-topnav, .crew-subnav, .crew-rail, .crew-pane,
       .gx-bug-fab, #gxBugFab, #gxBugOverlay, .gx-bug-modal,
       .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner,
-      .crew-inc-returned, .inc-tray, .inc-tray-back, .crew-inc-gear { display: none !important; }
+      .crew-inc-returned, .inc-tray, .inc-tray-back, .crew-inc-gear,
+      .crew-inc-nav, .crew-inc-group, .crew-inc-edit, .crew-inc-revert,
+      .crew-inc-refresh { display: none !important; }
       /* The two explanatory notes are for somebody reading the screen and deciding. The PDF is a
          payroll record that gets filed — it does not need to be told what Payroll means, and one
          of them pointed at a hover that paper does not have. */
@@ -643,7 +680,15 @@
          empty box, so a plain-text twin is revealed here and hidden on screen. */
       .crew-inc-printpp { display: none; }
       @media print { .crew-inc-printpp { display: inline !important; font-weight: 600; } }
-      .crew-inc-tot { gap: 26px; margin-bottom: 12px; }
+      /* Tiles collapse to a plain row on paper — four bordered boxes are screen furniture. */
+      .crew-inc-band { background: #fff !important; border-bottom: 1px solid #bbb !important;
+        padding: 0 0 10px !important; }
+      .crew-inc-body { padding: 0 !important; }
+      .crew-inc-tot { display: flex !important; gap: 26px; margin: 10px 0 12px; max-width: none; }
+      .crew-inc-tot div { border: 0 !important; background: none !important; padding: 0 !important; }
+      .crew-inc-tot dd { font-size: 15px; }
+      .crew-inc-tot .is-total dd { color: #000 !important; }
+      .crew-inc-badge { border-width: 1px !important; }
       .crew-inc-tot dt { color: #555 !important; }
       .crew-inc-grand, .crew-inc-tbl td.crew-inc-pay { color: #000 !important; }
       /* The green that means "hit a target" is the one colour worth the ink — it is the
@@ -654,6 +699,10 @@
       .crew-inc-wrap { overflow: visible !important; border: 1px solid #bbb !important;
         border-radius: 0 !important; }
       .crew-inc-tbl { font-size: 9.5px; }
+      .crew-inc-tbl th.crew-inc-payh { color: #0a7a3d !important; }
+      .crew-inc-tbl td.crew-inc-pay { background: none !important; }
+      .crew-inc-tbl td.crew-inc-miss { color: #666 !important; }
+      .crew-inc-grouprow td { background: #f4f4f4 !important; }
       .crew-inc-tbl th { background: #f0f0f0 !important; color: #000 !important;
         border-bottom: 1px solid #999 !important; position: static !important; }
       .crew-inc-tbl td { border-bottom: 1px solid #e4e4e4 !important; padding: 3px 6px; }
@@ -866,11 +915,6 @@
   .stn-row { grid-template-columns: 28px 1.4fr 1fr 110px; }
   .stn-col-target, .stn-cell-hide { display: none; }
 }
-    /* The gear itself is Crew's — Leaderboard's sits in a different chrome. */
-    .crew-inc-gear { position: absolute; top: 14px; right: 22px; z-index: 4;
-      width: 34px; height: 34px; padding: 0; font-size: 15px; line-height: 1;
-      display: flex; align-items: center; justify-content: center; }
-    .crew-inc { position: relative; }
   </style>
 </head>
 <body class="gx-app">
@@ -903,6 +947,6 @@
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.339"></script>
+  <script src="crew.js?v=1.340"></script>
 </body>
 </html>

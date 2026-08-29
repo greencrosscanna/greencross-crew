@@ -2366,6 +2366,9 @@
   /* Which cells the approver has deliberately unlocked this sitting. Not persisted: an unlock is
      permission to make ONE edit, not a mode the screen stays in. */
   var incUnlocked = Object.create(null);
+  /* View-only, and deliberately not persisted or sent anywhere: it must not survive a period
+     change or reach the engine. */
+  var incGrouped = false;
 
   function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
   function m2(n) { return '$' + (Math.round((n || 0) * 100) / 100).toFixed(2); }
@@ -2477,28 +2480,28 @@
              'title="Incentive settings — targets, tiers and bonus amounts" ' +
              'aria-label="Incentive settings">⚙</button>');
     }
-    h.push('<div class="crew-inc-head"><div class="crew-inc-headl">');
-    h.push('<div class="crew-inc-title">Incentive</div>');
+    h.push('<div class="crew-inc-band"><div class="crew-inc-head"><div class="crew-inc-headl">');
+    h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive</span>' +
+           '<span class="crew-inc-badge ' + (isImported ? 'is-imported">As paid'
+                                                        : 'is-live"><span class="crew-inc-dotlive"></span>Live') +
+           '</span></div>');
     h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
-           '<span class="crew-inc-badge ' + (isImported ? 'is-imported">as paid' : 'is-live">live') + '</span>');
-    if (isImported) h.push('<span>' + esc(d.why_read_only || '') + '</span>');
-    else if (!d.can_edit) h.push('<span>read-only</span>');
-    h.push('</div></div>');
+           '<span class="crew-inc-facts">' + esc(incFacts(d, buds, mgrs)) + '</span></div>');
+    h.push('</div><div class="crew-inc-spacer"></div>');
+    h.push(incHeadActions(d, isImported));
+    h.push('</div>');
 
-    /* Totals top-right, matching the Leaderboard dashboard this replaces. Each is a PAYROLL sum,
-       not a bonus sum — payroll is what the company pays and the only figure Capstone receives.
-       ADMIN IS SHOWN even though Leaderboard's header has no tile for it: there it was $0 and
-       invisible, here it is routinely $300, and three tiles whose visible parts do not add up to
-       the total reads as an arithmetic error on a payroll screen. */
+    /* Totals as tiles, the grand total green-edged — it is the number the screen exists to
+       produce and the only one that leaves for Capstone. */
     h.push('<dl class="crew-inc-tot">');
-    h.push('<div><dt>Manager bonuses</dt><dd>' + esc(m0(mgrTotal)) + '</dd></div>');
-    h.push('<div><dt>Budtender bonuses</dt><dd>' + esc(m0(budTotal)) + '</dd></div>');
-    h.push('<div><dt>Admin</dt><dd>' + esc(m0(admPay)) + '</dd></div>');
-    h.push('<div><dt>Total</dt><dd class="crew-inc-grand">' +
-           esc(m0(budTotal + mgrTotal + admPay)) + '</dd></div>');
+    h.push('<div><dd>' + esc(m0(mgrTotal)) + '</dd><dt>Manager bonuses</dt></div>');
+    h.push('<div><dd>' + esc(m0(budTotal)) + '</dd><dt>Budtender bonuses</dt></div>');
+    h.push('<div><dd>' + esc(m0(admPay)) + '</dd><dt>Admin</dt></div>');
+    h.push('<div class="is-total"><dd>' + esc(m0(budTotal + mgrTotal + admPay)) +
+           '</dd><dt>Total payroll</dt></div>');
     h.push('</dl></div>');
 
-    h.push(incHeadActions(d, isImported));
+    h.push('<div class="crew-inc-body">');
 
     if (d.admin) h.push(incAdminTable(d.admin, adm, isImported));
     h.push(incMgrTable(mgrs, mgrCalc, isImported, editable, T));
@@ -2533,6 +2536,7 @@
              '<em>gross</em> discount; the live dashboard measures budtender-controlled ' +
              '<em>discretionary</em> discount, so the two are not comparable.</p>');
     }
+    h.push('</div>');
     host.innerHTML = h.join('');
     incWire(host, d, isImported, editable);
   }
@@ -2581,11 +2585,76 @@
     return h.join('');
   }
 
+  /* ONE COLUMN GRID ACROSS ALL THREE TABLES, so the money block lines up down the whole screen.
+     Ratios rather than pixels: the handoff's widths are from a 1354px table, and expressing them
+     as percentages keeps the alignment at any pane width. `rule` marks the two vertical hairlines
+     — identity | performance | money. */
+  var INC_COLS = [
+    { w: 186, rule: false },  // 1  name
+    { w: 143, rule: false },  // 2  store
+    { w: 115, rule: true  },  // 3  target / txn
+    { w: 115, rule: false },  // 4  sales
+    { w: 88,  rule: false },  // 5  % goal
+    { w: 99,  rule: false },  // 6  discount
+    { w: 93,  rule: false },  // 7  aov
+    { w: 99,  rule: false },  // 8  attendance
+    { w: 110, rule: false },  // 9  spiff
+    { w: 99,  rule: true  },  // 10 bonus
+    { w: 88,  rule: false },  // 11 $/hr
+    { w: 119, rule: false }   // 12 payroll
+  ];
+  var INC_TOTAL_W = INC_COLS.reduce(function (a, c) { return a + c.w; }, 0);
+  function incColW(i) { return (INC_COLS[i].w / INC_TOTAL_W * 100).toFixed(3) + '%'; }
+  /* A header cell in slot `i`. The width lives on the header, per the handoff, so table-layout
+     fixed has one place to read it from. */
+  function incTh(i, label, align) {
+    return '<th class="' + (align || '') + (INC_COLS[i].rule ? ' rule' : '') +
+           (label === 'Payroll' ? ' crew-inc-payh' : '') +
+           '" style="width:' + incColW(i) + '">' + esc(label) + '</th>';
+  }
+  function incTd(i, inner, cls) {
+    return '<td class="' + (cls || '') + (INC_COLS[i].rule ? ' rule' : '') + '">' + inner + '</td>';
+  }
+  /* Met or missed — the contrast IS the information, so a miss recedes rather than just not
+     being green. Passing null means "no bar to clear", which reads as neither. */
+  function incGoal(hit) { return hit == null ? '' : (hit ? 'crew-inc-hit' : 'crew-inc-miss'); }
+
+  /* "Current period · closes in 3 days · 13 people" — all derived from what is already loaded,
+     never a new fetch. On a closed or imported period the middle clause is the window instead,
+     because "closes in -4 days" is nonsense and silence is worse. */
+  function incFacts(d, buds, mgrs) {
+    var n = (buds || []).length + (mgrs || []).length + (d.admin ? 1 : 0);
+    var people = n + (n === 1 ? ' person' : ' people');
+    var pp = d.payPeriod || {};
+    if (d.source === 'imported') return 'Imported · ' + people;
+    if (!pp.current) return 'Closed period · ' + people;
+    var end = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(pp.end || ''));
+    if (!end) return 'Current period · ' + people;
+    var days = Math.ceil((Date.UTC(+end[1], +end[2] - 1, +end[3], 12) -
+                          Date.UTC(new Date().getFullYear(), new Date().getMonth(),
+                                   new Date().getDate(), 12)) / 86400000);
+    var when = days > 1 ? 'closes in ' + days + ' days'
+             : days === 1 ? 'closes tomorrow'
+             : days === 0 ? 'closes today' : 'closed';
+    return 'Current period · ' + when + ' · ' + people;
+  }
+
   function incInputs() { return (inc.data && inc.data.inputs) || {}; }
+
+  var INC_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  /* "Aug 17 – Aug 30, 2026" rather than "2026-08-17 → 2026-08-30". The ISO form is what the
+     engine speaks; this is what a person reads. The print-only twin keeps the plain text. */
+  function incPeriodLabel(a, b) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(a || '')),
+        n = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(b || ''));
+    if (!m || !n) return (a || '') + ' → ' + (b || '');
+    return INC_MONTHS[+m[2] - 1] + ' ' + (+m[3]) + ' – ' +
+           INC_MONTHS[+n[2] - 1] + ' ' + (+n[3]) + ', ' + n[1];
+  }
 
   function incPeriodSelect(d) {
     var opts = (d.periods || []).map(function (p) {
-      var lbl = p.pp_start + ' → ' + p.pp_end + (p.current ? '  (current)' : '') +
+      var lbl = incPeriodLabel(p.pp_start, p.pp_end) +
                 (p.source === 'imported' ? '  · as paid' : '');
       return '<option value="' + esc(p.pp_start) + '"' +
              (p.pp_start === (d.pp_start || (d.payPeriod && d.payPeriod.start)) ? ' selected' : '') +
@@ -2593,24 +2662,52 @@
     }).join('');
     var cur = d.pp_start || (d.payPeriod && d.payPeriod.start) || '';
     var end = d.pp_end || (d.payPeriod && d.payPeriod.end) || '';
-    return '<select id="incPeriod" class="gx-input" aria-label="Pay period">' + opts + '</select>' +
-           '<span class="crew-inc-printpp">Pay period ' + esc(cur) + ' → ' + esc(end) + '</span>';
+    var list = d.periods || [], at = 0;
+    for (var i = 0; i < list.length; i++) if (list[i].pp_start === cur) { at = i; break; }
+    /* Newest first, so `‹` is older and `›` is newer; both disable at the ends rather than
+       wrapping, which on a period picker would be a way to lose your place. */
+    return '<span class="crew-inc-per">' +
+      '<button type="button" class="crew-inc-nav l" id="incPrev"' +
+        (at >= list.length - 1 ? ' disabled' : '') + ' aria-label="Older period">‹</button>' +
+      '<select id="incPeriod" aria-label="Pay period">' + opts + '</select>' +
+      '<button type="button" class="crew-inc-nav r" id="incNext"' +
+        (at <= 0 ? ' disabled' : '') + ' aria-label="Newer period">›</button></span>' +
+      '<span class="crew-inc-printpp">Pay period ' + esc(cur) + ' → ' + esc(end) + '</span>';
+  }
+
+  function incSecHead(label, n, extra) {
+    return '<div class="crew-inc-sec"><b>' + esc(label) + '</b><span class="crew-inc-seccount">' +
+           n + (n === 1 ? ' person' : ' people') + '</span>' + (extra || '') + '</div>';
   }
 
   function incAdminTable(a, calc, isImported) {
     var pay = calc.payroll == null ? calc.bonus : calc.payroll;
     var tip = isImported ? '' : ' title="' + esc(pct1(calc.pct) + ' of target — tier ' + m0(calc.tier) +
               ', capped at ' + m0((a.stores || 0) * 50)) + '"';
-    return '<div class="crew-inc-sec">Admin</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
-      '<thead><tr><th class="l">Name</th><th>Target</th><th>Actual</th><th>% Goal</th>' +
-      '<th>Bonus</th><th>$/hr</th><th>Payroll</th></tr></thead><tbody><tr>' +
-      '<td class="l crew-inc-name">' + esc(incName(a)) + '</td>' +
-      '<td>' + incDash(a.target) + '</td><td>' + incDash(a.actual || a.sales) + '</td>' +
-      '<td>' + (calc.pct == null ? '<span class="crew-inc-zero">—</span>' : esc(pct1(calc.pct))) + '</td>' +
-      '<td>' + incDash(calc.bonus) + '</td>' +
-      '<td class="crew-inc-zero">' + incDash(calc.hr == null ? (calc.bonus || 0) / 80 : calc.hr, m2) + '</td>' +
-      '<td class="crew-inc-pay"' + tip + '>' + incDash(pay) + '</td>' +
+    /* Admin uses the SAME twelve slots and leaves its unused ones EMPTY rather than stretching to
+       fill — stretching is what broke the alignment with the two tables below it. */
+    return incSecHead('Admin', 1) +
+      '<div class="crew-inc-wrap"><table class="crew-inc-tbl"><thead><tr>' +
+        incTh(0, 'Name', 'l') + incTh(1, '', 'l') + incTh(2, 'Target') + incTh(3, 'Actual') +
+        incTh(4, '% Goal') + incTh(5, '') + incTh(6, '') + incTh(7, '') + incTh(8, '') +
+        incTh(9, 'Bonus') + incTh(10, '$/hr') + incTh(11, 'Payroll') +
+      '</tr></thead><tbody><tr>' +
+        incTd(0, esc(incName(a)), 'l crew-inc-name') + incTd(1, '', 'l') +
+        incTd(2, incDash(a.target), 'crew-inc-bar') + incTd(3, incDash(a.actual || a.sales)) +
+        incTd(4, calc.pct == null ? '—' : esc(pct1(calc.pct)),
+              calc.pct == null ? 'crew-inc-zero' : incGoal(calc.pct >= 100)) +
+        '<td colspan="4"></td>' +
+        incTd(9, incDash(calc.bonus)) +
+        incTd(10, incDash(calc.hr == null ? (calc.bonus || 0) / 80 : calc.hr, m2), 'crew-inc-zero') +
+        '<td class="crew-inc-pay"' + tip + '>' + incDash(pay) + '</td>' +
       '</tr></tbody></table></div>';
+  }
+
+  function incMgrHead() {
+    return '<thead><tr>' + incTh(0, 'Manager', 'l') + incTh(1, 'Store', 'l') + incTh(2, 'Target') +
+      incTh(3, 'Sales') + incTh(4, '% Goal') + incTh(5, 'Discount') + incTh(6, 'AOV') +
+      incTh(7, 'Team att.') + incTh(8, 'SPIFF') + incTh(9, 'Bonus') + incTh(10, '$/hr') +
+      incTh(11, 'Payroll') + '</tr></thead>';
   }
 
   function incMgrTable(mgrs, calcOf, isImported, editable, T) {
@@ -2622,79 +2719,99 @@
         'sales ' + m0(c.salesB) + ' · discount ' + m0(c.discB) + ' · AOV ' + m0(c.aovB) +
         ' · team attendance ' + m0(c.teamA)) + '"';
       return '<tr>' +
-        '<td class="l crew-inc-name">' + esc(incName(m)) + '</td>' +
-        '<td class="l">' + incDot(m) + incStoreName(m) + '</td>' +
-        '<td>' + incDash(m.target) + '</td><td>' + incDash(m.sales) + '</td>' +
-        '<td' + (c.pct != null && c.pct >= 100 ? ' class="crew-inc-hit"' : '') + '>' +
-          (c.pct == null ? '—' : esc(pct1(c.pct))) + '</td>' +
-        '<td' + (goal != null && dp <= goal ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
-        '<td' + (T && m.aov >= T.manager.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(m.aov)) + '</td>' +
-        incMoneyCell(c.teamA, false) +
-        incSpiffCell(m, c, editable) +
-        '<td>' + incDash(c.bonus) + '</td>' +
-        '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
+        incTd(0, esc(incName(m)), 'l crew-inc-name') +
+        incTd(1, incDot(m) + incStoreName(m), 'l') +
+        incTd(2, incDash(m.target), 'crew-inc-bar') +
+        incTd(3, incDash(m.sales)) +
+        incTd(4, c.pct == null ? '—' : esc(pct1(c.pct)),
+              c.pct == null ? 'crew-inc-zero' : incGoal(c.pct >= 100)) +
+        incTd(5, esc(pct1(dp)), goal == null ? '' : incGoal(dp <= goal)) +
+        incTd(6, esc(m2(m.aov)), T ? incGoal(m.aov >= T.manager.aovTarget) : '') +
+        incTd(7, incDash(c.teamA)) +
+        incSpiffCell(m, c, editable, 8) +
+        incTd(9, incDash(c.bonus)) +
+        incTd(10, incDash(c.hr, m2), 'crew-inc-zero') +
         '<td class="crew-inc-pay"' + tip + '>' + incDash(c.payroll) + '</td></tr>';
     }).join('');
-    return '<div class="crew-inc-sec">Managers</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
-      '<thead><tr><th class="l">Manager</th><th class="l">Store</th><th>Target</th><th>Sales</th>' +
-      '<th>% Goal</th><th>Discount</th><th>AOV</th><th>Team att.</th><th>SPIFF</th><th>Bonus</th>' +
-      '<th>$/hr</th><th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    return incSecHead('Managers', mgrs.length) +
+      '<div class="crew-inc-wrap"><table class="crew-inc-tbl">' + incMgrHead() +
+      '<tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function incBudRow(b, calcOf, isImported, editable, T) {
+    var c = calcOf(b);
+    var dp = incDiscPct(b);
+    var tip = isImported ? '' : ' title="' + esc(
+      (c.qual ? 'qualified' : 'did not qualify — ' + (b.txn || 0) + ' transactions') +
+      ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
+    var i = incInput(incInputs(), incKey(b), b);
+    return '<tr>' +
+      incTd(0, esc(incName(b)), 'l crew-inc-name') +
+      incTd(1, incDot(b) + incStoreName(b), 'l') +
+      incTd(2, esc(String(b.txn || 0)), isImported ? '' : incGoal(!!c.qual)) +
+      incTd(3, incDash(b.sales)) +
+      /* Discount spans slots 5+6: budtenders have no % Goal, and leaving a hole there would put
+         every figure after it out of step with the two tables above. */
+      '<td colspan="2" class="' + (T ? incGoal(dp <= T.budtender.discountMaxPct) : '') + '">' +
+        esc(pct1(dp)) + '</td>' +
+      incTd(6, esc(m2(b.aov)), T ? incGoal(b.aov >= T.budtender.aovTarget) : '') +
+      incTd(7, isImported ? '<span class="crew-inc-zero">—</span>'
+                          : '<input type="checkbox" class="crew-inc-att" data-k="' +
+                            esc(incKey(b)) + '"' + (i.att ? ' checked' : '') +
+                            (editable ? '' : ' disabled') + ' aria-label="100% attendance">', 'c') +
+      incSpiffCell(b, c, editable, 8) +
+      incTd(9, incDash(c.bonus)) +
+      incTd(10, incDash(c.hr, m2), 'crew-inc-zero') +
+      '<td class="crew-inc-pay"' + tip + '>' +
+        (c.payroll == null ? '<span class="crew-inc-zero" title="No payroll column in this report">—</span>'
+                           : incDash(c.payroll)) + '</td></tr>';
   }
 
   function incBudTable(buds, calcOf, isImported, editable, T) {
-    var rows = buds.map(function (b) {
-      var c = calcOf(b);
-      var dp = incDiscPct(b);
-      var i = incInput(incInputs(), incKey(b), b);
-      var tip = isImported ? '' : ' title="' + esc(
-        (c.qual ? 'qualified' : 'did not qualify — ' + (b.txn || 0) + ' transactions') +
-        ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
-      return '<tr>' +
-        '<td class="l crew-inc-name">' + esc(incName(b)) + '</td>' +
-        '<td class="l">' + incDot(b) + incStoreName(b) + '</td>' +
-        '<td' + (!isImported && c.qual ? ' class="crew-inc-hit"' : '') + '>' + esc(b.txn || 0) + '</td>' +
-        '<td>' + incDash(b.sales) + '</td>' +
-        '<td' + (T && dp <= T.budtender.discountMaxPct ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
-        '<td' + (T && b.aov >= T.budtender.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(b.aov)) + '</td>' +
-        '<td>' + (isImported ? '<span class="crew-inc-zero">—</span>'
-                             : '<input type="checkbox" class="crew-inc-att" data-k="' +
-                               esc(b.employee_id || b.nameKey) + '"' + (i.att ? ' checked' : '') +
-                               (editable ? '' : ' disabled') + ' aria-label="100% attendance">') + '</td>' +
-        incSpiffCell(b, c, editable) +
-        '<td>' + incDash(c.bonus) + '</td>' +
-        '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
-        '<td class="crew-inc-pay"' + tip + '>' +
-          (c.payroll == null ? '<span class="crew-inc-zero" title="No payroll column in this report">—</span>'
-                             : incDash(c.payroll)) + '</td></tr>';
-    }).join('');
-    return '<div class="crew-inc-sec">Budtenders</div><div class="crew-inc-wrap"><table class="crew-inc-tbl">' +
-      '<thead><tr><th class="l">Name</th><th class="l">Store</th><th>Txn</th><th>Sales</th>' +
-      '<th>Discount</th><th>AOV</th><th>Att.</th><th>SPIFF</th><th>Bonus</th><th>$/hr</th>' +
-      '<th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    var head = '<thead><tr>' + incTh(0, 'Name', 'l') + incTh(1, 'Store', 'l') + incTh(2, 'Txn') +
+      incTh(3, 'Sales') + '<th class="" style="width:' +
+      ((INC_COLS[4].w + INC_COLS[5].w) / INC_TOTAL_W * 100).toFixed(3) + '%" colspan="2">Discount</th>' +
+      incTh(6, 'AOV') + incTh(7, 'Att.', 'c') + incTh(8, 'SPIFF') + incTh(9, 'Bonus') +
+      incTh(10, '$/hr') + incTh(11, 'Payroll') + '</tr></thead>';
+
+    var rows;
+    if (incGrouped && !isImported) {
+      /* Rows stay in the order the engine sent them, grouped by store_id — the sort is the
+         engine's business, the grouping is a view. */
+      var order = [], by = Object.create(null);
+      buds.forEach(function (b) {
+        var k = incStoreId(b) || '(none)';
+        if (!by[k]) { by[k] = []; order.push(k); }
+        by[k].push(b);
+      });
+      rows = order.map(function (k) {
+        var first = by[k][0];
+        return '<tr class="crew-inc-grouprow"><td colspan="12">' + incDot(first) +
+               '<span class="crew-inc-grouplbl">' + incStoreName(first) + '</span>' +
+               '<span class="crew-inc-groupn">' + by[k].length + '</span></td></tr>' +
+               by[k].map(function (b) { return incBudRow(b, calcOf, isImported, editable, T); }).join('');
+      }).join('');
+    } else {
+      rows = buds.map(function (b) { return incBudRow(b, calcOf, isImported, editable, T); }).join('');
+    }
+
+    var toggle = isImported ? '' :
+      '<button type="button" class="crew-inc-group' + (incGrouped ? ' is-on' : '') +
+      '" id="incGroupBy">' + (incGrouped ? 'Grouped by store' : 'Group by store') + '</button>';
+    return incSecHead('Budtenders', buds.length, toggle) +
+      '<div class="crew-inc-wrap"><table class="crew-inc-tbl">' + head +
+      '<tbody>' + rows + '</tbody></table></div>';
   }
 
-  /* SPIFF IS MEASURED, NOT TYPED — but an override has to exist, because a vendor occasionally
-     does not credit what the numbers say and somebody has to be able to say so.
-     Sky, 2026-08-28: an edit button, with a confirm warning that this affects payroll.
-
-     So it is a DELIBERATE ACT, not an open field. Read-only by default; the pencil unlocks one
-     cell after a confirm that names the person and the measured figure. That difference is the
-     whole design — an always-editable box invites a stray keystroke on a payroll screen, and this
-     column exists precisely to stop numbers being typed.
-
-     An override reads AMBER and offers ↺ to put the measured figure back, so it is never a
-     one-way door and never silent. Who and when are recorded by incentive_save's own audit stamp.
-
-     Earned reads BOLD GREEN — the same mark every other cleared target uses, because a SPIFF paid
-     out IS an achieved goal, not a field that happens to hold a number. */
-  function incSpiffCell(r, c, editable) {
+  function incSpiffCell(r, c, editable, slot) {
     var key = incKey(r);
     var earned = c.spiffEarned, manual = c.spiffManual;
     var overridden = manual != null && earned != null && manual !== earned;
     var unlocked = incUnlocked[key];
 
+    var ruleCls = INC_COLS[slot].rule ? ' rule' : '';
     if (unlocked && editable) {
-      return '<td class="crew-inc-over"><input type="number" min="0" step="5" ' +
+      return '<td class="crew-inc-over' + ruleCls + '"><input type="number" min="0" step="5" ' +
              'class="crew-inc-spiff" data-k="' + esc(key) + '" value="' + esc(String(c.spiff || 0)) +
              '" aria-label="Override SPIFF for ' + esc(incName(r)) + '" autofocus></td>';
     }
@@ -2711,18 +2828,34 @@
       : '';
 
     if (overridden) {
-      return '<td class="crew-inc-over" title="' +
+      return '<td class="crew-inc-over' + ruleCls + '" title="' +
              esc('SPIFF measured ' + m0(earned) + ' — overridden to ' + m0(manual)) + '">' +
              esc(m0(c.spiff)) + revert + '</td>';
     }
-    if (!c.spiff) return '<td class="crew-inc-zero">—' + edit + '</td>';
-    return '<td class="crew-inc-hit" title="Earned on the SPIFF programs running this period">' +
+    if (!c.spiff) return '<td class="crew-inc-zero' + ruleCls + '">—' + edit + '</td>';
+    return '<td class="crew-inc-hit' + ruleCls + '" title="Earned on the SPIFF programs running this period">' +
            esc(m0(c.spiff)) + edit + '</td>';
   }
 
   function incWire(host, d, isImported, editable) {
     var sel = host.querySelector('#incPeriod');
     if (sel) sel.addEventListener('change', function () { loadIncentive(sel.value); });
+    /* The arrows step the same array the select holds — one source of truth for what exists. */
+    function step(delta) {
+      var list = (d.periods || []), cur = d.pp_start || (d.payPeriod && d.payPeriod.start);
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].pp_start !== cur) continue;
+        var next = list[i + delta];
+        if (next) loadIncentive(next.pp_start);
+        return;
+      }
+    }
+    var pv = host.querySelector('#incPrev');
+    if (pv) pv.addEventListener('click', function () { step(1); });     // newest first: + is older
+    var nx = host.querySelector('#incNext');
+    if (nx) nx.addEventListener('click', function () { step(-1); });
+    var gb = host.querySelector('#incGroupBy');
+    if (gb) gb.addEventListener('click', function () { incGrouped = !incGrouped; paintIncentive(); });
     var csv = host.querySelector('#incCsv');
     if (csv) csv.addEventListener('click', function () { incExportCsv(d, isImported); });
     var pr = host.querySelector('#incPrint');
@@ -3300,6 +3433,10 @@
   }
 
   async function loadIncentive(ppStart) {
+    /* View-only state does not survive a period change — an imported period has no grouping and
+       carrying the toggle into one would leave a lit button doing nothing. */
+    incGrouped = false;
+    incUnlocked = Object.create(null);
     inc.loading = true; inc.error = ''; paintIncentive();
     try {
       var params = { token: token() };
