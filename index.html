@@ -573,17 +573,11 @@
        The underline is the affordance; the breakdown is in the title attribute. */
     .crew-inc-pay[title] { text-decoration: underline dotted var(--gx-border-strong);
       text-underline-offset: 3px; cursor: help; }
-    .crew-inc-spiff { width: 62px; text-align: right; background: var(--gx-surface-3);
-      border: 1px solid var(--gx-border); border-radius: 5px; color: var(--gx-text);
-      padding: 3px 5px; font-size: 12px; font-family: inherit; }
-    .crew-inc-spiff:disabled { background: transparent; border-color: transparent;
-      color: var(--gx-text); padding-right: 0; }
     .crew-inc-att { width: 15px; height: 15px; accent-color: var(--gx-green); cursor: pointer; }
     .crew-inc-att:disabled { cursor: default; }
     /* An overridden SPIFF reads amber — not an error, but a human decision that replaced a
        measurement, and the one thing on this column worth spotting from across the table. */
-    .crew-inc-over { color: #eab308; font-weight: 700; }
-    .crew-inc-spiff.is-over { border-color: #6b5a1f; color: #eab308; }
+    .crew-inc-tbl td.crew-inc-over { color: #eab308; font-weight: 700; }
     .crew-inc-warn { color: #f0a6a6; }
     .crew-inc-refresh { background: none; border: 1px solid var(--gx-border); border-radius: 5px;
       color: var(--gx-text-dim); font-size: 11.5px; padding: 2px 8px; margin-left: 6px;
@@ -656,10 +650,7 @@
       .crew-inc-tbl tr { page-break-inside: avoid; }
       .crew-inc-sec { page-break-after: avoid; margin: 14px 0 5px; color: #000 !important; }
       /* Inputs are controls, not values. On paper they must read as what they hold. */
-      .crew-inc-spiff { border: 0 !important; background: transparent !important;
-        color: #000 !important; width: auto !important; padding: 0 !important;
-        -webkit-appearance: none; appearance: none; }
-      .crew-inc-att { -webkit-appearance: none; appearance: none; width: auto; }
+        .crew-inc-att { -webkit-appearance: none; appearance: none; width: auto; }
       .crew-inc-att::after { content: '—'; color: #999; }
       .crew-inc-att:checked::after { content: '✓'; color: #0a7a3d; font-weight: 700; }
       .crew-inc-badge.is-imported { background: #fff !important; color: #8a5a12 !important;
@@ -894,6 +885,6 @@
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.337"></script>
+  <script src="crew.js?v=1.338"></script>
 </body>
 </html>

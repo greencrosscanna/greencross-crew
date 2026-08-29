@@ -2627,7 +2627,7 @@
         '<td' + (goal != null && dp <= goal ? ' class="crew-inc-hit"' : '') + '>' + esc(pct1(dp)) + '</td>' +
         '<td' + (T && m.aov >= T.manager.aovTarget ? ' class="crew-inc-hit"' : '') + '>' + esc(m2(m.aov)) + '</td>' +
         incMoneyCell(c.teamA, false) +
-        '<td>' + incSpiffCell(m, c, editable) + '</td>' +
+        incSpiffCell(m, c) +
         '<td>' + incDash(c.bonus) + '</td>' +
         '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
         '<td class="crew-inc-pay"' + tip + '>' + incDash(c.payroll) + '</td></tr>';
@@ -2657,7 +2657,7 @@
                              : '<input type="checkbox" class="crew-inc-att" data-k="' +
                                esc(b.employee_id || b.nameKey) + '"' + (i.att ? ' checked' : '') +
                                (editable ? '' : ' disabled') + ' aria-label="100% attendance">') + '</td>' +
-        '<td>' + incSpiffCell(b, c, editable) + '</td>' +
+        incSpiffCell(b, c) +
         '<td>' + incDash(c.bonus) + '</td>' +
         '<td class="crew-inc-zero">' + incDash(c.hr, m2) + '</td>' +
         '<td class="crew-inc-pay"' + tip + '>' +
@@ -2670,23 +2670,30 @@
       '<th>Payroll</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
   }
 
-  /* The cell says where its number came from. A figure SPIFF measured and a figure somebody typed
-     are different claims about vendor money, and the one case worth seeing at a glance is where
-     they disagree — that is either a miss Mike corrected or a SPIFF read that is wrong. */
-  function incSpiffCell(r, c, editable) {
-    var key = incKey(r);
+  /* SPIFF IS NOT EDITABLE. It was a number Mike typed; it is now a number SPIFF measured, and once
+     a figure comes from a system there is no version of typing over it that is not a way to
+     introduce the error the automation removed. Sky, 2026-08-28: the only manual edit left on this
+     screen is attendance.
+
+     Earned reads BOLD GREEN, the same mark every other cleared target on this row uses — a SPIFF
+     paid out IS an achieved goal, and it should look like one rather than like a data-entry field
+     that happens to have a number in it.
+
+     A stored override still WINS in the math, and still shows amber here. Removing the input takes
+     away the way to make one; it deliberately does not hide one that already exists, because a
+     figure quietly overriding the measurement with nothing on screen to say so is worse than the
+     typing this replaced. Clearing one is an incentive_save with an empty spiff. */
+  function incSpiffCell(r, c) {
     var earned = c.spiffEarned, manual = c.spiffManual;
     var overridden = manual != null && earned != null && manual !== earned;
-    var tip = overridden ? ' title="' + esc('SPIFF measured ' + m0(earned) + ' — overridden to ' +
-                                            m0(manual)) + '"'
-            : (earned != null && earned > 0 ? ' title="From the SPIFF programs running this period"' : '');
-    if (!editable) {
-      return '<span class="' + (overridden ? 'crew-inc-over' : 'crew-inc-zero') + '"' + tip + '>' +
-             esc(c.spiff ? m0(c.spiff) : '—') + '</span>';
+    if (overridden) {
+      return '<td class="crew-inc-over" title="' +
+             esc('SPIFF measured ' + m0(earned) + ' — overridden to ' + m0(manual)) + '">' +
+             esc(m0(c.spiff)) + '</td>';
     }
-    return '<input type="number" min="0" step="5" class="crew-inc-spiff' +
-           (overridden ? ' is-over' : '') + '" data-k="' + esc(key) + '"' + tip +
-           ' value="' + esc(String(c.spiff || 0)) + '" aria-label="SPIFF for ' + esc(incName(r)) + '">';
+    if (!c.spiff) return '<td class="crew-inc-zero">—</td>';
+    return '<td class="crew-inc-hit" title="Earned on the SPIFF programs running this period">' +
+           esc(m0(c.spiff)) + '</td>';
   }
 
   function incWire(host, d, isImported, editable) {
@@ -2707,19 +2714,12 @@
     var rf = host.querySelector('#incSpiffRefresh');
     if (rf) rf.addEventListener('click', function () { incSpiffRefresh(rf); });
     if (!editable) return;
-    /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
-       again on blur, so tabbing away never loses the last keystroke. */
+    /* Live, like the roster: the checkbox commits on change. */
     Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-att'), function (cb) {
       cb.addEventListener('change', function () { incSave(cb.getAttribute('data-k'), 'att', cb.checked ? '1' : ''); });
     });
-    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-spiff'), function (inp) {
-      var k = inp.getAttribute('data-k');
-      function commit() { incSave(k, 'spiff', inp.value === '' ? '' : String(Number(inp.value) || 0)); }
-      inp.addEventListener('input', function () {
-        clearTimeout(incTimers[k]); incTimers[k] = setTimeout(commit, 600);
-      });
-      inp.addEventListener('blur', function () { clearTimeout(incTimers[k]); commit(); });
-    });
+    /* Nothing to wire for SPIFF any more — it is measured, not typed. Attendance is the only
+       manual input left on this screen. */
   }
 
   async function incSave(employeeId, field, value) {

@@ -133,15 +133,19 @@ ok('an unrecorded sales figure also renders as a dash, not $0', /—/.test(oldHt
    It is closed and paid. An input here would imply a recalculation that is never going to happen. */
 ok('imported rows render no attendance checkbox', !impHtml.includes('crew-inc-att'));
 ok('imported rows render no SPIFF input', !impHtml.includes('<input type="number"'));
-ok('a live row IS editable when the session can edit', liveHtml.includes('crew-inc-att') &&
-   liveHtml.includes('crew-inc-spiff'));
+/* SPIFF IS NO LONGER EDITABLE ANYWHERE. It was a number Mike typed; it is a number SPIFF measured,
+   and once a figure comes from a system there is no version of typing over it that is not a way to
+   reintroduce the error the automation removed. Attendance is the only manual input left. */
+ok('a LIVE row renders no SPIFF input either — it is measured, not typed',
+   !liveHtml.includes('crew-inc-spiff') && !/<input type="number"/.test(liveHtml));
+ok('a live row is still editable for attendance', liveHtml.includes('crew-inc-att'));
 const roHtml = M.incBudTable([liveRow], b => M.calcBud(b, T, {}), false, false, T);
 /* A read-only session still needs to SEE whether somebody had full attendance, so the checkbox
    stays and is disabled — removing it would hide the fact rather than protect it. The SPIFF field
    becomes plain text, because an empty-looking input reads as "nothing entered". */
 ok('a read-only session gets a disabled checkbox, not a missing one',
    roHtml.includes('type="checkbox"') && roHtml.includes('disabled'));
-ok('and no editable SPIFF field', !roHtml.includes('<input type="number"'));
+ok('and no editable SPIFF field anywhere', !roHtml.includes('<input type="number"'));
 
 /* ── a met target is marked ON the figure ── */
 ok('an AOV over target is marked green', liveHtml.includes('crew-inc-hit'));
@@ -468,8 +472,21 @@ ok('an empty entry falls back to the measurement',
    different claims about vendor money. */
 M.inc.data = { inputs: { sp1: { att: false, spiff: 40 } } };
 const over = M.incBudTable([spRow], b => M.calcBud(b, T, M.inc.data.inputs), false, true, T);
-ok('an overridden SPIFF is marked and says what was measured',
-   /is-over/.test(over) && /SPIFF measured \$25/.test(over));
+/* An earned SPIFF reads BOLD GREEN — the same mark every other cleared target uses, because a
+   SPIFF paid out IS an achieved goal and should not look like a data-entry field with a number in
+   it. Class on the TD, so it out-specifies the base cell rule like every other colour here. */
+M.inc.data = { inputs: {} };
+const earnedHtml = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
+ok('an earned SPIFF is bold green on the cell itself',
+   /<td class="crew-inc-hit"[^>]*>\$25</.test(earnedHtml));
+const noneHtml = M.incBudTable([Object.assign({}, spRow, { spiff_earned: 0 })],
+                               b => M.calcBud(b, T, {}), false, true, T);
+ok('nothing earned is a muted dash, not $0', /<td class="crew-inc-zero">—<\/td>/.test(noneHtml));
+/* Removing the input takes away the way to MAKE an override; it deliberately does not hide one
+   that already exists — a figure quietly overriding the measurement with nothing on screen to say
+   so is worse than the typing this replaced. */
+ok('an existing override still shows, in amber, and says what was measured',
+   /crew-inc-over/.test(over) && /SPIFF measured \$25/.test(over));
 M.inc.data = { inputs: {} };
 const plain = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
 ok('an un-overridden one is not marked', !/is-over/.test(plain));
