@@ -241,6 +241,12 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
     questions: [{ kind: 'permit_expiring', severity: 'warn', employee_id: 'shawn_todd',
                   name: 'Shawn Todd', detail: 'Permit expires in 36 days.' }],
     fresh: [wes, mari],
+    celebrations: [
+      { name: 'Mari Vega', store: 'bend', type: 'birthday', days_away: 0, when: 'Today' },
+      { name: 'Wes Tanaka', store: 'portland-rd', type: 'anniversary', days_away: 3,
+        when: 'Thursday', years: 1 }
+    ],
+    eom: { month: 'September', holder: 'Shawn Todd', state: 'held', since: '2026-08-01' },
     byId: { shawn_todd: shawn },
     stores: { 'portland-rd': 'Portland', bend: 'Century' }
   });
@@ -254,6 +260,22 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
   eq(html.indexOf('Portland') >= 0, true, 'stores read as labels');
   eq(html.indexOf('portland-rd') >= 0, false, 'never as slugs');
   eq(html.indexOf('Shawn Todd') >= 0, true, 'an open question names its person too');
+
+  /* The two sections added 2026-08-29. Same five-argument card() as the newcomer block above, so
+     the same silent-arity bug is reachable here; these assertions are what makes it loud. */
+  eq(html.indexOf('Birthday') >= 0, true, 'a birthday is labelled');
+  eq(html.indexOf('1 year with the company') >= 0, true,
+     'an anniversary states years of service, SINGULAR at one');
+  eq(html.indexOf('Today') >= 0, true, 'and when it lands, in words');
+  eq(html.indexOf('Thursday') >= 0, true, 'a later one names its weekday');
+  /* NO RAW DATES. The kiosk payload is careful about this and an email forwards more easily than
+     a kiosk does, so the same rule has to hold here. */
+  eq(/\b(19|20)\d{2}-\d{2}-\d{2}\b/.test(html), false,
+     'no ISO date reaches the email — birthdays are derived flags, never DOB');
+  /* EoM: the ASK is the pick; the holder is context. Both have to be present. */
+  eq(html.indexOf('Employee of the Month') >= 0, true, 'the first-Monday reminder is the ask');
+  eq(html.indexOf('September') >= 0, true, 'and it names the month being picked');
+  eq(html.indexOf('has held it since last month') >= 0, true, 'the current holder is context');
 
   /* THE GENERAL GUARD. Every CSS colour in this document is a hex literal; anything else means a
      value landed in a slot meant for a colour, which is precisely how the name went invisible. */

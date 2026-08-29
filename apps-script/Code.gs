@@ -4461,16 +4461,43 @@ function incentiveThresholdsRoute_(p) {
   if (bad.length) return { ok: false, error: 'rejected: ' + bad.join('; ') };
 
   var before = incentiveThresholds_();
+  /* THE `GXCore.setKv` BRANCH HAS NEVER RUN. The library exposes `getKv` but no kv WRITER to bound
+     callers — not at the v225 pin, not at HEAD — so the guard is always false and the secret-gated
+     web route below is the only path this write has ever taken. The guard is correct and stays:
+     it is the right shape for the day Core does expose one. It is noted because a reader otherwise
+     assumes the two branches share the traffic, and debugs the one that does nothing. */
   var r = GXCore.setKv ? GXCore.setKv('incentiveThresholds', JSON.stringify(t))
                        : gxSetThresholdsViaWeb_(JSON.stringify(t));
   if (r && r.ok === false) return r;
 
-  /* An audit line, because this changes what everybody earns and the kv tab keeps no history. */
+  /* An audit line, because this changes what everybody earns and the kv tab keeps no history.
+   *
+   * THE FUNCTION IS `gxAddNote`. This said `GXCore.addNote` from the day it was written, and no
+   * library version has ever had that name — so every save threw a TypeError straight into the
+   * bare `catch (e) {}` below, the threshold write itself succeeded through the web route, the
+   * screen reported saved, and the audit line this comment promises was never once written. For
+   * the setting that decides what every employee earns.
+   *
+   * The catch stays NON-FATAL — a failed note must not block a legitimate comp change, the money
+   * number is already stored by this point — but it no longer DISCARDS. What hid this for its
+   * entire life was the silence, not the typo, and the next failure here would hide identically.
+   * So the reason is logged and echoed back as `audit_error`; a refusal (gxAddNote answers
+   * `{ok:false}` for an address nobody reads) counts as a failure too, since it writes no note
+   * and throws nothing. */
+  var auditErr = '';
   try {
-    GXCore.addNote('crew', 'core-admin', 'Incentive thresholds changed by ' + (auth.user || '?'),
+    var note = GXCore.gxAddNote('crew', 'core-admin',
+      'Incentive thresholds changed by ' + (auth.user || '?'),
       'before: ' + JSON.stringify(before) + '\nafter: ' + JSON.stringify(t), '', 'fyi');
-  } catch (e) {}
-  return { ok: true, thresholds: t, saved_by: auth.user || '' };
+    if (note && note.ok === false) auditErr = String(note.error || 'GX Core refused the note');
+  } catch (e) {
+    auditErr = String((e && e.message) || e);
+  }
+  if (auditErr) {
+    Logger.log('incentive_thresholds: the audit note FAILED and the thresholds were saved anyway — ' +
+               auditErr);
+  }
+  return { ok: true, thresholds: t, saved_by: auth.user || '', audit_error: auditErr };
 }
 
 /* GXCore may expose no kv WRITER to bound libraries; the web route is secret-gated and does. */
