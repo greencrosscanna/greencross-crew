@@ -2509,13 +2509,15 @@
            'see what makes it up.</p>');
     var sp = d.spiff;
     if (!isImported && sp) {
+      var fresh = sp.refreshed_at ? ' <button type="button" class="crew-inc-refresh" id="incSpiffRefresh">' +
+                  'Re-measure now</button>' : '';
       if (sp.ok === false) {
         h.push('<p class="crew-inc-note crew-inc-warn">⚠️ SPIFF earnings could not be read (' +
                esc(sp.error) + '). The SPIFF column shows only what has been entered by hand.</p>');
       } else {
         h.push('<p class="crew-inc-note">SPIFF earnings read from the SPIFF app' +
                (sp.refreshed_at ? ', last measured ' + esc(sp.refreshed_at) : '') + '. ' +
-               esc(sp.matched) + ' of ' + esc(sp.people) + ' people matched.' +
+               esc(sp.matched) + ' of ' + esc(sp.people) + ' people matched.' + fresh +
                (sp.unmatched && sp.unmatched.length
                  ? ' <strong>Owed but not on this board:</strong> ' + esc(sp.unmatched.join(', ')) +
                    ' — check they are on the roster.'
@@ -2702,6 +2704,8 @@
     if (rt) rt.addEventListener('click', function () { incSendBack(d); });
     var gr = host.querySelector('#incGear');
     if (gr) gr.addEventListener('click', function () { incTray(d); });
+    var rf = host.querySelector('#incSpiffRefresh');
+    if (rf) rf.addEventListener('click', function () { incSpiffRefresh(rf); });
     if (!editable) return;
     /* Live, like the roster: a checkbox commits on change; a number field on a 600ms pause and
        again on blur, so tabbing away never loses the last keystroke. */
@@ -3204,6 +3208,33 @@
         note.textContent = (e && e.message) || 'Could not save';
       }
     });
+  }
+
+  /* SPIFF measures on an hourly trigger; this is the "I do not want to wait an hour" button.
+     The engine loops stores four at a time and reports what is LEFT, so this keeps calling until
+     nothing is — otherwise a manager clicks once, sees a number move, and never learns that two
+     stores were still stale. */
+  async function incSpiffRefresh(btn) {
+    var label = btn.textContent;
+    btn.disabled = true;
+    try {
+      var guard = 0, r;
+      do {
+        btn.textContent = 'Measuring…';
+        r = await Engine.jsonp('incentive_spiff_refresh', { token: token() },
+                               { timeoutMs: 60000, retries: 0 });
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'refresh failed');
+        if (r.remaining) btn.textContent = 'Measuring… ' + r.remaining + ' left';
+      } while (r.remaining && ++guard < 6);
+      if (r.failed && r.failed.length) {
+        toast('Measured, but ' + r.failed.length + ' store(s) failed — showing the last good figures for those', true);
+      } else {
+        toast(r.note || ('Re-measured ' + (r.total || 0) + ' store(s)'));
+      }
+      await loadIncentive(inc.pp || '');
+    } catch (e) {
+      toast('Could not re-measure: ' + ((e && e.message) || 'unknown'), true);
+    } finally { btn.disabled = false; btn.textContent = label; }
   }
 
   async function loadIncentive(ppStart) {

@@ -474,5 +474,20 @@ M.inc.data = { inputs: {} };
 const plain = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
 ok('an un-overridden one is not marked', !/is-over/.test(plain));
 
+/* ── the shared maintenance gate is wired ──
+   Its whole value is being already wired when something breaks: the app that skipped it is the one
+   still showing a stack trace to a store while every other app shows the screen. */
+ok('gx-maintenance.js is loaded', /gx-maintenance\.js/.test(html));
+ok('and initialised with this app key', /GXMaintenance\.init\([\s\S]{0,200}app: 'crew'/.test(html));
+/* core-admin's note says `gxcore: GXCORE_URL`, but in Crew that constant lives inside crew.js's
+   IIFE and is not a global — referencing it here throws before the gate initialises, on every page
+   load, whether or not maintenance is on. */
+/* Scoped to the CALL, not the whole file: the comment above it quotes the wrong form in order to
+   explain why not to use it, and a naive search for that string finds the warning and calls it the
+   bug. */
+const maintInit = html.slice(html.indexOf('GXMaintenance.init('), html.indexOf('GXMaintenance.init(') + 500);
+ok('the GX Core URL is a literal, not a constant that is not in scope here',
+   /gxcore:\s*'https:/.test(maintInit) && !/gxcore:\s*GXCORE_URL/.test(maintInit));
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive view: all passed');
 process.exit(fail ? 1 : 0);

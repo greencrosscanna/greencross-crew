@@ -420,6 +420,7 @@ function route_(e) {
       // Comp thresholds: GX Core holds them, Crew edits them, Leaderboard reads them.
       case 'incentive_thresholds': return json_(incentiveThresholdsRoute_(p), p.callback);
       case 'incentive_discounts':  return json_(incentiveDiscountsRoute_(p), p.callback);
+      case 'incentive_spiff_refresh': return json_(incentiveSpiffRefresh_(p), p.callback);
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
       // record like the imported ones and can never be recomputed.
       case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
@@ -3550,6 +3551,60 @@ function spiffProgressFor_(ppStart) {
   } catch (e) {
     return { ok: false, error: 'could not reach SPIFF: ' + String((e && e.message) || e) };
   }
+}
+
+/**
+ * ?action=incentive_spiff_refresh — ask SPIFF to re-measure, store by store.
+ *
+ * SPIFF's own sweep is ~9s per store and /exec dies at 60, so it hands back a PLAN and the caller
+ * loops. Crew does that looping HERE rather than in the browser: the tab would have to stay open
+ * for the whole run, and a manager who navigated away mid-loop would leave half the stores stale
+ * with nothing saying so.
+ *
+ * Bounded by `max` because this route has the same 60s ceiling. It reports what it did and what is
+ * LEFT, so the caller can call again and finish the job rather than believing it is done.
+ */
+function incentiveSpiffRefresh_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+
+  var base = '';
+  try { base = String(GXCore.getKv('spiffProgress') || ''); } catch (e) {}
+  if (!base) return { ok: false, error: 'no SPIFF engine URL in GX Core kv (key spiffProgress)' };
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
+
+  function call(qs) {
+    var res = UrlFetchApp.fetch(base + '?secret=' + encodeURIComponent(secret) + qs,
+                                { muteHttpExceptions: true, followRedirects: true });
+    if (res.getResponseCode() !== 200) return { ok: false, error: 'SPIFF HTTP ' + res.getResponseCode() };
+    try { return JSON.parse(res.getContentText()); }
+    catch (e) { return { ok: false, error: 'SPIFF returned something that is not JSON' }; }
+  }
+
+  var plan = call('&action=refreshProgress');
+  if (!plan || plan.ok === false) return plan || { ok: false, error: 'no plan from SPIFF' };
+  var todo = plan.plan || [];
+  if (!todo.length) {
+    return { ok: true, refreshed: 0, remaining: 0, programs: plan.programs || 0,
+             by_status: plan.all_programs_by_status || {},
+             note: 'no active programs to measure' };
+  }
+
+  /* Four stores a call keeps this comfortably under the ceiling even on a slow day; the caller
+     repeats until `remaining` is 0. Deliberately not "as many as fit" — a run that sometimes
+     finishes and sometimes times out is worse than one that always needs two clicks. */
+  var max = Math.max(1, Math.min(6, Number(p.max) || 4));
+  var done = [], failed = [];
+  for (var i = 0; i < todo.length && i < max; i++) {
+    var r = call('&action=refreshProgress&program=' + encodeURIComponent(todo[i].program) +
+                 '&store=' + encodeURIComponent(todo[i].store));
+    if (!r || r.ok === false) failed.push({ store: todo[i].store, error: (r && r.error) || 'failed' });
+    else done.push(todo[i].store + ' (' + (r.rows || 0) + ')');
+  }
+  return { ok: true, refreshed: done.length, stores: done, failed: failed,
+           remaining: Math.max(0, todo.length - max), total: todo.length };
 }
 
 /* Fold SPIFF's earnings onto the live rows. Matched on employee_id, with a displayed-name fallback

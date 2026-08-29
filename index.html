@@ -585,6 +585,11 @@
     .crew-inc-over { color: #eab308; font-weight: 700; }
     .crew-inc-spiff.is-over { border-color: #6b5a1f; color: #eab308; }
     .crew-inc-warn { color: #f0a6a6; }
+    .crew-inc-refresh { background: none; border: 1px solid var(--gx-border); border-radius: 5px;
+      color: var(--gx-text-dim); font-size: 11.5px; padding: 2px 8px; margin-left: 6px;
+      cursor: pointer; font-family: inherit; }
+    .crew-inc-refresh:hover { border-color: var(--gx-border-strong); color: var(--gx-text); }
+    .crew-inc-refresh:disabled { cursor: default; opacity: .6; }
     .crew-inc-note { font-size: 12px; color: var(--gx-text-mute); margin: 10px 0 0;
       max-width: 760px; line-height: 1.5; }
     .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
@@ -875,6 +880,20 @@
   </header>
   <main id="app" class="gx-main"><!-- rendered by crew.js --></main>
   <!-- ?v=N is the single source of truth deploy.sh reads for the version. Bump on each ship. -->
-  <script src="crew.js?v=1.336"></script>
+  <!-- The shared maintenance gate (core-admin, note_mtdch1u0_kegc). Inert until a flag is set on
+       gx-theme Pages or in GX Core kv; the point is being already wired when something breaks.
+       It overlays at z-index 10000 — Crew's highest local rule is 91, so nothing here fights it. -->
+  <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-maintenance.js"></script>
+  <script>
+    /* The URL is written out rather than referenced: core-admin's note says `gxcore: GXCORE_URL`,
+       but in this app that constant lives INSIDE crew.js's IIFE and is not a global — referencing
+       it here throws a ReferenceError before the gate can initialise, on every page load, whether
+       or not maintenance is on. Same literal as crew.js and Code.gs. */
+    GXMaintenance.init({
+      app: 'crew', appName: 'GX Crew',
+      gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
+    });
+  </script>
+  <script src="crew.js?v=1.337"></script>
 </body>
 </html>
