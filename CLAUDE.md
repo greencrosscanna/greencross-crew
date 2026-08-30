@@ -116,7 +116,7 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   never `create-deployment`, which mints a *new* /exec URL and orphans `cfg.crewEngineUrl`.
   Note `clasp create` clones the remote manifest over the local one, wiping the GXCore binding;
   restore `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.)
-- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins **GXCore v225** —
+- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins the `GXCore` library — the version is not written here on purpose (it read **v225** while the app ran v241); ask `?action=health` or `./gxpins.sh --live` —
   v139 is where `gxUpsertEmployee` began read-merge-writing instead of rebuilding a row from the payload,
   and v150 made that unconditional plus refused to blank a live `full_name`, so anything below v150 can
   still blank the columns a partial write omits. **v201** is the floor for the store matcher:
