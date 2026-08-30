@@ -129,9 +129,13 @@ const E = (function () {
     }
     throw new Error('unterminated ' + name);
   };
+  /* incHours_ is grabbed alongside the three because incCalcBud_/incCalcMgr_ CALL it. Miss it and
+     this fails with a bare ReferenceError at load, before a single combination runs — which reads
+     like the test is broken rather than like the extraction list is short. Any future helper the
+     math reaches for has to be added here too. */
   return new Function(
-    grab('incCalcBud_') + grab('incCalcMgr_') + grab('incCalcAdmin_') +
-    '; return { calcBud: incCalcBud_, calcMgr: incCalcMgr_, calcAdmin: incCalcAdmin_ };')();
+    grab('incHours_') + grab('incCalcBud_') + grab('incCalcMgr_') + grab('incCalcAdmin_') +
+    '; return { calcBud: incCalcBud_, calcMgr: incCalcMgr_, calcAdmin: incCalcAdmin_, hours: incHours_ };')();
 })();
 
 /* ── Crew's port, loaded from the SHIPPED crew.js ────────────────────────────────────────────────
@@ -143,7 +147,7 @@ const M = (function () {
   const cut = src.lastIndexOf(TAIL);
   if (cut < 0) throw new Error('crew.js: IIFE tail not found — has the file been restructured?');
   src = src.slice(0, cut) +
-        '\n; return { calcBud, calcMgr, calcAdmin, incInput, incTeamAtt };\n' +
+        '\n; return { calcBud, calcMgr, calcAdmin, incInput, incTeamAtt, incHours };\n' +
         src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
   /* readyState 'loading' keeps boot() from firing — this file tests pure arithmetic, and a boot
@@ -329,6 +333,118 @@ console.log((admChecked === admTotal ? '  ✓' : '  ✗') +
   if (!Number.isFinite(m.pct) || m.pct !== 0) bad('a manager with no target must read 0%, not Infinity/NaN');
   else if (!Number.isFinite(a.pct) || a.pct !== 0) bad('an admin with no target must read 0%, not Infinity/NaN');
   else console.log('  ✓ an unset goal reads 0%, never Infinity or NaN');
+})();
+
+/* ── Per-person hours (SwipeClock), added 2026-08-30 ─────────────────────────────────────────────
+ *
+ * $/hr divided every bonus by a flat 80 for everybody. It still does for anyone with no hours on
+ * file — which is what the whole grid above just proved, because none of those cases set `hours`
+ * and both Crew copies still matched Leaderboard EXACTLY. That agreement is the guarantee: the
+ * extension is inert until somebody imports a timecard.
+ *
+ * THE ORACLE CANNOT SPEAK TO THIS. Leaderboard's frozen functions have no concept of per-person
+ * hours, so there is nothing there to differential-test against and pretending otherwise would mean
+ * editing the oracle — which is the one thing that must never happen, since it is the arithmetic
+ * that actually paid people. So the check below changes shape: the two CREW copies are driven
+ * against each other, and against the property that defines the feature.
+ *
+ * The property that matters most is the LAST one. Hours move $/hr and nothing else. If a future
+ * edit lets them reach `bonus` or `payroll`, this is where it stops — because at that point an
+ * imported timecard would change what somebody is paid, and hours arrive from a system nobody has
+ * penny-matched.
+ */
+(function hoursTests() {
+  const HRS = [1, 12.5, 40, 63.75, 80, 96, 336];
+  const row = { nameKey: 'h1', employee_id: 'h1', storeSlug: 'bend', txn: 400, aov: 40, discount: 0.001 };
+  const mgr = { nameKey: 'h2', employee_id: 'h2', storeSlug: 'bend', target: 100000, sales: 115000,
+                discount: 0.005, aov: 40 };
+
+  let agree = 0;
+  for (const hours of HRS) {
+    const inp = { h1: { att: true, spiff: 25, hours }, h2: { att: false, spiff: 10, hours } };
+    const cw = M.calcBud(row, T, inp), en = E.calcBud(row, T, inp);
+    const cm = M.calcMgr(mgr, T, inp, [row]), em = E.calcMgr(mgr, T, inp, [row]);
+    if (!same('hours=' + hours + ' budtender [browser vs engine]', cw, en, ['qual', 'bonus', 'payroll', 'hr'])) return;
+    if (!same('hours=' + hours + ' manager [browser vs engine]',  cm, em, ['pct', 'teamA', 'payroll', 'bonus', 'hr'])) return;
+    if (!Object.is(cw.hr, cw.bonus / hours)) { bad('budtender $/hr must be bonus / hours at ' + hours); return; }
+    if (!Object.is(cm.hr, cm.bonus / hours)) { bad('manager $/hr must be bonus / hours at ' + hours); return; }
+    agree++;
+  }
+  console.log('  ✓ per-person hours: ' + agree + '/' + HRS.length +
+              ' divide $/hr exactly, browser and engine agreeing');
+
+  /* Everything that is not a usable positive number means "use the flat figure". Each of these has
+     a real way to arrive: '' is a cleared cell, null is what inputsFor_ returns for a blank, 0 is a
+     parse that found the wrong column, and the string is a header row read as data. A fallback is
+     the only safe answer — dividing by 0 renders $/hr as Infinity beside a real bonus. */
+  const flat = M.calcBud(row, T, { h1: { att: true, spiff: 25 } }).hr;
+  const BAD = ['', null, undefined, 0, -8, NaN, 'forty', {}];
+  let fell = 0;
+  for (const h of BAD) {
+    const inp = { h1: { att: true, spiff: 25, hours: h } };
+    const cw = M.calcBud(row, T, inp), en = E.calcBud(row, T, inp);
+    if (!Object.is(cw.hr, flat) || !Object.is(en.hr, flat)) {
+      bad('hours=' + JSON.stringify(h) + ' must fall back to the flat ' + T.hoursPerPeriod + '-hour figure');
+      return;
+    }
+    fell++;
+  }
+  console.log('  ✓ ' + fell + ' unusable hour values fall back to the flat figure, in both copies');
+
+  /* Hours are per PERSON, keyed the same way att and spiff are. A divisor that leaked across rows
+     would rescale a colleague's $/hr, and nothing on screen would say which row was wrong. */
+  (function () {
+    const a = { nameKey: 'p1', employee_id: 'p1', storeSlug: 'bend', txn: 400, aov: 40, discount: 0 };
+    const b = { nameKey: 'p2', employee_id: 'p2', storeSlug: 'bend', txn: 400, aov: 40, discount: 0 };
+    const inp = { p1: { att: true, spiff: 0, hours: 40 }, p2: { att: true, spiff: 0 } };
+    const ra = M.calcBud(a, T, inp), rb = M.calcBud(b, T, inp);
+    if (!Object.is(ra.hr, ra.bonus / 40)) bad('the person WITH hours must use them');
+    else if (!Object.is(rb.hr, rb.bonus / T.hoursPerPeriod)) bad('the person WITHOUT hours must keep the flat figure');
+    else console.log('  ✓ hours apply to one person only — a colleague keeps the flat figure');
+  })();
+
+  /* Admin takes no inputs at all, so hours cannot reach it however they are passed. Sky does not
+     clock in; there is no timecard for the owner's row. */
+  (function () {
+    const admin = { target: 100, actual: 115, stores: 6 };
+    const withH = M.calcAdmin(admin, T), plain = M.calcAdmin(admin, T);
+    if (!Object.is(withH.hr, plain.hr) || !Object.is(withH.hr, withH.bonus / T.hoursPerPeriod)) {
+      bad('admin $/hr must stay on the flat figure — the owner has no timecard');
+    } else console.log('  ✓ admin $/hr is untouched by hours');
+  })();
+
+  /* THE ONE THAT MATTERS. Hours are a yardstick, not money: bonus, payroll and qualification must
+     be byte-identical with and without them. The Capstone export carries `payroll`, so if this ever
+     fails, an imported timecard has started deciding what somebody is paid. */
+  (function () {
+    let checked = 0;
+    for (const hours of HRS) {
+      for (const spiff of SPIFFS) {
+        for (const att of [true, false]) {
+          const on  = { h1: { att, spiff, hours } }, off = { h1: { att, spiff } };
+          const a = M.calcBud(row, T, on),  b = M.calcBud(row, T, off);
+          const c = M.calcMgr(mgr, T, { h2: { att, spiff, hours } }, [row]);
+          const d = M.calcMgr(mgr, T, { h2: { att, spiff } }, [row]);
+          if (!same('budtender money unchanged by hours=' + hours, b, a, ['qual', 'bonus', 'payroll']) ||
+              !same('manager money unchanged by hours=' + hours,  d, c, ['payroll', 'bonus', 'teamA'])) return;
+          checked++;
+        }
+      }
+    }
+    console.log('  ✓ hours change $/hr and NOTHING else — ' + checked +
+                ' combinations keep bonus, payroll and qualification identical');
+  })();
+
+  /* The two helpers are separate implementations of one rule; assert they answer identically
+     rather than trusting that they were edited together. */
+  (function () {
+    for (const h of HRS.concat(BAD)) {
+      if (!Object.is(M.incHours({ hours: h }, T), E.hours({ hours: h }, T))) {
+        bad('incHours disagrees between browser and engine for ' + JSON.stringify(h)); return;
+      }
+    }
+    console.log('  ✓ the browser and engine hour helpers answer identically');
+  })();
 })();
 
 /* ── Drift check ─────────────────────────────────────────────────────────────────────────────────

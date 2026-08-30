@@ -547,6 +547,87 @@ nothing else in the suite would notice.
 inputs: only their dollar amounts are stored, so an editable field would invite setting a value the
 math ignores.
 
+### Hours — $/hr is per-person now, and SwipeClock is NOT connected (2026-08-30)
+
+`$/hr` divided every bonus by a flat `thresholds.hoursPerPeriod` (80) for everybody. It still does
+for anyone with no hours on file. When a timecard **is** on file, `incHours_` (engine) /
+`incHours` (browser) uses it instead. Blank, zero, negative and unparseable all fall back to the
+flat figure — a blank is a claim ("use the flat one"), not a gap.
+
+**`hours` was already there.** The column, the reader (`inputsFor_`) and the writer
+(`incentive_save`) all shipped with the transplant; nothing consumed it. So this was one divisor
+change plus a source of numbers, not a schema project.
+
+**The safety argument, which is the whole reason this could ship without a penny-match:** hours
+reach `$/hr` and nothing else. Not `bonus`, not `payroll`, and `$/hr` is not one of the four
+columns the Capstone export carries. `tests/incentive_math_test.js` pins that — the original
+12,040 boundary combinations still agree **exactly** with the frozen Leaderboard oracle (none of
+them set hours, which proves the extension is inert), and a new section asserts that switching
+hours on changes `$/hr` and leaves bonus, payroll and qualification byte-identical. If that ever
+fails, an imported timecard has started deciding pay.
+
+**`hr` is frozen into `crew_incentive_history` at approval, so the cutover is FORWARD-ONLY.**
+Approved periods keep the flat-80 figure they were approved with. Never backfill hours into a
+closed period — same rule as the thresholds, for the same reason.
+
+`incCalcAdmin_` takes no `inputs` and is deliberately untouched: the owner does not clock in.
+
+#### The import reads a file. There is no API, and that is not an oversight.
+
+`?action=timeCardExport` exists and Apps Script could call it — WorkforceHub signs **HS256**, which
+`Utilities.computeHmacSha256Signature` does natively, and the flow is: self-sign a ≤5-minute JWT
+(`sub:"client"`, `iss:<siteId>`, `product:"twpclient"`, `siteInfo`) → `POST
+clock.payrollservers.us/AuthenticationService/oauth2/userToken` → call
+`api.workforcehub.com/api/` with `x-api-version: 1` and `x-integration-partner-id`.
+
+**That last header is the blocker.** Swipeclock issues it to *resellers*, and Green Cross is a
+client. A client/site-level API secret does exist (and a client admin can *view* it), but the
+partner ID has to come from whoever sells us WorkforceHub. **Do not build the connector until it
+does** — this repo already ran that experiment: the METRC connector was written in full and then
+sat on the sandbox with unset keys, `metrc_health` reporting "Missing keys", nothing real ever
+through it. Note also that a client secret is **per site**, and we may have six.
+
+So the import is a **CSV the browser reads**, and the CSV path is not throwaway — when credentials
+land, only the parser is replaced; matching, preview and write are the same.
+
+- **The browser parses it because the transport is JSONP**, which is GET — a CSV does not fit in a
+  URL, and a deploy-secret POST route could not be called by a signed-in session anyway. FileReader
+  means the file never leaves the machine.
+- **It writes through `incentive_save`, one person at a time.** That route already refuses an
+  imported period, already refuses one locked pending approval, already checks the role and now
+  validates hours. No second set of guards to keep in agreement with the first. A partial run is
+  safe by construction — whoever was not written keeps the flat figure — so it reports which people
+  failed instead of pretending to be atomic.
+- **The format is INFERRED, and every inference is on screen before anything is written.** Nobody
+  here has seen a real export. It detects the header row past title/date rows, tells wide (a column
+  per category) from long (a row per category), and lists the hour columns as **checkboxes**.
+  **Time off is unticked by default** — `$/hr` means per hour on the floor, and counting a week of
+  vacation into the divisor halves it for somebody who worked a normal week. That default is a
+  guess made visible enough to overrule, not a rule.
+- **Matching is exact-or-nothing:** `swipeclock_code`, then a full sorted-token name match
+  (`"Kettler, Michael"` ≡ `Michael Kettler`; a middle *initial* still matches, a middle *name* does
+  not). There is deliberately no fuzzy score — attaching one person's fortnight to another is far
+  worse than an unmatched row somebody can see. Two file rows resolving to one person are
+  **reported**, never allowed to overwrite each other. Unmatched rows and roster people absent from
+  the file are both listed.
+- **`swipeclock_code` is Crew's, appended to `ATTR_HEADERS`.** Phase 0 sketched a `swipeclock_id`
+  on GX Core's registry; that would need a library cut and a re-pin in five spokes to deliver a
+  field one app reads. It is a rich HR attribute, so it lives here. It is **learned** on a
+  name match, so the column fills itself and the next period matches on a code that survives a
+  legal-name change. It is deliberately **not** flagged as a gap on the roster — every record is
+  blank until a file is imported, and a red mark on 39 finished records to report an unused feature
+  is the mistake the permanent `wage` gap already made on the salaried.
+- Because `saveRosterAttrs_` builds its record from a **hand-written list**, `swipeclock_code` had
+  to be added there explicitly or the next roster edit would blank it. The other three attr writers
+  derive from `attrFields_()` and needed nothing.
+
+Pinned by `tests/hours_import_test.js` (parsing, layout detection, the PTO default, the matching
+ladder and every refusal) and the hours section of `tests/incentive_math_test.js`.
+
+**Still open, and answered with defaults rather than blocked on:** whether our six stores are six
+WorkforceHub sites or one; whether OT should count (it does, by default); whether salaried staff
+should show a real `$/hr` at all. The checkbox row makes the first two a click.
+
 ### The Capstone export is THEIR shape, not ours
 
 ADMIN, then one block per store in Capstone's order (BEND / HILLSBORO / RIVER / CENTER / SOUTH /

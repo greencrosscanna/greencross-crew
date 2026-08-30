@@ -1804,7 +1804,23 @@
       /* Shown, never editable. The number is issued by the system and never reused — typing one
          risks handing a new person a retired employee's history. The engine refuses it outright. */
       { label: 'Employee #', value: row.employee_number || 'auto', disabled: true,
-        note: function () { return { text: 'Issued, never reused', kind: '' }; } }
+        note: function () { return { text: 'Issued, never reused', kind: '' }; } },
+
+      /* Beside Employee #, because it is the same KIND of thing — a number another system files
+         this person under — and next to the one people already know not to type over.
+         DELIBERATELY NOT FLAGGED AS A GAP. Every other blank on this grid is something a complete
+         record should have; this one is blank for everybody until a timecard export is imported,
+         and it fills itself when one is (the import learns the code on a name match). A `gap` here
+         would put a red mark on 39 finished records to report that a feature has not been used
+         yet, which is the same mistake the permanent `wage` gap made on the salaried. */
+      { label: 'WorkforceHub code', route: 'attr', field: 'swipeclock_code',
+        value: row.swipeclock_code, placeholder: '—',
+        note: function (r) {
+          return r.swipeclock_code
+            ? { text: 'Matches their timecard', kind: '' }
+            : { text: 'Learned on the first hours import', kind: '' };
+        },
+        read: function (r) { return r.swipeclock_code || ''; } }
     ].forEach(function (o) { grid.appendChild(fieldCard(row, o)); });
 
     return grid;
@@ -2257,7 +2273,18 @@
     var earned = row && row.spiff_earned != null ? Number(row.spiff_earned) : null;
     return { att: !!(i && i.att),
              spiff: manual != null ? manual : (earned || 0),
-             spiffEarned: earned, spiffManual: manual };
+             spiffEarned: earned, spiffManual: manual,
+             /* What they actually worked, when the timekeeping export has been imported for this
+                period. null = nothing on file, which incHours reads as "use the flat figure". */
+             hours: (i && i.hours != null && i.hours !== '') ? Number(i.hours) : null };
+  }
+
+  /* The $/hr divisor. Mirrors the engine's incHours_ exactly — same fallback, same rejection of
+     zero — because tests/incentive_math_test.js drives both and a difference here is a difference
+     in a number on a payroll screen. See the engine's copy for why $/hr alone gets this. */
+  function incHours(i, T) {
+    var h = Number(i && i.hours);
+    return (isFinite(h) && h > 0) ? h : T.hoursPerPeriod;
   }
 
   function calcBud(b, T, inputs) {
@@ -2274,7 +2301,7 @@
          typed one are different claims about vendor money. The differential test compares only
          qual/bonus/payroll/hr, so these ride along without touching the arithmetic. */
       spiffEarned: i.spiffEarned, spiffManual: i.spiffManual,
-      bonus: bonus, payroll: bonus - i.spiff, hr: bonus / T.hoursPerPeriod
+      bonus: bonus, payroll: bonus - i.spiff, hr: bonus / incHours(i, T)
     };
   }
 
@@ -2311,7 +2338,7 @@
     return {
       pct: pct, salesB: sB, discB: dB, aovB: aB, teamA: tA, spiff: i.spiff,
       spiffEarned: i.spiffEarned, spiffManual: i.spiffManual,
-      payroll: payroll, bonus: payroll + i.spiff, hr: (payroll + i.spiff) / T.hoursPerPeriod
+      payroll: payroll, bonus: payroll + i.spiff, hr: (payroll + i.spiff) / incHours(i, T)
     };
   }
 
@@ -2565,6 +2592,14 @@
       h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Print PDF</button>');
     }
     h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
+    /* Gated on d.can_edit, which is the SAME flag the attendance ticks and SPIFF cells use — false
+       on an imported period and false while one is locked pending approval. Deriving the button
+       from it rather than re-deciding here is what stops the import offering a write the route
+       behind it would refuse. */
+    if (d.can_edit) {
+      h.push('<button type="button" class="gx-btn" id="incHours" ' +
+             'title="Import a WorkforceHub timecard export to set $/hr per person">Import hours…</button>');
+    }
     /* Last in the row, right of Export. Approver-only: Mike prepares a period, he does not move
        the bar people are measured against. It sits with the actions rather than floating over the
        table because the scheme is not something you do to this pay period — but it is still a
@@ -2619,6 +2654,30 @@
   /* Met or missed — the contrast IS the information, so a miss recedes rather than just not
      being green. Passing null means "no bar to clear", which reads as neither. */
   function incGoal(hit) { return hit == null ? '' : (hit ? 'crew-inc-hit' : 'crew-inc-miss'); }
+
+  /* $/hr, saying WHICH divisor it used. Two people on the same bonus now show different figures
+     depending on whether their hours were imported, and a column that changes for reasons the
+     screen does not state is a column people stop trusting. The hover names the number and where
+     it came from; a row on the flat figure says so rather than staying silent about it. */
+  function incHrCell(c, row, T) {
+    var flat = (T && T.hoursPerPeriod) || 80;
+    var tip = '';
+    /* NO TOOLTIP ON AN IMPORTED ROW (row is null there) — that figure is what was PAID, and naming
+       a divisor today would explain it with arithmetic nobody ran. Same reason the payroll cell
+       drops its breakdown on those rows.
+       NO TOOLTIP ON A DASH EITHER. A zero or absent $/hr renders as a muted em-dash so the eye can
+       skip it, and hanging "$0.00 ÷ the flat 80-hour figure" off it puts the very money-shaped
+       string back into the markup that the dash exists to keep out. */
+    if (row && c.hr) {
+      var i = incInput(incInputs(), incKey(row), row);
+      var real = i && i.hours != null && isFinite(i.hours) && i.hours > 0;
+      tip = ' title="' + esc(
+        real ? m2(c.bonus) + ' ÷ ' + i.hours + ' hours worked (imported timecard)'
+             : m2(c.bonus) + ' ÷ the flat ' + flat + '-hour figure — no timecard imported for this person') + '"';
+    }
+    return '<td class="crew-inc-zero' + (INC_COLS[10].rule ? ' rule' : '') + '"' + tip + '>' +
+           incDash(c.hr, m2) + '</td>';
+  }
 
   /* "Current period · closes in 3 days · 13 people" — all derived from what is already loaded,
      never a new fetch. On a closed or imported period the middle clause is the window instead,
@@ -2731,7 +2790,7 @@
         incTd(7, incDash(c.teamA)) +
         incSpiffCell(m, c, editable, 8) +
         incTd(9, incDash(c.bonus)) +
-        incTd(10, incDash(c.hr, m2), 'crew-inc-zero') +
+        incHrCell(c, isImported ? null : m, T) +
         '<td class="crew-inc-pay"' + tip + '>' + incDash(c.payroll) + '</td></tr>';
     }).join('');
     return incSecHead('Managers', mgrs.length) +
@@ -2762,7 +2821,7 @@
                             (editable ? '' : ' disabled') + ' aria-label="100% attendance">', 'c') +
       incSpiffCell(b, c, editable, 8) +
       incTd(9, incDash(c.bonus)) +
-      incTd(10, incDash(c.hr, m2), 'crew-inc-zero') +
+      incHrCell(c, isImported ? null : b, T) +
       '<td class="crew-inc-pay"' + tip + '>' +
         (c.payroll == null ? '<span class="crew-inc-zero" title="No payroll column in this report">—</span>'
                            : incDash(c.payroll)) + '</td></tr>';
@@ -2869,6 +2928,8 @@
     if (rt) rt.addEventListener('click', function () { incSendBack(d); });
     var gr = host.querySelector('#incGear');
     if (gr) gr.addEventListener('click', function () { incTray(d); });
+    var hi = host.querySelector('#incHours');
+    if (hi) hi.addEventListener('click', function () { incHoursImport(d); });
     var rf = host.querySelector('#incSpiffRefresh');
     if (rf) rf.addEventListener('click', function () { incSpiffRefresh(rf); });
     if (!editable) return;
@@ -2932,7 +2993,9 @@
       cur[employeeId][field] = field === 'att' ? !!value
                              : (value === '' ? null : Number(value));
       paintIncentive();
-      toast(field === 'att' ? 'Attendance saved' : 'SPIFF saved');
+      toast(field === 'att' ? 'Attendance saved'
+          : field === 'hours' ? (value === '' ? 'Hours cleared — back to the flat figure' : 'Hours saved')
+          : 'SPIFF saved');
     } catch (e) {
       toast('Could not save: ' + ((e && e.message) || 'unknown'), true);
     }
@@ -3449,6 +3512,443 @@
     } catch (e) {
       toast('Could not re-measure: ' + ((e && e.message) || 'unknown'), true);
     } finally { btn.disabled = false; btn.textContent = label; }
+  }
+
+  /* ══ Hours import — a WorkforceHub timecard export, read in the browser ═════════════════════════
+   *
+   * WHY THE BROWSER PARSES IT, and not a route. Crew's transport to the engine is JSONP, which is
+   * GET — a CSV does not fit in a URL. The alternative was a deploy-secret POST route, which the
+   * signed-in UI cannot call anyway (it holds a session token, not the secret). So the file is read
+   * here with FileReader — no network, the file never leaves the machine — matched against the rows
+   * already on screen, and written one person at a time through `incentive_save`.
+   *
+   * THAT ROUTE IS THE WHOLE SAFETY STORY. It already refuses an imported period, already refuses a
+   * period locked pending approval, already checks the role, and already validates hours. Reusing
+   * it means the import cannot reach a period the screen would not let you type into, and there is
+   * no second set of guards to keep in agreement with the first.
+   *
+   * NOTHING IS WRITTEN UNTIL THE PREVIEW IS CONFIRMED. The file format is inferred — see
+   * hrsPlan() — and an inference nobody can see is how the wrong column silently becomes payroll's
+   * idea of a fortnight. The preview names the columns it is summing and lets them be changed.
+   */
+
+  /* Quoted fields, escaped quotes, embedded newlines, and Excel's BOM. Hand-rolled because the
+     alternative is a dependency, and this file has none. */
+  function hrsParseCsv(text) {
+    var rows = [], row = [], cur = '', quoted = false;
+    var s = String(text == null ? '' : text).replace(/^﻿/, '');
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charAt(i);
+      if (quoted) {
+        if (c !== '"') { cur += c; continue; }
+        if (s.charAt(i + 1) === '"') { cur += '"'; i++; } else quoted = false;
+        continue;
+      }
+      if (c === '"') { quoted = true; continue; }
+      if (c === ',') { row.push(cur); cur = ''; continue; }
+      if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; continue; }
+      if (c === '\r') continue;
+      cur += c;
+    }
+    if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+    return rows.map(function (r) { return r.map(function (c) { return String(c).trim(); }); });
+  }
+
+  /* Exports lead with title and date-range rows, so row 0 is not reliably the header. Take the
+     first row that both names a person-ish column and has real width — a title row has one cell. */
+  function hrsHeaderRow(rows) {
+    for (var i = 0; i < Math.min(rows.length, 25); i++) {
+      var r = rows[i], filled = r.filter(function (c) { return c !== ''; });
+      if (filled.length < 3) continue;
+      if (r.some(function (c) { return /name|employee|empl?\b/i.test(c); })) return i;
+    }
+    return 0;
+  }
+
+  var HRS_PTO = /pto|vacation|sick|holiday|bereav|jury|leave|unpaid|absence|personal/i;
+  var HRS_HOURISH = /hour|hrs\b/i;
+
+  /* What the file is, and which numbers to add up. Two shapes exist in the wild and they need
+     opposite handling, so the shape is DETECTED and then STATED in the preview rather than assumed:
+
+       wide  one row per person, a column per punch category   → sum the chosen columns
+       long  one row per person PER category, one hours column → sum the rows whose category is kept
+
+     PTO and its relatives are off by default: $/hr is meant to read "what this bonus was worth per
+     hour on the floor", and counting a week of vacation into the divisor halves it for somebody who
+     worked a normal week. That is a DEFAULT, not a rule — every category is a checkbox, because the
+     right answer is Sky's and this guess must be visible enough to overrule. */
+  function hrsPlan(rows) {
+    var hi = hrsHeaderRow(rows);
+    var headers = rows[hi] || [];
+    var body = rows.slice(hi + 1).filter(function (r) {
+      return r.some(function (c) { return c !== ''; });
+    });
+    function find(re, avoid) {
+      for (var i = 0; i < headers.length; i++) {
+        if (!re.test(headers[i])) continue;
+        if (avoid && avoid.test(headers[i])) continue;
+        return i;
+      }
+      return -1;
+    }
+    var AVOID = /supervisor|manager|department|location|store|company|site|division|job/i;
+    var codeCol  = find(/employee\s*(code|number|id)|^emp\s*(code|no|id)|badge|payroll\s*id/i, AVOID);
+    var nameCol  = find(/employee\s*name|^name$|full\s*name/i, AVOID);
+    var firstCol = find(/first\s*name|^first$/i, AVOID);
+    var lastCol  = find(/last\s*name|^last$|surname/i, AVOID);
+    if (nameCol < 0 && firstCol < 0 && lastCol < 0) nameCol = find(/name/i, AVOID);
+    var catCol   = find(/punch\s*categ|categ|earning|pay\s*(code|type)|^type$|hour\s*type/i, AVOID);
+
+    var hourCols = [];
+    for (var i = 0; i < headers.length; i++) {
+      if (i === codeCol || i === nameCol || i === catCol) continue;
+      if (!HRS_HOURISH.test(headers[i])) continue;
+      hourCols.push(i);
+    }
+    /* LONG only when there is a category column AND exactly one hours column to attribute to it.
+       Two hours columns beside a category is a wide sheet that happens to name a column "type", and
+       reading it as long would collapse every category into one. */
+    var long = catCol >= 0 && hourCols.length === 1;
+    var cats = [];
+    if (long) {
+      var seen = Object.create(null);
+      body.forEach(function (r) {
+        var c = String(r[catCol] || '').trim();
+        if (!c || seen[c]) return;
+        seen[c] = 1;
+        cats.push({ label: c, on: !HRS_PTO.test(c) });
+      });
+    } else {
+      cats = hourCols.map(function (i) {
+        return { label: headers[i], col: i, on: !HRS_PTO.test(headers[i]) };
+      });
+    }
+    return { headers: headers, body: body, codeCol: codeCol, nameCol: nameCol,
+             firstCol: firstCol, lastCol: lastCol, catCol: catCol,
+             hourCol: hourCols.length ? hourCols[0] : -1, hourCols: hourCols,
+             shape: long ? 'long' : 'wide', cats: cats };
+  }
+
+  function hrsNameOf(plan, r) {
+    if (plan.nameCol >= 0 && r[plan.nameCol]) return r[plan.nameCol];
+    var f = plan.firstCol >= 0 ? r[plan.firstCol] : '';
+    var l = plan.lastCol  >= 0 ? r[plan.lastCol]  : '';
+    return (f + ' ' + l).trim();
+  }
+
+  /* "Kettler, Michael" and "Michael Kettler" are the same person; METRC alone spells the same name
+     three ways. Lowercased, depunctuated, comma-flipped, and finally compared as a SORTED token set
+     so word order stops mattering. Deliberately not a fuzzy score — a near-miss that silently
+     attaches one person's fortnight to another is worse than an unmatched row somebody can see. */
+  function hrsKey(name) {
+    var s = String(name || '').toLowerCase().replace(/[^a-z, ]/g, ' ');
+    if (s.indexOf(',') >= 0) { var p = s.split(','); s = p[1] + ' ' + p[0]; }
+    return s.replace(/\s+/g, ' ').trim();
+  }
+  function hrsTokens(name) {
+    return hrsKey(name).split(' ').filter(function (t) { return t.length > 1; }).sort().join(' ');
+  }
+  /* Leading zeros do not survive a spreadsheet — the same coercion that makes Sky employee 0
+     rather than 00 — so codes compare as text AND as numbers. */
+  function hrsSameCode(a, b) {
+    a = String(a == null ? '' : a).trim(); b = String(b == null ? '' : b).trim();
+    if (!a || !b) return false;
+    if (a.toLowerCase() === b.toLowerCase()) return true;
+    return /^\d+$/.test(a) && /^\d+$/.test(b) && parseInt(a, 10) === parseInt(b, 10);
+  }
+
+  /* Everyone the current period can hold an input for. A row with no employee_id is skipped on
+     purpose: incentive_save keys on it, so hours saved against a blank would go nowhere. Those
+     people are already reported by the engine as `unmatched` and shown on the dashboard. */
+  function hrsRoster(d) {
+    var out = [];
+    (d.budtenders || []).concat(d.managers || []).forEach(function (r) {
+      if (!r || !r.employee_id) return;
+      out.push({ id: r.employee_id, name: incName(r), legal: r.full_name || '',
+                 code: r.swipeclock_code || '', store: r.storeName || '' });
+    });
+    if (d.admin && d.admin.employee_id) {
+      /* The owner is listed so the file's row for him is not reported as unmatched, but hours
+         cannot change his $/hr — calcAdmin takes no inputs. Saving one would be a write that
+         provably does nothing, so he is marked and skipped at commit. */
+      out.push({ id: d.admin.employee_id, name: incName(d.admin), legal: d.admin.full_name || '',
+                 code: d.admin.swipeclock_code || '', store: '', admin: true });
+    }
+    return out;
+  }
+
+  function hrsBuild(plan, roster) {
+    var byPerson = Object.create(null), order = [];
+    var on = Object.create(null);
+    plan.cats.forEach(function (c) { if (c.on) on[c.label] = 1; });
+
+    plan.body.forEach(function (r) {
+      var name = hrsNameOf(plan, r);
+      var code = plan.codeCol >= 0 ? r[plan.codeCol] : '';
+      if (!name && !code) return;
+      var k = (code ? 'c:' + code : 'n:' + hrsTokens(name));
+      if (!byPerson[k]) { byPerson[k] = { name: name, code: code, hours: 0, saw: 0 }; order.push(k); }
+      var p = byPerson[k];
+      if (name && !p.name) p.name = name;
+      if (plan.shape === 'long') {
+        if (!on[String(r[plan.catCol] || '').trim()]) return;
+        var v = parseFloat(String(r[plan.hourCol] || '').replace(/[^0-9.\-]/g, ''));
+        if (isFinite(v)) { p.hours += v; p.saw++; }
+      } else {
+        plan.cats.forEach(function (c) {
+          if (!c.on) return;
+          var n = parseFloat(String(r[c.col] || '').replace(/[^0-9.\-]/g, ''));
+          if (isFinite(n)) { p.hours += n; p.saw++; }
+        });
+      }
+    });
+
+    var used = Object.create(null), matched = [], unmatched = [];
+    order.forEach(function (k) {
+      var p = byPerson[k];
+      var hit = null, how = '';
+      for (var i = 0; i < roster.length && !hit; i++) {
+        if (hrsSameCode(p.code, roster[i].code)) { hit = roster[i]; how = 'code'; }
+      }
+      if (!hit) {
+        var tk = hrsTokens(p.name);
+        for (var j = 0; j < roster.length && !hit; j++) {
+          if (tk && (hrsTokens(roster[j].name) === tk || hrsTokens(roster[j].legal) === tk)) {
+            hit = roster[j]; how = 'name';
+          }
+        }
+      }
+      /* ONE FILE ROW PER PERSON. Two rows resolving to the same person means the match is wrong (or
+         the file has them twice), and the second would overwrite the first with no trace. Report
+         both rather than pick. */
+      if (hit && used[hit.id]) { unmatched.push({ name: p.name, code: p.code, hours: p.hours,
+                                                  why: 'a second row also matched ' + hit.name }); return; }
+      if (!hit) { unmatched.push({ name: p.name, code: p.code, hours: p.hours,
+                                   why: 'nobody on this period matches' }); return; }
+      used[hit.id] = 1;
+      matched.push({ id: hit.id, who: hit.name, store: hit.store, admin: !!hit.admin,
+                     name: p.name, code: p.code, how: how, hours: Math.round(p.hours * 100) / 100,
+                     /* A name match on somebody with no code on file is the moment to learn it —
+                        next period matches on the code and survives a legal-name change. */
+                     learn: how === 'name' && !hit.code && !!p.code });
+    });
+    var missing = roster.filter(function (r) {
+      return !used[r.id] && !r.admin;
+    });
+    return { matched: matched, unmatched: unmatched, missing: missing };
+  }
+
+  function incHoursImport(d) {
+    if (document.getElementById('crewHrsBack')) return;
+    var pp = (d.payPeriod && d.payPeriod.start) || d.pp_start || '';
+    var ppEnd = (d.payPeriod && d.payPeriod.end) || d.pp_end || '';
+    var roster = hrsRoster(d);
+    var plan = null, built = null, busy = false;
+
+    var back = el('div', 'crew-hrs-back'); back.id = 'crewHrsBack';
+    var box  = el('div', 'crew-hrs');
+    back.appendChild(box);
+    function close() { if (!busy) { document.removeEventListener('keydown', onKey); back.remove(); } }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    back.addEventListener('mousedown', function (e) { if (e.target === back) close(); });
+    document.addEventListener('keydown', onKey);
+
+    function paint() {
+      var h = ['<div class="crew-hrs-head"><span>Import hours · ' +
+               esc(incPeriodLabel(pp, ppEnd)) + '</span>' +
+               '<button class="inc-tray-x" id="hrsX" title="Close">✕</button></div>',
+               '<div class="crew-hrs-body">'];
+
+      if (!plan) {
+        h.push('<p class="crew-hrs-lede">Drop the <b>WorkforceHub timecard export</b> for this ' +
+               'period, or choose the file. It is read here in the browser — nothing is uploaded, ' +
+               'and nothing is saved until you have seen what it matched.</p>');
+        h.push('<div class="crew-hrs-drop" id="hrsDrop">Drop a .csv here<br>' +
+               '<button type="button" class="gx-btn" id="hrsPick" style="margin-top:10px">Choose file…</button></div>');
+        h.push('<p class="crew-hrs-lede">Hours set <b>$/hr only</b>. They never change a bonus, a ' +
+               'payroll figure, or the Capstone export — so an import cannot alter what anybody ' +
+               'is paid. Anyone the file does not cover keeps the flat ' +
+               esc(String((d.thresholds && d.thresholds.hoursPerPeriod) || 80)) + '-hour figure.</p>');
+      } else {
+        h.push('<p class="crew-hrs-lede">Read <b>' + plan.body.length + '</b> rows · detected a <b>' +
+               esc(plan.shape === 'long' ? 'one row per category' : 'one row per person') +
+               '</b> layout · matching on ' +
+               (plan.codeCol >= 0 ? '<b>' + esc(plan.headers[plan.codeCol]) + '</b> then name'
+                                  : 'name only <b>(no code column found)</b>') + '.</p>');
+        h.push('<div><div class="crew-hrs-sec" style="margin-bottom:7px">Hours counted — ' +
+               'time off is off by default</div><div class="crew-hrs-cols">');
+        plan.cats.forEach(function (c, i) {
+          h.push('<label class="crew-hrs-col' + (c.on ? ' on' : '') + '">' +
+                 '<input type="checkbox" data-cat="' + i + '"' + (c.on ? ' checked' : '') + '>' +
+                 esc(c.label) + '</label>');
+        });
+        if (!plan.cats.length) {
+          h.push('<span class="crew-hrs-lede">No column named like hours — check the file.</span>');
+        }
+        h.push('</div></div>');
+
+        if (built) {
+          if (!plan.cats.some(function (c) { return c.on; })) {
+            h.push('<div class="crew-hrs-warn bad"><b>Nothing is counted.</b> Every category is ' +
+                   'switched off, so every person would import as zero hours — which this refuses ' +
+                   'to save. Tick at least one.</div>');
+          }
+          h.push('<div class="crew-hrs-tw"><table class="crew-hrs-t"><thead><tr>' +
+                 '<th>In the file</th><th>Matched to</th><th>Store</th><th style="text-align:right">Hours</th>' +
+                 '</tr></thead><tbody>');
+          built.matched.forEach(function (m) {
+            h.push('<tr><td>' + esc(m.name || m.code) +
+                   ' <span class="crew-hrs-tag ' + m.how + '">' + m.how + '</span>' +
+                   (m.learn ? ' <span class="crew-hrs-tag">will save code ' + esc(m.code) + '</span>' : '') +
+                   '</td><td>' + esc(m.who) + (m.admin ? ' <span class="crew-hrs-tag">no timecard — skipped</span>' : '') +
+                   '</td><td class="dim">' + esc(m.store) + '</td>' +
+                   '<td class="n">' + esc(m.hours.toFixed(2)) + '</td></tr>');
+          });
+          built.unmatched.forEach(function (u) {
+            h.push('<tr class="miss"><td>' + esc(u.name || u.code) +
+                   ' <span class="crew-hrs-tag no">no match</span></td>' +
+                   '<td colspan="2" class="dim">' + esc(u.why) + '</td>' +
+                   '<td class="n">' + esc(Number(u.hours || 0).toFixed(2)) + '</td></tr>');
+          });
+          h.push('</tbody></table></div>');
+
+          if (built.unmatched.length) {
+            h.push('<div class="crew-hrs-warn"><b>' + built.unmatched.length +
+                   ' row(s) matched nobody</b> and will be skipped. Fix it by putting the ' +
+                   'WorkforceHub code on their roster record, or correct the legal name — ' +
+                   'guessing a near-match here would attach one person\'s fortnight to another.</div>');
+          }
+          if (built.missing.length) {
+            h.push('<div class="crew-hrs-warn"><b>' + built.missing.length +
+                   ' person(s) on this period are not in the file</b> — ' +
+                   esc(built.missing.slice(0, 8).map(function (m) { return m.name; }).join(', ')) +
+                   (built.missing.length > 8 ? ' and ' + (built.missing.length - 8) + ' more' : '') +
+                   '. They keep the flat figure, which is exactly what a blank means.</div>');
+          }
+        }
+      }
+      h.push('</div><div class="crew-hrs-foot">');
+      if (plan && built) {
+        var n = built.matched.filter(function (m) { return !m.admin && m.hours > 0; }).length;
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="hrsGo"' +
+               (n ? '' : ' disabled') + '>Save hours for ' + n + ' ' +
+               (n === 1 ? 'person' : 'people') + '</button>');
+        h.push('<button type="button" class="gx-btn" id="hrsRedo">Choose a different file</button>');
+      }
+      h.push('<span class="crew-hrs-spacer"></span><span class="crew-hrs-prog" id="hrsProg"></span>' +
+             '<button type="button" class="gx-btn" id="hrsCancel">Close</button></div>');
+      box.innerHTML = h.join('');
+      wire();
+    }
+
+    function rebuild() { built = hrsBuild(plan, roster); }
+
+    function load(file) {
+      if (!file) return;
+      var fr = new FileReader();
+      fr.onload = function () {
+        var rows = hrsParseCsv(fr.result);
+        if (!rows.length) { toast('That file has no rows in it', true); return; }
+        plan = hrsPlan(rows);
+        if (plan.nameCol < 0 && plan.firstCol < 0 && plan.codeCol < 0) {
+          plan = null;
+          toast('No employee name or code column found — is this the timecard export?', true);
+          return;
+        }
+        rebuild(); paint();
+      };
+      fr.onerror = function () { toast('Could not read that file', true); };
+      fr.readAsText(file);
+    }
+
+    function wire() {
+      var x = box.querySelector('#hrsX'); if (x) x.addEventListener('click', close);
+      var c = box.querySelector('#hrsCancel'); if (c) c.addEventListener('click', close);
+      var redo = box.querySelector('#hrsRedo');
+      if (redo) redo.addEventListener('click', function () { plan = null; built = null; paint(); });
+
+      var drop = box.querySelector('#hrsDrop');
+      if (drop) {
+        var pick = box.querySelector('#hrsPick');
+        if (pick) pick.addEventListener('click', function () {
+          var inp = document.createElement('input');
+          inp.type = 'file'; inp.accept = '.csv,text/csv,text/plain';
+          inp.addEventListener('change', function () { load(inp.files && inp.files[0]); });
+          inp.click();
+        });
+        ['dragenter', 'dragover'].forEach(function (ev) {
+          drop.addEventListener(ev, function (e) { e.preventDefault(); e.stopPropagation(); });
+        });
+        drop.addEventListener('drop', function (e) {
+          e.preventDefault(); e.stopPropagation();
+          load(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+        });
+      }
+
+      Array.prototype.forEach.call(box.querySelectorAll('input[data-cat]'), function (cb) {
+        cb.addEventListener('change', function () {
+          plan.cats[+cb.getAttribute('data-cat')].on = cb.checked;
+          rebuild(); paint();
+        });
+      });
+
+      var go = box.querySelector('#hrsGo');
+      if (go) go.addEventListener('click', commit);
+    }
+
+    /* ONE CALL PER PERSON, sequential, through the same route the screen's own edits use.
+       A partial run is SAFE by construction — the people who got written have their hours and the
+       rest keep the flat figure, which is the same state as never having run — so this reports
+       exactly who failed rather than pretending to be atomic. */
+    async function commit() {
+      var rows = built.matched.filter(function (m) { return !m.admin && m.hours > 0; });
+      if (!rows.length) return;
+      busy = true;
+      var go = box.querySelector('#hrsGo'), prog = box.querySelector('#hrsProg');
+      if (go) go.disabled = true;
+      var done = 0, failed = [], learned = 0;
+      for (var i = 0; i < rows.length; i++) {
+        var m = rows[i];
+        if (prog) prog.textContent = 'Saving ' + (i + 1) + ' of ' + rows.length + '…';
+        try {
+          var r = await Engine.jsonp('incentive_save',
+                    { token: token(), pp_start: pp, employee_id: m.id, hours: String(m.hours) },
+                    { timeoutMs: 20000, retries: 1 });
+          if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
+          var cur = incInputs();
+          cur[m.id] = cur[m.id] || {};
+          cur[m.id].hours = m.hours;
+          done++;
+          /* Learning the code is a convenience, not part of the import: a failure here must not
+             count as a failed hours save, because the hours DID land. */
+          if (m.learn) {
+            try {
+              var s = await Engine.jsonp('roster_save',
+                        { token: token(), employee_id: m.id, swipeclock_code: m.code },
+                        { timeoutMs: 20000, retries: 1 });
+              if (s && s.ok !== false) learned++;
+            } catch (e2) { /* reported in the summary below as simply not learned */ }
+          }
+        } catch (e) {
+          failed.push(m.who + ' (' + ((e && e.message) || 'unknown') + ')');
+        }
+      }
+      busy = false;
+      if (prog) prog.textContent = '';
+      paintIncentive();
+      if (failed.length) {
+        toast('Saved ' + done + ' of ' + rows.length + ' — failed: ' + failed.slice(0, 3).join('; ') +
+              (failed.length > 3 ? ' and ' + (failed.length - 3) + ' more' : ''), true);
+      } else {
+        toast('Hours saved for ' + done + ' ' + (done === 1 ? 'person' : 'people') +
+              (learned ? ' · learned ' + learned + ' WorkforceHub code' + (learned === 1 ? '' : 's') : ''));
+        close();
+      }
+    }
+
+    paint();
+    document.body.appendChild(back);
   }
 
   async function loadIncentive(ppStart) {

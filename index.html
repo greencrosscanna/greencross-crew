@@ -851,11 +851,67 @@
 .ist-savebtn { flex: 1; background: var(--green); color: #05130a; border: none; border-radius: 9px; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; }
 .ist-savebtn:hover { background: #6ee79b; }
 .ist-savenote { font-size: 11px; color: var(--text-mute); }
+
+    /* ── Hours import (SwipeClock timecard export) ────────────────────────────────
+       ITS OWN CLASSES AND ITS OWN TOKENS, deliberately. Everything above is Leaderboard's tray
+       copied verbatim, kept re-copyable by not being hand-edited; and the bridge that makes
+       `--border` mean anything is scoped to `.inc-tray`. So this reads gx-theme's --gx-* names
+       directly rather than borrowing a scope it does not belong to, and a future re-copy of the
+       tray cannot disturb it. Centred rather than a drawer: the review step is a wide table of
+       names against hours, which a 360px rail cannot show without wrapping every row. */
+.crew-hrs-back { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 92;
+  display: flex; align-items: center; justify-content: center; padding: 24px; }
+.crew-hrs { background: var(--gx-surface); border: 1px solid var(--gx-border); border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.5); width: 760px; max-width: 100%; max-height: 88vh;
+  display: flex; flex-direction: column; color: var(--gx-text); }
+.crew-hrs-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 15px 18px; border-bottom: 1px solid var(--gx-border); font-size: 13px;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--gx-text-mute); }
+.crew-hrs-body { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.crew-hrs-foot { flex: none; padding: 13px 18px; border-top: 1px solid var(--gx-border);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.crew-hrs-foot .crew-hrs-spacer { flex: 1; }
+.crew-hrs-lede { font-size: 13px; line-height: 1.55; color: var(--gx-text-dim); }
+.crew-hrs-lede b { color: var(--gx-text); }
+.crew-hrs-drop { border: 1px dashed var(--gx-border-strong); border-radius: 10px; padding: 26px 18px;
+  text-align: center; font-size: 13px; color: var(--gx-text-dim); background: var(--gx-surface-dashed, var(--gx-bg)); }
+.crew-hrs-sec { font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--gx-text-mute); }
+.crew-hrs-cols { display: flex; flex-wrap: wrap; gap: 7px; }
+.crew-hrs-col { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--gx-border); border-radius: 999px; padding: 4px 11px 4px 8px;
+  color: var(--gx-text-mute); }
+.crew-hrs-col input { width: 13px; height: 13px; accent-color: var(--gx-green); }
+.crew-hrs-col.on { border-color: var(--gx-green-dim, #2f8a52); color: var(--gx-text);
+  background: rgba(74,222,128,.07); }
+.crew-hrs-tw { border: 1px solid var(--gx-border); border-radius: 8px; overflow: auto; max-height: 42vh; }
+.crew-hrs-t { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.crew-hrs-t th, .crew-hrs-t td { text-align: left; padding: 7px 11px;
+  border-bottom: 1px solid var(--gx-border); white-space: nowrap; }
+.crew-hrs-t th { position: sticky; top: 0; background: var(--gx-surface-2, var(--gx-bg));
+  font-size: 10px; text-transform: uppercase; letter-spacing: .07em; color: var(--gx-text-mute); z-index: 1; }
+.crew-hrs-t tr:last-child td { border-bottom: none; }
+.crew-hrs-t td.n { text-align: right; font-variant-numeric: tabular-nums; }
+.crew-hrs-t td.dim { color: var(--gx-text-mute); }
+.crew-hrs-t tr.miss td { color: var(--gx-text-mute); }
+.crew-hrs-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em;
+  border: 1px solid var(--gx-border); border-radius: 4px; padding: 1px 6px; color: var(--gx-text-mute); }
+.crew-hrs-tag.code { color: var(--gx-green); border-color: var(--gx-green-dim, #2f8a52); }
+.crew-hrs-tag.name { color: var(--gx-gold, #d4a847); border-color: rgba(212,168,71,.5); }
+.crew-hrs-tag.no { color: var(--gx-red, #ef4444); border-color: rgba(239,68,68,.5); }
+.crew-hrs-warn { border-left: 2px solid var(--gx-gold, #d4a847); background: rgba(212,168,71,.08);
+  padding: 10px 13px; border-radius: 0 6px 6px 0; font-size: 12.5px; line-height: 1.55;
+  color: var(--gx-text-dim); }
+.crew-hrs-warn b { color: var(--gx-text); }
+.crew-hrs-warn.bad { border-left-color: var(--gx-red, #ef4444); background: rgba(239,68,68,.08); }
+.crew-hrs-prog { font-size: 12px; color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
+
 @media print {
   body * { visibility: hidden; }
   .inc-wrap, .inc-wrap * { visibility: visible; }
   .inc-wrap { position: absolute; left: 0; top: 0; }
   .inc-actions, .inc-gear, .inc-tray, .inc-tray-back, .inc-att, .inc-spiff, .inc-arrow { display: none !important; }
+  .crew-hrs-back { display: none !important; }
   .inc-att-print, .inc-spiff-print { display: inline !important; }
 }
 
@@ -947,6 +1003,6 @@
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.344"></script>
+  <script src="crew.js?v=1.345"></script>
 </body>
 </html>

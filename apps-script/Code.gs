@@ -43,7 +43,16 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                              recorded, and guessing one onto a payroll file is worse than leaving it
                              out. Crew owns it because it is an HR attribute; GX Core's identity
                              slice stays exactly as it is. */
-                          'middle_initial'];
+                          'middle_initial',
+                          /* APPENDED 2026-08-30. WorkforceHub's own employee code, which is how a
+                             timecard export names a person — the file carries a code and a name and
+                             nothing else we hold. Matching on the name alone works until somebody
+                             marries, and then a fortnight of hours silently attaches to nobody.
+                             CREW'S, NOT GX CORE'S: Phase 0 sketched a swipeclock_id column on the
+                             registry, but nothing outside Crew consumes hours, and putting it in
+                             Core would need a library cut and a re-pin in five spokes to deliver a
+                             field one app reads. Crew owns the rich attributes; this is one. */
+                          'swipeclock_code'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
  *
@@ -2138,6 +2147,7 @@ function rosterJoin_() {
       store: String(r.home_store || ''),
       preferred_name: String(r.preferred_name || ''),
       middle_initial: String(a.middle_initial || '').trim().toUpperCase().slice(0, 1),
+      swipeclock_code: String(a.swipeclock_code || '').trim(),
       avatar_config: String(r.avatar_config || ''),
       /* THE AVATAR SEED. DiceBear generates a face from a seed, and Leaderboard historically
          seeded on nameKey — which derives from the NAME, so a rename or one of our merges
@@ -2550,6 +2560,12 @@ function saveRosterAttrs_(p) {
     middle_initial:     p.middle_initial == null
                         ? (existing.middle_initial || '')
                         : String(p.middle_initial).replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 1),
+    /* WorkforceHub's employee code. THIS LIST IS HAND-WRITTEN and writeAttrs_ replaces the whole
+       row, so a column added to ATTR_HEADERS but not to this record is blanked by the next roster
+       edit — which is exactly how celebrations_opt_out was lost once already. */
+    swipeclock_code:    p.swipeclock_code == null
+                        ? (existing.swipeclock_code || '')
+                        : String(p.swipeclock_code).trim(),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };
@@ -3605,10 +3621,13 @@ function stampEmployeeIds_(live) {
      been looked up under a key nothing wrote. Caught by incentive_probe reporting the impossible
      pair `stamped: 0, unmatched: []`. */
   var roster = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
-  var midById = Object.create(null);
+  var midById = Object.create(null), swcById = Object.create(null);
   try {
     var _attrs = readAttrs_();
-    Object.keys(_attrs).forEach(function (id) { midById[id] = String(_attrs[id].middle_initial || ''); });
+    Object.keys(_attrs).forEach(function (id) {
+      midById[id] = String(_attrs[id].middle_initial || '');
+      swcById[id] = String(_attrs[id].swipeclock_code || '').trim();
+    });
   } catch (e) {}
   var byKey = Object.create(null), legalById = Object.create(null);
   roster.forEach(function (e) {
@@ -3647,6 +3666,10 @@ function stampEmployeeIds_(live) {
        screen keeps leading with the name people use — this rides alongside for the export. */
     r.full_name = hit ? (legalById[hit] || '') : '';
     r.middle_initial = hit ? (midById[hit] || '') : '';
+    /* Rides along so the hours import can match on a CODE rather than on a name. It is the only
+       field on the row that comes from the timekeeping system, and it is the difference between
+       an import that survives a legal-name change and one that quietly drops that person. */
+    r.swipeclock_code = hit ? (swcById[hit] || '') : '';
     if (!hit) unmatched.push(r.name);
   }
   /* LEADERBOARD'S STORE SLUGS ARE NOT GX CORE'S. LB says baseline / century / portland / river;
@@ -4039,6 +4062,22 @@ function saveIncentiveInput_(p) {
              ' and is locked until it is approved or sent back' };
   }
 
+  /* HOURS ARE REFUSED LOUDLY, never coerced. `inputsFor_` reads this back through
+     `Number(r.hours) || null`, so anything unparseable would land in the sheet, read back as null,
+     and silently restore the flat 80 — a save that reported ok and did nothing. The ceiling is a
+     typo guard, not a policy: a fortnight is 336 hours end to end, so 400 is past anything a real
+     timecard can hold and "8000" (a stray zero on 800, itself already impossible) is a mistake
+     worth stopping rather than storing. Empty still clears, which is how a row goes back to flat. */
+  if (p.hours !== undefined && String(p.hours).trim() !== '') {
+    var hv = Number(String(p.hours).trim());
+    if (!isFinite(hv) || hv <= 0) {
+      return { ok: false, error: 'invalid hours: ' + p.hours + ' (expected a positive number, or empty to use the flat figure)' };
+    }
+    if (hv > 400) {
+      return { ok: false, error: 'implausible hours: ' + p.hours + ' — a 14-day period holds 336 hours end to end' };
+    }
+  }
+
   var sh = sheetOf_(INPUTS_TAB, INPUTS_HEADERS);
   var rows = readTab_(INPUTS_TAB, INPUTS_HEADERS);
   var idx = -1;
@@ -4084,6 +4123,26 @@ function saveIncentiveInput_(p) {
  * the browser ever disagree, that test fails before either can pay anybody. Do not edit these
  * without running it. */
 
+/* THE DIVISOR FOR $/hr, and the only thing per-person hours change.
+ *
+ * `hours` is what somebody actually worked this fortnight, from the timekeeping system;
+ * T.hoursPerPeriod is the flat 80 the dashboard has always used for everybody. A blank means "use
+ * the flat figure" — the same claim `inputsFor_` already encodes by returning null — so a period
+ * nobody imported hours for scores EXACTLY as it did before, which is what lets this land without
+ * touching a single closed period.
+ *
+ * ZERO AND NEGATIVE FALL BACK TOO, on purpose. A parse that produced 0 would otherwise divide into
+ * Infinity and render as a $/hr of ∞ next to a real bonus; falling back shows the flat yardstick,
+ * which is wrong in the same direction it has always been wrong rather than newly nonsensical.
+ *
+ * SCOPE: $/hr ONLY. It does not touch bonus or payroll, and $/hr is not one of the four columns the
+ * Capstone export carries — so nothing here can change what anybody is paid. That is deliberate:
+ * it is why hours can be imported from a source we have not yet automated without a penny-match. */
+function incHours_(i, T) {
+  var h = Number(i && i.hours);
+  return (isFinite(h) && h > 0) ? h : T.hoursPerPeriod;
+}
+
 function incCalcBud_(b, T, inputs) {
   var t = T.budtender, i = inputs[b.employee_id || b.nameKey] || {};
   var spiff = Number(i.spiff || 0) || 0, att = !!i.att;
@@ -4094,7 +4153,7 @@ function incCalcBud_(b, T, inputs) {
   var attB = att ? t.attendanceBonus : 0;
   var bonus = aovB + disB + attB + spiff;
   return { qual: qual, aovB: aovB, disB: disB, attB: attB, spiff: spiff,
-           bonus: bonus, payroll: bonus - spiff, hr: bonus / T.hoursPerPeriod };
+           bonus: bonus, payroll: bonus - spiff, hr: bonus / incHours_(i, T) };
 }
 
 function incCalcMgr_(mgr, T, inputs, budtenders) {
@@ -4117,9 +4176,13 @@ function incCalcMgr_(mgr, T, inputs, budtenders) {
   }).length * t.teamAttendancePerHead;
   var payroll = sB + dB + aB + tA;
   return { pct: pct, salesB: sB, discB: dB, aovB: aB, teamA: tA, spiff: spiff,
-           payroll: payroll, bonus: payroll + spiff, hr: (payroll + spiff) / T.hoursPerPeriod };
+           payroll: payroll, bonus: payroll + spiff, hr: (payroll + spiff) / incHours_(i, T) };
 }
 
+/* NO `inputs` PARAMETER, and so no per-person hours — deliberately unchanged by the SwipeClock
+   work. Admin is the owner's row: he takes nothing hourly, does not clock in, and has no timecard
+   for the export to carry. Reaching hours in here would mean inventing a divisor for the one
+   person the clock will never have an opinion about. */
 function incCalcAdmin_(admin, T) {
   var t = T.admin;
   var pct = admin.target > 0 ? admin.actual / admin.target * 100 : 0;
