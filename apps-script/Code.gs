@@ -661,6 +661,34 @@ function isTruthyFlag_(v) {
   return s === 'yes' || s === 'true' || s === 'y' || s === '1';
 }
 
+/* ─── "Does this person still work here?", in ONE place ──────────────────────────────────────────
+ *
+ * Every caller that asks this question was answering it inline, and by 2026-08-29 there were five
+ * spellings of the answer across the file. Four of them missed `'false'`; one — getCelebrations_,
+ * the ONE endpoint whose output leaves Crew for the all-staff kiosk — missed `'retired'` and
+ * `'merged'`, so the kiosk announced birthdays and work anniversaries for people who had left and
+ * for merged tombstone records. It went unnoticed because it only shows itself on the one day a
+ * year each affected person has a date, on a screen nobody audits, and a retired person's card
+ * looks exactly like everyone else's.
+ *
+ * The values, and why each is here:
+ *   retired    — left the company. Still in the sheet, because they worked the periods they worked.
+ *   merged     — a TOMBSTONE. getEmployees() still returns it and it still matches on name, so a
+ *                caller that keeps it either double-counts a live person or renders a ghost.
+ *   inactive / terminated — other spellings the registry has carried.
+ *   false      — the boolean-as-text case. Booleans are TEXT throughout the suite, so an `active`
+ *                column that says "false" arrives here as the status string 'false'.
+ *
+ * NOT every status check should call this. Three deliberately ask a different question and keep
+ * their own logic: rosterJoin_ needs retired and merged told APART (it renders both, differently);
+ * identity_health COUNTS them separately; identity_repair excludes only merged, because a retired
+ * person with a damaged full_name still wants repairing. Those are marked where they sit. */
+function statusIsLive_(status) {
+  var st = String(status == null ? '' : status).trim().toLowerCase() || 'active';
+  return st !== 'retired' && st !== 'merged' && st !== 'inactive' &&
+         st !== 'terminated' && st !== 'false';
+}
+
 /**
  * Leaderboard's join key. MUST stay byte-identical to `nameToKey_` in the Leaderboard repo
  * (endpoints.gs) — it is how the celebrations feed lines up with the kiosk's roster, and a
@@ -761,8 +789,7 @@ function assignNumbers_(p) {
   Object.keys(attrs).forEach(function (k) { note(attrs[k].employee_number); });
 
   var need = identity.filter(function (r) {
-    var st = String(r.status || 'active').toLowerCase();
-    if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return false;
+    if (!statusIsLive_(r.status)) return false;
     var id = String(r.employee_id || '').trim();
     return !String((attrs[id] || {}).employee_number || r.employee_number || '').trim();
   });
@@ -912,16 +939,14 @@ function emailProposals_(p) {
   // with someone outside the filter is still a collision.
   var firstCount = Object.create(null);
   rows.forEach(function (r) {
-    var st = String(r.status || 'active').toLowerCase();
-    if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return;
+    if (!statusIsLive_(r.status)) return;
     var f = slug(firstOf(r));
     if (f) firstCount[f] = (firstCount[f] || 0) + 1;
   });
 
   var out = [];
   rows.forEach(function (r) {
-    var st = String(r.status || 'active').toLowerCase();
-    if (st === 'retired' || st === 'merged' || st === 'inactive' || st === 'terminated') return;
+    if (!statusIsLive_(r.status)) return;
     if (roleFilter && String(r.role_title || '').toLowerCase().indexOf(roleFilter) < 0) return;
 
     var first = firstOf(r), f = slug(first);
@@ -2099,6 +2124,9 @@ function rosterJoin_() {
   var rows = identity.map(function (r) {
     var id = String(r.employee_id || '').trim();
     var a  = attrs[id] || {};
+    /* NOT statusIsLive_, deliberately: this screen RENDERS both states and has to tell them
+       apart — retired is a person who left, merged is a tombstone. The helper collapses them
+       into one boolean, which is right for every caller that only asks "still here?". */
     var st = String(r.status || 'active').toLowerCase();
     var isRetired = st === 'retired' || st === 'inactive' || st === 'terminated' || st === 'false';
     var isMerged  = st === 'merged';
@@ -5283,8 +5311,7 @@ function nameKeyHealth_() {
   // cries wolf on a correct state is one people learn to ignore. Only a collision between rows that
   // are still LIVE is a real join hazard.
   function liveRow_(id) {
-    var st = String((identityById[id] || {}).status || 'active').toLowerCase();
-    return st !== 'merged' && st !== 'retired' && st !== 'inactive' && st !== 'terminated';
+    return statusIsLive_((identityById[id] || {}).status);
   }
 
   Object.keys(byKey).forEach(function (k) {
@@ -5334,6 +5361,7 @@ function identityHealth_() {
   rows.forEach(function (r) {
     // Merged and retired rows stay in the sheet for audit, but counting them in the live role
     // spread reads as "7 store managers for 6 stores" and sends you looking for a bug.
+    /* NOT statusIsLive_: this COUNTS the two separately, which is the whole output. */
     var st = String(r.status || '').toLowerCase();
     if (st === 'merged')  { merged++;  return; }
     if (st === 'retired') { retired++; return; }
@@ -5430,6 +5458,8 @@ function identityRepair_(p) {
   catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
 
   var damaged = live.filter(function (r) {
+    /* NOT statusIsLive_: merged only, on purpose. A RETIRED person with a damaged full_name
+       still wants repairing — they worked the periods they worked and history joins on it. */
     if (String(r.status || '').toLowerCase() === 'merged') return false;
     if (only) return String(r.employee_id || '').trim() === only;
     return !String(r.full_name || '').trim();
@@ -5797,8 +5827,14 @@ function getCelebrations_(p) {
   try { identity = GXCore.getEmployees() || []; } catch (e) { identity = []; }
   var byId = Object.create(null);
   identity.forEach(function (r) {
-    var st = String(r.status || 'active').toLowerCase();
-    if (st === 'inactive' || st === 'terminated' || st === 'false') return;
+    /* THE BUG THIS LINE USED TO BE (fixed 2026-08-29). It read
+         if (st === 'inactive' || st === 'terminated' || st === 'false') return;
+       — no 'retired', no 'merged'. This is the one endpoint whose output leaves Crew for the
+       all-staff kiosk, so the most public surface in the app was announcing birthdays and work
+       anniversaries for people who had left, and for merged tombstones that would announce a live
+       person a second time. Caught by cross-checking against the Monday digest, which derives its
+       list from rosterJoin_ and returned 1 for a week this route claimed 4 for. */
+    if (!statusIsLive_(r.status)) return;
     byId[String(r.employee_id || '').trim()] = r;
   });
 
