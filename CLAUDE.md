@@ -467,7 +467,7 @@ Email links carry a single-use 72-hour token bound to the period **and the total
 - **`''` and `0` are different claims.** The oldest report has no payroll column; those rows export
   empty, because 0.00 tells payroll to pay nothing.
 
-### The settings tray — thresholds in GX Core, discount rules still in Leaderboard
+### The settings tray — thresholds AND discount rules in GX Core
 
 **Thresholds live in GX Core kv as `incentiveThresholds`.** Deliberately **not** a `cfg.` key: that
 prefix is public on `?action=config`, and comp policy should not be readable by anyone with the URL.
@@ -490,15 +490,54 @@ that sheet names colours `--text`/`--green`/`--border`, gx-theme names them `--g
 and scoped to the tray. **Re-copy on any change there rather than hand-editing**, and keep the class
 names: renaming one silently unstyles a section instead of erroring.
 
-**Discount rules stay in Leaderboard** (`discountrules` / `discountrules_save`, secret-gated, above
-`requireAuth_`) because they filter the transaction data — the half that did not move — but they are
-edited in this tray because to whoever sets the scheme it is one screen. This is the **only write**
-Crew makes into that app. **The checkboxes mean COUNTED and Leaderboard stores EXCLUDED**; the flip
-happens in the engine, never the browser, because a UI posting one while displaying the other grades
-every budtender against the opposite rule and nothing about the result looks wrong. Every
-discretionary name is sent on save — the store merges by key, so an omitted one keeps its old value.
-If the list failed to load, save skips the rules rather than posting an empty set, which would switch
-all of them off.
+**Discount rules moved to GX Core kv `discountRules` on 2026-08-30** — same shape Leaderboard's own
+`GC_DISCOUNT_EXCL_JSON` always had, `{overrides:{"<name>":true}}`, `true` = **excluded**, i.e. does
+not count against the budtender. Read with `GXCore.getKv`; written through the secret-gated
+`?action=set_config`, exactly like the thresholds, because **there is no `GXCore.setKv`** and never
+has been. `gxSetKvViaWeb_` is the one writer for both.
+
+**The write hop to Leaderboard is gone. The read hop for the NAMES is not, and cannot be.**
+`discretionary` is derived from Leaderboard's discount **registry** — a union of Dutchie's
+`/reporting/discounts` across every store, classified automatic / loyalty / discretionary. GX Core
+holds no discount data of any kind and no Dutchie credentials, and the registry sits downstream of
+the transaction ingest that is deliberately staying in Leaderboard. Core knows the three names
+somebody has an *opinion* about; it does not know the forty that exist, so a tray rendered from Core
+alone would show three unchecked boxes and no way to switch a fourth discount off. So:
+**Leaderboard says what exists, GX Core says what counts, and where their `excluded` flags disagree
+Core wins** — LB's flags are read and discarded, which is what stops the two copies drifting back
+apart. If Leaderboard is unreachable the tray degrades to the names Core holds an override for,
+flagged `partial` with a warning that says the list is incomplete; saving still works, because the
+merge only touches names that were on screen.
+
+**The checkboxes mean COUNTED and the store holds EXCLUDED**; the flip happens in the engine, never
+the browser, because a UI posting one while displaying the other grades every budtender against the
+opposite rule and nothing about the result looks wrong. The browser posts in its own vocabulary —
+`count=` (these now count) and `off=` (these now do not), newline-separated because the names contain
+commas. It sends only what **changed**: the engine read-merge-writes Core's map, so an unsent name
+keeps the value the screen was already showing, an override for a discount no longer in the registry
+survives, and a rule somebody else edited while the tray sat open is not silently reverted. A failed
+Core read **refuses** the write rather than merging onto `{}` — `set_config` replaces the whole value,
+so that would switch every rule back on. The retired `save=<every counted name>` format is rejected
+with "hard-reload", not half-honoured.
+
+***The separator was broken for the route's entire life.*** `crew.js` sent `join('\\n')` — a literal
+backslash-n — while the engine split on a real newline, so nothing split, the whole list arrived as
+**one string** matching no discount name, and the old inversion wrote `excluded = true` for **every
+discretionary discount**. That reads every budtender's discount rate as ~0% and pays the discount
+bonus to everyone. Evidence says it never landed: the value seeded into GX Core is exactly
+Leaderboard's three-name `DISCOUNT_SEED_EXCLUDED` constant, not forty. Fixed both ways —
+the client sends a real newline and the engine tolerates the typo *inertly*.
+
+**Two consequences of the move to watch.** (1) Leaderboard's `saveDiscountSettings_` used to bust its
+own director/standings caches; a Core write does not, so a rule change takes up to its ~6-minute TTL
+to show on the board — and LB's `_discCfgMemo_` must be cleared at the top of `doGet` the way the
+thresholds' memo is, or an edit appears to do nothing for minutes. (2) **Until Leaderboard reads
+`discountRules` from Core, saving a rule in Crew changes no number anywhere** — LB still classifies
+transactions from its own ScriptProperty, and Crew's own figures come from LB's `incentiveperf`.
+Leaderboard must cut over first.
+
+Pinned by `tests/discount_rules_test.js` — the inversion, the merge, the separator in both
+directions, Core-wins-over-LB, the refusals, and that no `discountrules_save` call survives here.
 
 **Tier lists are ORDER-SENSITIVE** — matched high-to-low, first hit wins — so `thresholdProblems_`
 refuses an ascending list *by name*. Ascending would pay everyone the lowest tier they clear, and

@@ -432,6 +432,8 @@ function route_(e) {
       case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
       // Comp thresholds: GX Core holds them, Crew edits them, Leaderboard reads them.
       case 'incentive_thresholds': return json_(incentiveThresholdsRoute_(p), p.callback);
+      // Discount rules: same — GX Core holds the state. Leaderboard is still asked for the
+      // discount NAMES, which are derived from its Dutchie registry and exist nowhere else.
       case 'incentive_discounts':  return json_(incentiveDiscountsRoute_(p), p.callback);
       case 'incentive_spiff_refresh': return json_(incentiveSpiffRefresh_(p), p.callback);
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
@@ -4584,50 +4586,79 @@ function incentiveThresholds_() {
   return null;      // caller falls back to whatever Leaderboard sent
 }
 
-/**
- * ?action=incentive_discounts            read the discount rules
- * ?action=incentive_discounts&save=…     write them (approver only)
+/* ══ Discount rules — GX Core holds the STATE, Leaderboard still supplies the NAMES ═════════════
  *
- * These live in Leaderboard because they filter the TRANSACTION data — the half of the incentive
- * that did not move — but they are set in Crew's tray beside the thresholds, because to whoever is
- * deciding the scheme it is one screen and one decision.
+ * Which discretionary discounts count against a budtender is a pay-affecting setting, so it lives
+ * in GX Core kv (`discountRules`) beside `incentiveThresholds` — same reason, same shape of
+ * ownership: comp policy is not the kiosk's ScriptProperty. Deliberately NOT a `cfg.` key, because
+ * that prefix is public on ?action=config.
  *
- * `save` is a NEWLINE-separated list of the discount names that COUNT — newline because the names
- * themselves contain commas ("5 for $20 Gummies, same strain only"). Leaderboard stores the
- * inverse (an exclusion map), and the flip happens here rather than in the browser: a UI that
- * posts "excluded" while its checkboxes read "counted" is one inverted boolean away from grading
- * every budtender against the opposite rule, and nothing about the result would look wrong.
+ *   { "overrides": { "<discount name>": true } }        true = EXCLUDED, i.e. does NOT count
+ *
+ * Byte-identical to the shape Leaderboard's GC_DISCOUNT_EXCL_JSON has always used, so the value is
+ * portable between them and neither side has to translate.
+ *
+ * THE NAME LIST DID NOT MOVE AND CANNOT. `discretionary` is derived from Leaderboard's discount
+ * REGISTRY — a union of Dutchie's /reporting/discounts across every store, classified into
+ * automatic / loyalty / discretionary. GX Core has no discount data of any kind and no Dutchie
+ * credentials, and the registry is downstream of the transaction ingest that is staying in
+ * Leaderboard. So Core knows the three names somebody has an OPINION about; it does not know the
+ * forty that exist. Rendering the tray from Core alone would show three unchecked boxes and no way
+ * to switch a fourth discount off.
+ *
+ * Hence the split, and it is the honest description of this route: the WRITE hop to Leaderboard is
+ * gone, the READ hop for names is not. What each side is authoritative for:
+ *
+ *   Leaderboard  →  which discretionary discounts EXIST (name, code, method) + the locked
+ *                   loyalty/automatic groups.  Read-only, best effort.
+ *   GX Core      →  whether each one counts.  Authoritative. If Leaderboard's payload disagrees
+ *                   with Core about `excluded`, Core wins — we never read LB's flags.
+ *
+ * When Leaderboard is unreachable the tray degrades to the names Core already holds an override
+ * for, flagged `partial`, rather than showing nothing. That list is short and incomplete, which is
+ * why it says so.
  */
-function incentiveDiscountsRoute_(p) {
-  var auth = requireCrew_(p);
-  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+var DISCOUNT_RULES_KV = 'discountRules';
 
+/**
+ * The authoritative overrides, from GX Core.
+ *
+ * The distinction between ABSENT and UNREADABLE is load-bearing, which is why this returns a
+ * result rather than a map. Absent legitimately means "nothing is excluded". Unreadable means we
+ * do not know — and the save path is a read-merge-write, so merging onto a `{}` that was really a
+ * failed read would silently switch three discount rules back on and pay people differently.
+ * Unreadable therefore refuses rather than defaults.
+ */
+function discountRules_() {
+  var raw;
+  try { raw = GXCore.getKv(DISCOUNT_RULES_KV); }
+  catch (e) {
+    return { ok: false, error: 'could not read discountRules from GX Core: ' + String((e && e.message) || e) };
+  }
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s) return { ok: true, overrides: {}, present: false };
+  var d;
+  try { d = JSON.parse(s); }
+  catch (e) { return { ok: false, error: 'discountRules in GX Core kv is not valid JSON' }; }
+  if (!d || typeof d !== 'object' || Array.isArray(d) ||
+      (d.overrides != null && (typeof d.overrides !== 'object' || Array.isArray(d.overrides)))) {
+    return { ok: false, error: 'discountRules in GX Core kv is not { overrides: { name: bool } }' };
+  }
+  return { ok: true, overrides: d.overrides || {}, present: true };
+}
+
+/**
+ * The discount NAMES, from Leaderboard's registry. Read-only, and its `excluded` flags are
+ * deliberately DISCARDED — that is Core's answer now, and reading LB's copy is how the two would
+ * drift back apart without anybody noticing.
+ */
+function discountRegistry_() {
   var base = '';
   try { base = String(GXCore.getKv('lbGoals') || ''); } catch (e) {}
   if (!base) return { ok: false, error: 'no Leaderboard engine URL in GX Core kv (key lbGoals)' };
   var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
   if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
-
-  var url;
-  if (p.save == null) {
-    url = base + '?action=discountrules&secret=' + encodeURIComponent(secret);
-  } else {
-    if (!canApprove_(auth)) return { ok: false, error: 'only the approver can change the discount rules' };
-    var counted = String(p.save).split('\n').map(function (x) { return x.trim(); })
-                                .filter(function (x) { return !!x; });
-    var all = incentiveDiscountsRoute_({ token: p.token });      // the current list, to invert against
-    if (all.ok === false) return all;
-    /* saveDiscountSettings_ takes an OVERRIDES map where true means EXCLUDED — the inverse of what
-       the checkboxes mean. Every discretionary name is sent, not just the changed ones: the store
-       merges by key, so omitting one leaves whatever was there before, and a rule that quietly kept
-       its old state while the screen showed the new one is the worst outcome here. */
-    var overrides = {};
-    (all.discretionary || []).forEach(function (x) {
-      overrides[x.name] = counted.indexOf(x.name) < 0;
-    });
-    url = base + '?action=discountrules_save&secret=' + encodeURIComponent(secret) +
-          '&overrides=' + encodeURIComponent(JSON.stringify(overrides));
-  }
+  var url = base + '?action=discountrules&secret=' + encodeURIComponent(secret);
   try {
     var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
     if (res.getResponseCode() !== 200) {
@@ -4635,11 +4666,162 @@ function incentiveDiscountsRoute_(p) {
     }
     var d = JSON.parse(res.getContentText());
     if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'Leaderboard refused' };
-    d.can_edit = canApprove_(auth);
-    return d;
+    return {
+      ok: true,
+      names: (d.discretionary || []).map(function (x) {
+        return { name: String(x.name || ''), code: x.code || '', method: x.method || '' };
+      }).filter(function (x) { return !!x.name; }),
+      autoExcluded: d.autoExcluded || { automatic: [], loyalty: [] },
+      counts: d.counts || { automatic: 0, loyalty: 0, discretionary: 0 },
+      builtAt: d.builtAt || null
+    };
   } catch (e) {
     return { ok: false, error: 'could not reach Leaderboard: ' + String((e && e.message) || e) };
   }
+}
+
+/**
+ * ?action=incentive_discounts                    read
+ * ?action=incentive_discounts&count=…&off=…      write (approver only)
+ *
+ * `count` and `off` are NEWLINE-separated name lists — newline because the names themselves
+ * contain commas ("5 for $20 Gummies, same strain only"). They carry only what CHANGED, and they
+ * are stated in the browser's own vocabulary: `count` means these now count, `off` means these
+ * now do not. The inversion to the stored `excluded` boolean happens here and only here — a UI
+ * that posted "excluded" while its checkboxes read "counted" is one flipped boolean away from
+ * grading every budtender against the opposite rule, and nothing about the result would look wrong.
+ *
+ * Changed-only, rather than the old "send every name": the write is a read-merge-write over Core's
+ * current map, so an unsent name keeps its value — which is exactly what the screen was showing,
+ * because the screen was rendered from that same map. It also means a rule somebody else changed
+ * while this tray sat open survives instead of being silently reverted, and it keeps the URL short
+ * enough that a forty-name registry cannot overflow a JSONP GET.
+ */
+function incentiveDiscountsRoute_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+
+  /* The old wire format was `save=<every counted name>`, with absence meaning excluded. Under the
+     new merge that would set the checked ones and never set anything back to excluded — unticking
+     a box would appear to work and change nothing. So a stale page is refused, loudly, instead of
+     being half-honoured. */
+  if (p.save != null) {
+    return { ok: false, error: 'this page is out of date — hard-reload GX Crew and set the discount rules again' };
+  }
+
+  var writing = (p.count != null || p.off != null);
+  if (!writing) return incentiveDiscountsPayload_(auth);
+
+  /* Editing the scheme is the approver's call, not any editor's. Mike prepares a period; he does
+     not move the bar people are measured against. */
+  if (!canApprove_(auth)) return { ok: false, error: 'only the approver can change the discount rules' };
+
+  /* Splits on a real newline OR the two-character sequence \n. The second alternative is not
+     tidiness: the browser sent `join('\\n')` for its entire life, so nothing ever split, the whole
+     list arrived as one string, and the old inversion wrote EXCLUDED for every discretionary
+     discount — which pays the discount bonus to everybody. The client is fixed; this makes the
+     same typo inert rather than pay-affecting if it is ever reintroduced. */
+  var lines = function (v) {
+    return String(v == null ? '' : v).split(/\r?\n|\\n/)
+      .map(function (x) { return x.trim(); })
+      .filter(function (x) { return !!x; });
+  };
+  var count = lines(p.count), off = lines(p.off);
+  if (!count.length && !off.length) {
+    return { ok: false, error: 'nothing to save — no discount names were sent' };
+  }
+  var clash = count.filter(function (n) { return off.indexOf(n) >= 0; });
+  if (clash.length) {
+    return { ok: false, error: 'the same discount was sent as both counted and not counted: ' + clash.join(', ') };
+  }
+
+  var cur = discountRules_();
+  if (!cur.ok) return cur;                       // never merge onto a state we could not read
+
+  var before = {}, overrides = {};
+  Object.keys(cur.overrides).forEach(function (k) {
+    before[k] = !!cur.overrides[k]; overrides[k] = !!cur.overrides[k];
+  });
+  count.forEach(function (n) { overrides[n] = false; });   // counts against the budtender
+  off.forEach(function (n) { overrides[n] = true; });      // excluded from the basis
+
+  var changed = [];
+  Object.keys(overrides).forEach(function (k) {
+    if (!!before[k] !== !!overrides[k]) {
+      changed.push(k + ': ' + (before[k] ? 'not counted' : 'counted') +
+                   ' → ' + (overrides[k] ? 'not counted' : 'counted'));
+    }
+  });
+
+  var w = gxSetKvViaWeb_(DISCOUNT_RULES_KV, JSON.stringify({ overrides: overrides }),
+    'Incentive: discretionary discounts that do NOT count against a budtender (true = excluded). Written by GX Crew.');
+  if (w && w.ok === false) return w;
+
+  /* Same audit line the thresholds get, for the same reason: this decides what everybody earns and
+     the kv tab keeps no history. Non-fatal — the money number is already stored by this point and a
+     failed note must not block a legitimate comp change — but never DISCARDED. The thresholds' note
+     called a function name no library version has ever had and wrote nothing for its entire life,
+     and what hid that was the silence, not the typo. So the reason is logged and echoed back. */
+  var auditErr = '';
+  try {
+    var note = GXCore.gxAddNote('crew', 'core-admin',
+      'Incentive discount rules changed by ' + (auth.user || '?'),
+      (changed.length ? changed.join('\n') : '(no effective change)') +
+      '\n\nfull map after: ' + JSON.stringify(overrides), '', 'fyi');
+    if (note && note.ok === false) auditErr = String(note.error || 'GX Core refused the note');
+  } catch (e) {
+    auditErr = String((e && e.message) || e);
+  }
+  if (auditErr) {
+    Logger.log('incentive_discounts: the audit note FAILED and the rules were saved anyway — ' + auditErr);
+  }
+
+  var out = incentiveDiscountsPayload_(auth);
+  out.saved_by = auth.user || '';
+  out.changed = changed;
+  if (auditErr) out.audit_error = auditErr;
+  return out;
+}
+
+/** State from GX Core, names from Leaderboard, and it says which parts it actually got. */
+function incentiveDiscountsPayload_(auth) {
+  var rules = discountRules_();
+  if (!rules.ok) return rules;
+  var reg = discountRegistry_();
+
+  var discretionary, partial = false, warning = '';
+  if (reg.ok) {
+    discretionary = reg.names.map(function (x) {
+      return { name: x.name, code: x.code, method: x.method, excluded: !!rules.overrides[x.name] };
+    });
+  } else {
+    /* No registry: show what Core knows an opinion about rather than nothing. Short and incomplete
+       — a discount nobody has ever toggled is missing entirely — so the tray says so. Saving still
+       works and is still safe, because the merge only touches the names that were on screen. */
+    partial = true;
+    warning = 'Leaderboard is unreachable, so this is only the discounts a rule has already been ' +
+              'set for — not the full list. ' + reg.error;
+    discretionary = Object.keys(rules.overrides).sort().map(function (n) {
+      return { name: n, code: '', method: '', excluded: !!rules.overrides[n] };
+    });
+  }
+
+  if (!rules.present && !warning) {
+    warning = 'GX Core has no discountRules key yet, so every discretionary discount is shown as ' +
+              'counted. Save once to write the rules.';
+  }
+
+  return {
+    ok: true,
+    source: 'gx-core',
+    discretionary: discretionary,
+    autoExcluded: reg.ok ? reg.autoExcluded : { automatic: [], loyalty: [] },
+    counts: reg.ok ? reg.counts : { automatic: 0, loyalty: 0, discretionary: discretionary.length },
+    builtAt: reg.ok ? reg.builtAt : null,
+    partial: partial,
+    warning: warning,
+    can_edit: canApprove_(auth)
+  };
 }
 
 /**
@@ -4708,12 +4890,16 @@ function incentiveThresholdsRoute_(p) {
   return { ok: true, thresholds: t, saved_by: auth.user || '', audit_error: auditErr };
 }
 
-/* GXCore may expose no kv WRITER to bound libraries; the web route is secret-gated and does. */
-function gxSetThresholdsViaWeb_(json) {
+/* GXCore exposes no kv WRITER to bound libraries; the secret-gated web route is the only path.
+ *
+ * ONE writer for both comp settings. `set_config` replaces the whole kv row, `notes` included, so
+ * an omitted note blanks the cell — pass a describing one rather than nothing. */
+function gxSetKvViaWeb_(key, json, notes) {
   var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
   if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
-  var url = GXCORE_URL + '?action=set_config&key=incentiveThresholds' +
-            '&secret=' + encodeURIComponent(secret) + '&value=' + encodeURIComponent(json);
+  var url = GXCORE_URL + '?action=set_config&key=' + encodeURIComponent(key) +
+            '&secret=' + encodeURIComponent(secret) + '&value=' + encodeURIComponent(json) +
+            (notes ? '&notes=' + encodeURIComponent(notes) : '');
   try {
     var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
     var d = JSON.parse(res.getContentText());
@@ -4723,6 +4909,7 @@ function gxSetThresholdsViaWeb_(json) {
     return { ok: false, error: 'could not write to GX Core: ' + String((e && e.message) || e) };
   }
 }
+function gxSetThresholdsViaWeb_(json) { return gxSetKvViaWeb_('incentiveThresholds', json, ''); }
 
 /* Every rule here is one whose absence pays somebody the wrong amount rather than erroring. */
 function thresholdProblems_(t) {

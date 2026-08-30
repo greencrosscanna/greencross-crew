@@ -3295,18 +3295,25 @@
     return out;
   }
 
+  /* `data-was` is the state the row was PAINTED with, so save can send only what changed. The
+     checkbox means COUNTED and the store holds the inverse; the flip is the engine's, never
+     ours — the browser posts "these now count" / "these now do not" in its own words. */
   function incDiscListHtml(d) {
     var rows = (d.discretionary || []).map(function (x) {
       return '<label class="ist-dr' + (x.excluded ? ' off' : '') + '">' +
         '<input type="checkbox" class="ist-tog" data-name="' + esc(x.name) + '"' +
+        ' data-was="' + (x.excluded ? 'off' : 'on') + '"' +
         (x.excluded ? '' : ' checked') + '>' +
         '<span class="ist-dr-name">' + esc(x.name) + '</span>' +
         (x.code ? '<span class="ist-code">' + esc(x.code) + '</span>' : '') + '</label>';
     }).join('');
     var auto = d.autoExcluded || { loyalty: [], automatic: [] };
     var counts = d.counts || { loyalty: 0, automatic: 0 };
-    return (rows || '<div class="ist-msg">No discretionary discounts.</div>') +
-      '<div class="ist-locked" title="' + esc(auto.loyalty.concat(auto.automatic).join(' · ')) + '">' +
+    /* An incomplete list must SAY it is incomplete: the missing names are the ones nobody has an
+       opinion about yet, which look identical to "there are none". */
+    var warn = d.warning ? '<div class="ist-msg">' + esc(d.warning) + '</div>' : '';
+    return warn + (rows || '<div class="ist-msg">No discretionary discounts.</div>') +
+      '<div class="ist-locked" title="' + esc((auto.loyalty || []).concat(auto.automatic || []).join(' · ')) + '">' +
       'Always excluded — Loyalty (' + counts.loyalty + ') · Automatic promos (' + counts.automatic + ')</div>';
   }
 
@@ -3351,8 +3358,9 @@
       Array.prototype.forEach.call(tray.querySelectorAll('.ist-tog'), function (cb) { if (cb.checked) n++; });
       setText('istCounted', n);
     }
-    /* Loaded when the tray opens, not with the dashboard: it is a Leaderboard round trip that
-       rebuilds a discount registry, and nobody waits for it unless they came here to look. */
+    /* Loaded when the tray opens, not with the dashboard: the STATE is a GX Core kv read, but the
+       NAMES are still a Leaderboard round trip that rebuilds a discount registry from Dutchie, and
+       nobody waits for that unless they came here to look. */
     (async function () {
       try {
         var r = await Engine.jsonp('incentive_discounts', { token: token() },
@@ -3384,16 +3392,26 @@
           { token: token(), save: JSON.stringify(out) }, { timeoutMs: 30000, retries: 1 });
         if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
 
-        /* Only if the list actually loaded. Posting an empty set because the fetch failed would
-           silently switch every discount rule off. */
-        var togs = tray.querySelectorAll('.ist-tog');
-        if (togs.length) {
-          var keep = [];
-          Array.prototype.forEach.call(togs, function (cb) {
-            if (cb.checked) keep.push(cb.getAttribute('data-name'));
-          });
+        /* Send only what CHANGED, against the state each row was painted with. The engine
+           read-merge-writes GX Core's map, so a name we do not send keeps the value the screen was
+           already showing — and a rule somebody else edited while this tray sat open survives
+           instead of being silently reverted by our stale copy of it. Nothing to send is not an
+           error; it means the discount rules were not touched. */
+        var flipOn = [], flipOff = [];
+        Array.prototype.forEach.call(tray.querySelectorAll('.ist-tog'), function (cb) {
+          var was = cb.getAttribute('data-was') === 'on';
+          if (cb.checked === was) return;
+          (cb.checked ? flipOn : flipOff).push(cb.getAttribute('data-name'));
+        });
+        if (flipOn.length || flipOff.length) {
+          /* A REAL newline. This read `join('\\n')` until 2026-08-30 — a literal backslash-n, which
+             the engine's split on '\n' never matched, so the whole list arrived as one string that
+             equalled no discount name and every discretionary discount was written EXCLUDED. That
+             pays the discount bonus to everybody. It is separated by newline rather than comma
+             because the names contain commas ("5 for $20 Gummies, same strain only"). */
           var r2 = await Engine.jsonp('incentive_discounts',
-            { token: token(), save: keep.join('\\n') }, { timeoutMs: 45000, retries: 1 });
+            { token: token(), count: flipOn.join('\n'), off: flipOff.join('\n') },
+            { timeoutMs: 45000, retries: 1 });
           if (!r2 || r2.ok === false) throw new Error((r2 && r2.error) || 'discount rules failed to save');
         }
         note.textContent = '';
