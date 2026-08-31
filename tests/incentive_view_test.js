@@ -171,7 +171,7 @@ ok('a departed person with no employee_id still renders',
      payroll: 40, spiff: 0, per_hour: 0.5 }], b => ({ bonus: b.bonus, payroll: b.payroll,
      spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T).includes('Finnick Winchester'));
 
-/* ── colour and zero-suppression carry meaning, so they are pinned ──
+/* ── color and zero-suppression carry meaning, so they are pinned ──
    Sky, comparing this against the Leaderboard dashboard it replaces: "we aren't using color to our
    benefit in the new version." Three specific things had been lost in the port, and each is a
    readability regression rather than a wrong number — which is exactly the kind that survives a
@@ -189,19 +189,19 @@ ok('a zero $/hr renders as a dash, not $0.00', !/\$0\.00/.test(zeroHtml));
 ok('zeros are muted rather than shouted', (zeroHtml.match(/crew-inc-zero/g) || []).length >= 3);
 
 /* PAYROLL is what the company pays and the only column Capstone receives, so it is the figure that
-   gets the colour. Bonus stays plain white beside it so the gap between them — SPIFF, which vendors
+   gets the color. Bonus stays plain white beside it so the gap between them — SPIFF, which vendors
    fund — is visible without reading the footnote. */
 const paidRow = Object.assign({}, zeroRow, { bonus: 40, payroll: 15, spiff: 25, per_hour: 0.5 });
 const paidHtml = M.incBudTable([paidRow], b => ({ bonus: b.bonus, payroll: b.payroll,
   spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
-ok('a non-zero payroll is in the payroll class that colours it', /crew-inc-pay[^>]*>\$15/.test(paidHtml));
-ok('bonus is NOT given the payroll colour', !/crew-inc-pay[^>]*>\$40/.test(paidHtml));
+ok('a non-zero payroll is in the payroll class that colors it', /crew-inc-pay[^>]*>\$15/.test(paidHtml));
+ok('bonus is NOT given the payroll color', !/crew-inc-pay[^>]*>\$40/.test(paidHtml));
 
 /* The store dot groups a 32-row table by eye. Imported rows print the label the REPORT used
-   ("Hillsboro" for what is now Baseline) but colour by the resolved store_id, so a year of history
+   ("Hillsboro" for what is now Baseline) but color by the resolved store_id, so a year of history
    still groups against today's stores. */
 ok('a store dot is rendered', paidHtml.includes('crew-inc-dot'));
-ok('the dot is coloured by the resolved store_id, not the historical label',
+ok('the dot is colored by the resolved store_id, not the historical label',
    /crew-inc-dot[^>]*store-bend|crew-inc-dot[^>]*background:/.test(paidHtml));
 const oldLabel = M.incBudTable([Object.assign({}, paidRow, { store_label: 'Hillsboro', store_id: 'hillsboro' })],
   b => ({ bonus: b.bonus, payroll: b.payroll, spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
@@ -340,11 +340,11 @@ ok('but the figures are still all there', /1\.2%/.test(noScheme) && /\$35\.00/.t
 const withScheme = M.incBudTable([histRow], calcHist, true, false, T);
 ok('with a frozen scheme, targets it cleared are marked', withScheme.includes('crew-inc-hit'));
 
-/* ── the colour classes must actually WIN against the base cell rule ──
+/* ── the color classes must actually WIN against the base cell rule ──
    This is the bug the DOM assertions above cannot see, and it shipped. `.crew-inc-tbl td` is a
    class plus an element — specificity (0,1,1). A bare `.crew-inc-hit` is (0,1,0) and loses to it
-   regardless of source order. So every colour class was present in the markup and not one of them
-   painted: the screen was entirely grey while every test asserting the class name passed.
+   regardless of source order. So every color class was present in the markup and not one of them
+   painted: the screen was entirely gray while every test asserting the class name passed.
 
    Specificity is not visible from the HTML, so it has to be asserted from the STYLESHEET. */
 function spec(sel) {                       // [ids, classes, elements] — enough for this sheet
@@ -363,12 +363,12 @@ const BASE = (html.match(/(\.crew-inc-tbl td)\s*\{[^}]*color:/) || [])[1];
 ok('the base cell rule is still the thing to beat', !!BASE);
 ['crew-inc-hit', 'crew-inc-pay', 'crew-inc-zero'].forEach(function (cls) {
   const rule = (html.match(new RegExp('([^\\n{}]*\\.' + cls + '[^\\n{}]*)\\s*\\{[^}]*color:')) || [])[1];
-  ok(cls + ' has a colour rule that out-specifies the base cell',
+  ok(cls + ' has a color rule that out-specifies the base cell',
      !!rule && !!BASE && beats(rule.trim(), BASE));
 });
 
 /* ── the settings tray round-trips the scheme without moving a number ──
-   The tray is Leaderboard's design: a labelled control per threshold, which is far better to use
+   The tray is Leaderboard's design: a labeled control per threshold, which is far better to use
    than raw JSON and far easier to get quietly wrong. The first version read the inputs back in DOM
    ORDER, so adding or reordering a row would have shifted every value after it — an AOV bonus
    landing in attendance, with nothing on screen to see. Each input now carries the path it writes
@@ -480,7 +480,7 @@ M.inc.data = { inputs: { sp1: { att: false, spiff: 40 } } };
 const over = M.incBudTable([spRow], b => M.calcBud(b, T, M.inc.data.inputs), false, true, T);
 /* An earned SPIFF reads BOLD GREEN — the same mark every other cleared target uses, because a
    SPIFF paid out IS an achieved goal and should not look like a data-entry field with a number in
-   it. Class on the TD, so it out-specifies the base cell rule like every other colour here. */
+   it. Class on the TD, so it out-specifies the base cell rule like every other color here. */
 M.inc.data = { inputs: {} };
 const earnedHtml = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
 ok('an earned SPIFF is bold green on the cell itself',

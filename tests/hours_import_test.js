@@ -19,7 +19,7 @@
  *      skipping a row somebody can see, so matching is exact-or-nothing: a code, or a full token
  *      match on a name. There is deliberately no fuzzy score to tune.
  *
- * What CANNOT go wrong here, and why this file is not the last line of defence: hours only ever
+ * What CANNOT go wrong here, and why this file is not the last line of defense: hours only ever
  * reach $/hr. tests/incentive_math_test.js pins that they leave bonus, payroll and the Capstone
  * export byte-identical — so the worst a misparse can do is display a wrong ratio, not pay anybody
  * the wrong amount. That is the whole reason this could ship ahead of the vendor.

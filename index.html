@@ -30,7 +30,7 @@
   <link rel="stylesheet" href="https://greencrosscanna.github.io/greencross-gx-theme/gx-theme.css">
   <!-- The shared avatar builder. OPT-IN by design: it is its own css/js pair rather than part of
        gx-theme.css, so only the apps that link it are affected by it. Crew and Leaderboard both do.
-       Do NOT copy these rules into the block below to "fix" a colour — a local override of a shared
+       Do NOT copy these rules into the block below to "fix" a color — a local override of a shared
        component is how the suite grew six different login screens. Send core-admin a note instead. -->
   <!-- GX dev-guard bootstrap. Canonical source: greencross-gx-theme/gx-dev-boot.html.
      Paste this ONCE in <head>, before the app's own scripts. It replaces the old
@@ -41,7 +41,7 @@
           kiosk downloaded a dev-only script it can never use.
        2. A RELATIVE src cannot resolve on a GAS-served page -- HtmlService sandboxes the document to a
           different origin -- so on that path the guard was silently ABSENT rather than inert. Nothing
-          signalled it, which is worse than the 404.
+          signaled it, which is worse than the 404.
 
      Loading it only on localhost fixes both: production never makes the request at all, and the URL is
      absolute so it resolves from any origin, GAS included. Nothing to commit per repo, which also
@@ -74,7 +74,7 @@
   ];
 </script>
   <style>
-    /* Shell layout only. Every colour comes from gx-theme.css tokens — never hardcode one here,
+    /* Shell layout only. Every color comes from gx-theme.css tokens — never hardcode one here,
        or the app drifts out of the suite's look the next time the theme moves.
 
        The three shades below are the ONLY exception, and each is a half-step the shared palette
@@ -137,7 +137,7 @@
        is a NEW class rather than a local override of a shared one — overriding is how the suite
        ends up with six different versions of the same component. --crew-pill-color is set inline
        per pill from the GX Core store registry via GXStores, with a neutral fallback for stores
-       that carry no colour (corporate). */
+       that carry no color (corporate). */
     .crew-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     .crew-pills-slot { display: contents; }
     .crew-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
@@ -256,7 +256,7 @@
     .crew-q.sev-warn { border-left-color: var(--gx-gold); }
     /* Wide enough for the longest store-and-role pairing on one line — "Commercial · Assistant
        Manager" is 9.5px uppercase with letter-spacing, which is wider than it looks. It wrapped
-       to two lines at the original 190px and pushed the card taller than its neighbours. */
+       to two lines at the original 190px and pushed the card taller than its neighbors. */
     .crew-q-who { display: flex; align-items: center; gap: 9px; background: none; border: 0;
       padding: 0; cursor: pointer; flex: 0 1 260px; min-width: 240px; text-align: left; font: inherit; }
     .crew-q-txt { min-width: 0; }
@@ -275,8 +275,8 @@
       gap: 7px; white-space: nowrap; }
     .crew-q.is-done { opacity: .35; }
     /* A newcomer reuses the question card's shape — same row, same reading order — but carries a
-       green edge rather than a severity colour. Nothing is wrong with these records; they are
-       simply unfinished, and colouring them like a problem would spend the queue's alarm budget
+       green edge rather than a severity color. Nothing is wrong with these records; they are
+       simply unfinished, and coloring them like a problem would spend the queue's alarm budget
        on paperwork. */
     .crew-q.crew-new { border-left-color: var(--gx-green); }
     .crew-q.crew-new .crew-q-kind { color: var(--gx-text-mute); }
@@ -520,7 +520,7 @@
        one recedes to --gx-text-dim; PAYROLL alone gets weight 700, a tinted column and a green
        header, because it is the only figure the Capstone export carries.
 
-       Every colour is a --gx-* token. The specificity trap still applies to every one of them:
+       Every color is a --gx-* token. The specificity trap still applies to every one of them:
        `.crew-inc-tbl td` is (0,1,1), so a bare `.crew-inc-hit` loses and paints nothing. */
     .crew-inc { flex: 1 1 auto; overflow-y: auto; min-height: 0; background: var(--gx-bg); }
 
@@ -691,8 +691,8 @@
       .crew-inc-badge { border-width: 1px !important; }
       .crew-inc-tot dt { color: #555 !important; }
       .crew-inc-grand, .crew-inc-tbl td.crew-inc-pay { color: #000 !important; }
-      /* The green that means "hit a target" is the one colour worth the ink — it is the
-         difference between a bonus earned and not, and a grey copy cannot show it. */
+      /* The green that means "hit a target" is the one color worth the ink — it is the
+         difference between a bonus earned and not, and a gray copy cannot show it. */
       .crew-inc-tbl td.crew-inc-hit { color: #0a7a3d !important; font-weight: 700; }
       .crew-inc-tbl td.crew-inc-zero,
       .crew-inc-tbl td .crew-inc-zero { color: #999 !important; }
@@ -730,8 +730,8 @@
     /* ── Incentive settings tray — LEADERBOARD'S CSS, VERBATIM ────────────────────
        Copied from greencross-leaderboard/index.html rather than reimplemented. Sky spent real time
        on this layout and my rewrite was a worse version of it; the only thing changed below is
-       nothing. What makes it work here is the alias block: that sheet names its colours --text,
-       --green, --border; gx-theme names the same colours --gx-text, --gx-green, --gx-border. So the
+       nothing. What makes it work here is the alias block: that sheet names its colors --text,
+       --green, --border; gx-theme names the same colors --gx-text, --gx-green, --gx-border. So the
        names are bridged ONCE, scoped to the tray, and every rule after it is byte-for-byte what
        Leaderboard ships. Re-copy on any change there rather than editing these by hand. */
     .inc-tray, .inc-tray-back {
@@ -857,7 +857,7 @@
        copied verbatim, kept re-copyable by not being hand-edited; and the bridge that makes
        `--border` mean anything is scoped to `.inc-tray`. So this reads gx-theme's --gx-* names
        directly rather than borrowing a scope it does not belong to, and a future re-copy of the
-       tray cannot disturb it. Centred rather than a drawer: the review step is a wide table of
+       tray cannot disturb it. Centered rather than a drawer: the review step is a wide table of
        names against hours, which a 360px rail cannot show without wrapping every row. */
 .crew-hrs-back { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 92;
   display: flex; align-items: center; justify-content: center; padding: 24px; }

@@ -13,7 +13,7 @@
  *
  * There is no way to run Python from this gate, so this pins the thing that actually drifts: the
  * NICKNAMES table, which is hand-maintained in both files and is what the matcher's correctness
- * turns on. The behavioural cases below run the ENGINE's copy against the real names in the PDFs.
+ * turns on. The behavioral cases below run the ENGINE's copy against the real names in the PDFs.
  */
 'use strict';
 const fs = require('fs');

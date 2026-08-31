@@ -195,7 +195,7 @@ eq('a Dutchie hire gets ADDED — this one creates a registry row every app read
 /* Compliance items are actioned outside this app; accepting records that somebody dealt with it
    and must not claim to have renewed a permit itself. */
 eq('an expired permit is only acknowledged', M.ctaFor('permit_expired'), 'Mark handled');
-eq('and so is anything unrecognised',        M.ctaFor('something_new'), 'Mark handled');
+eq('and so is anything unrecognized',        M.ctaFor('something_new'), 'Mark handled');
 
 // ── who is "new here" ───────────────────────────────────────────────────────────────────────────
 /* The RULE now lives in the engine (needsSetup_ in Code.gs), because the Monday digest renders the

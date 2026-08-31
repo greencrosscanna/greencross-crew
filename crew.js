@@ -76,7 +76,7 @@
     });
   }
   /* Also unwinds the workspace shell. Login and the status card render into this same mount, and
-     a full-height flex column is the wrong frame for a centred card. */
+     a full-height flex column is the wrong frame for a centered card. */
   function clear() {
     mount.innerHTML = '';
     mount.classList.remove('is-ws');
@@ -184,7 +184,7 @@
     return ids;
   }
 
-  /* Colours come from GXStores, which paints them from the same registry every other app reads —
+  /* Colors come from GXStores, which paints them from the same registry every other app reads —
      so Center is the same blue here as on the kiosk. Guarded and optional: the shared script loads
      from Pages behind a cache, and a pill row is not worth throwing over a missing swatch. */
   function storeColor(id) {
@@ -244,7 +244,7 @@
   /* ── Avatars ────────────────────────────────────────────────────────────────
    * buildAvatarUrl and the GC hat SVG are lifted VERBATIM from Leaderboard so a face is
    * byte-identical in both apps. Do not "tidy" the parameter rules — each one encodes a
-   * DiceBear quirk: `_none` means probability 0 and skip the colour, `_gchat` renders
+   * DiceBear quirk: `_none` means probability 0 and skip the color, `_gchat` renders
    * shortFlat underneath with our hat overlaid, and hat/winterHat1 take hatColor rather
    * than hairColor. Leaderboard keeps only these render bits; Crew owns the data.
    */
@@ -533,7 +533,7 @@
   }
 
   /* User chip: avatar + name, matching Leaderboard. Settings / version / sign-out live in its menu
-     rather than as separate header buttons. gx-topnav.js owns the open/close behaviour. */
+     rather than as separate header buttons. gx-topnav.js owns the open/close behavior. */
   function currentUser() { try { return sessionStorage.getItem(USER_KEY) || ''; } catch (e) { return ''; } }
 
   function renderUserChip() {
@@ -1281,7 +1281,7 @@
     var txt = el('span', 'crew-q-txt');
     /* The person label follows the roster's spelling like everywhere else. Where the LEGAL name
        is the subject — a name_spelling item — the now/proposed chips on the record carry it
-       verbatim, so nothing is lost by labelling the card with the name people use. */
+       verbatim, so nothing is lost by labeling the card with the name people use. */
     txt.appendChild(el('span', 'crew-q-name',
       esc(row ? displayName(row) : (it.name || it.employee_id))));
     txt.appendChild(el('span', 'crew-q-kind', esc(KIND_LABEL[it.kind] || it.kind)));
@@ -1370,7 +1370,7 @@
       (IDENTITY_PATCH[field] || function () {})(row, value);
       return;
     }
-    // roster_save answers with the whole stored record, so take its normalised values rather
+    // roster_save answers with the whole stored record, so take its normalized values rather
     // than the raw text: "17.50 " comes back "17.50", and "3-7" comes back "03-07".
     var saved = (res && res.saved) || {};
     ['wage', 'shirt_size', 'birthday', 'permit_number', 'permit_expires', 'permit_status']
@@ -1725,7 +1725,7 @@
      * The one subtlety: a row may already HOLD a title outside the four, put there by an older
      * import. Dropping it from the list would mean opening this pane to fix a birthday and
      * silently re-filing that person as somebody else on the next save. So an off-list value is
-     * carried as its own option, selected, and labelled — visible, kept, one click from correct.
+     * carried as its own option, selected, and labeled — visible, kept, one click from correct.
      */
     var held = row.role_is_default ? '' : String(row.role || '').trim();
     var offList = held && state.roleTitles.indexOf(held) < 0;
@@ -1969,7 +1969,7 @@
 
     /* The Monday recap, as this person's own preference rather than a list in the engine.
        Needs a GX account, because that is where the address comes from — so when there is no
-       account the control says why instead of storing a wish that can never be honoured. */
+       account the control says why instead of storing a wish that can never be honored. */
     /* user_id is the MAILBOX NAME (`sky`), not an address — the engine reassembles the rest. */
     var hasAccount = !!String(row.user_id || '').trim();
     var dl = el('label', 'crew-celeb');
@@ -2250,7 +2250,7 @@
          other, and both sit on the boundary in real data every period.
 
      `discount` arrives as a DECIMAL (0.015) and every threshold is a PERCENT (1.5), hence the
-     ×100 at each comparison. Keep the conversion at the comparison rather than normalising on
+     ×100 at each comparison. Keep the conversion at the comparison rather than normalizing on
      the way in — the stored thresholds are what Sky edits and reads, and they are percents. */
 
   /* ONE identity key through Crew: employee_id, which GX Core owns. Leaderboard's rows arrive
@@ -2429,9 +2429,9 @@
     if (!v) return '<span class="crew-inc-zero">—</span>';
     return esc((fmt || m0)(v));
   }
-  /* The store's own colour, from the same registry every app in the suite reads, so Century is the
+  /* The store's own color, from the same registry every app in the suite reads, so Century is the
      same blue here as on the kiosk. Imported rows print the store label the REPORT used ("Hillsboro"
-     for what is now Baseline) but colour the dot by the resolved store_id — so a year of history
+     for what is now Baseline) but color the dot by the resolved store_id — so a year of history
      groups by eye against today's stores even though the names moved. */
   function incStoreId(r) { return r.store_id || r.storeSlug || ''; }
 
@@ -3110,7 +3110,7 @@
   /* MMDDYY, the convention the archived reports already use — "Incentive Dashboard -
      030226-031526.pdf". Chrome names a Save-as-PDF from document.title, so the file lands with the
      right name instead of "GX Crew.pdf" and whoever files it does not have to retype it. Restored
-     afterwards, including when the print dialog is cancelled. */
+     afterwards, including when the print dialog is canceled. */
   function incMMDDYY(iso) {
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
     return m ? m[2] + m[3] + m[1].slice(2) : '';
@@ -3216,7 +3216,7 @@
 
   /* ── Incentive settings tray ────────────────────────────────────────────────
      Leaderboard's design, ported rather than reinvented. Sky built it and a JSON textarea was a
-     worse answer to the same question: the tier lists are the fiddly part, and a labelled row per
+     worse answer to the same question: the tier lists are the fiddly part, and a labeled row per
      tier says what each number DOES, where raw JSON only says what it is called.
 
      Every control writes into a working copy; nothing reaches GX Core until Save. The engine still
@@ -4043,11 +4043,11 @@
   }
 
   /* The clock is chrome, not session state -- start it once at boot so it is never showing placeholder
-     dashes on the login screen. Store colours load here too, so --store-<id> is painted before any view
+     dashes on the login screen. Store colors load here too, so --store-<id> is painted before any view
      that uses them renders. */
   function startChrome() {
     if (window.GXTopNav) GXTopNav.startClock();
-    if (window.GXStores) GXStores.load(GXCORE_URL).catch(function () { /* colours are a nicety */ });
+    if (window.GXStores) GXStores.load(GXCORE_URL).catch(function () { /* colors are a nicety */ });
   }
 
   if (document.readyState === 'loading') {

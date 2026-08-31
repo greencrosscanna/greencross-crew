@@ -184,7 +184,7 @@ var SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
 /*
  * THE ROLE VOCABULARY. Four titles, and role_title is a closed set — the roster offers these
  * as a dropdown and the engine refuses anything else, so a role can never arrive misspelled or
- * in a variant nobody else recognises.
+ * in a variant nobody else recognizes.
  *
  * It has to be enforced here and not only in the UI. role_title is GX Core identity, read by
  * Leaderboard and SPIFF, and Crew is its only writer — but not through one door: the roster
@@ -217,7 +217,7 @@ var MANAGER_ROLE_RE = /manager/i;
  * normRole_('__proto__') returned an object — both truthy, so both sailed through the guard whose
  * whole job is to refuse a title that is not one of the four, and would have been written into
  * role_title, the field Leaderboard renders and SPIFF groups by. 'toString' and 'valueOf' missed
- * only because the lookup lowercases first, which is luck, not a defence.
+ * only because the lookup lowercases first, which is luck, not a defense.
  *
  * Fixed on the MAP rather than at each call site: a null-prototype object inherits nothing, so
  * every present and future lookup is safe by construction. Patching lookups one by one leaves the
@@ -507,7 +507,7 @@ function requireCrew_(p) {
  * them a read-only roster while the role name says otherwise. `manager` is not in Core's
  * vocabulary today; it is allowed for the HR-manager grants CLAUDE.md anticipates.
  *
- * Deliberately an allowlist, not `role !== 'viewer'` — an unrecognised or empty role should fall
+ * Deliberately an allowlist, not `role !== 'viewer'` — an unrecognized or empty role should fall
  * through to read-only rather than silently earning write access to staff PII.
  */
 var EDIT_ROLES = ['admin', 'editor', 'director', 'manager'];
@@ -660,7 +660,7 @@ function writeAttrs_(rec) {
   }
 }
 
-// ─── Normalisation ──────────────────────────────────────────────────────────────
+// ─── Normalization ──────────────────────────────────────────────────────────────
 
 /**
  * A stored yes/no. Sheets hands back a checkbox as the BOOLEAN true, a typed cell as the string
@@ -1081,7 +1081,7 @@ function createAccounts_(p, body) {
  * (v225) is the ONE place avatar_config is written, and it was built from THIS app's version of
  * the logic — seed pinned to employee_number, lock contention retried, a clear NAMED in clear=
  * and then verified to have landed. Leaderboard's own writer did none of that, so which
- * behaviour a staff member got depended on which app they were standing in front of.
+ * behavior a staff member got depended on which app they were standing in front of.
  *
  * Deleted with it: `avatarsForKiosk_` (route `avatars`), `avatarSave_` (route `avatar_save`) and
  * `resolveEmployee_`, which only avatarSave_ used. They were Crew's half of a Leaderboard
@@ -1168,8 +1168,8 @@ function unclearedFields_(prior, changes, res) {
  *
  * CREDENTIALS LIVE IN SCRIPT PROPERTIES, never in this file and never in the frontend:
  *   METRC_VENDOR_KEY   the integrator/software key Metrc issues
- *   METRC_USER_KEY     the user key generated inside Metrc by the licence owner
- *   METRC_LICENSES     comma-separated licence numbers (e.g. 050-12997,050-13000,…)
+ *   METRC_USER_KEY     the user key generated inside Metrc by the license owner
+ *   METRC_LICENSES     comma-separated license numbers (e.g. 050-12997,050-13000,…)
  * Metrc authenticates as Basic base64(vendorKey:userKey) — BOTH halves are required; the
  * vendor key is the username. A user key alone cannot authenticate at all.
  *
@@ -1183,7 +1183,7 @@ function unclearedFields_(prior, changes, res) {
  *   production  https://api-or.metrc.com          — real Green Cross staff and permits
  *   sandbox     https://sandbox-api-or.metrc.com  — Metrc's generic test data, periodically reset
  * Sandbox is for passing Metrc's evaluation. It cannot answer a question about OUR staff, so any
- * audit run against it must be labelled as such rather than mistaken for the real thing.
+ * audit run against it must be labeled as such rather than mistaken for the real thing.
  */
 var METRC_BASE_DEFAULT = 'https://api-or.metrc.com';
 
@@ -1217,8 +1217,8 @@ function metrcGet_(path, params) {
   var body = res.getContentText();
   if (code === 401) throw new Error('METRC rejected the credentials (401). Check both keys, and ' +
                                     'that the user key belongs to an account with API access.');
-  if (code === 403) throw new Error('METRC returned 403 — the keys are valid but not authorised ' +
-                                    'for this licence or endpoint.');
+  if (code === 403) throw new Error('METRC returned 403 — the keys are valid but not authorized ' +
+                                    'for this license or endpoint.');
   if (code >= 300) throw new Error('METRC HTTP ' + code + ': ' + body.slice(0, 300));
   try { return JSON.parse(body); }
   catch (e) { throw new Error('METRC returned non-JSON: ' + body.slice(0, 200)); }
@@ -1242,7 +1242,7 @@ function metrcHealth_(p) {
   }
   if (!c.licenses.length) {
     out.ok = false;
-    out.error = 'Set METRC_LICENSES to a comma-separated list of licence numbers.';
+    out.error = 'Set METRC_LICENSES to a comma-separated list of license numbers.';
     return out;
   }
   try {
@@ -1386,7 +1386,7 @@ function metrcAuthProbe_(p) {
            setup_http: setupCode, setup_body: setupBody, setup_headers: setupHeaders };
 }
 
-/** Everyone METRC currently knows about, deduped across licences, keyed by permit number. */
+/** Everyone METRC currently knows about, deduped across licenses, keyed by permit number. */
 function metrcAllEmployees_() {
   var c = metrcCreds_();
   var byPermit = {}, errors = [], seen = 0;
@@ -1499,7 +1499,7 @@ function decisionKey_(kind, employeeId, field, proposed) {
   return [kind, employeeId, field, String(proposed || '').toLowerCase()].join('|');
 }
 
-/* Whitespace-normalised comparison, matching what saveIdentity_ does on the way IN — it collapses
+/* Whitespace-normalized comparison, matching what saveIdentity_ does on the way IN — it collapses
    runs of whitespace before writing, so "Michael  Kettler" and "Michael Kettler" are the same value
    and an item must not stay open over the difference. Deliberately CASE-SENSITIVE: "michael" vs
    "Michael" is a real spelling disagreement and is exactly what this queue exists to surface. */
@@ -2104,7 +2104,7 @@ function rowFlags_(r) {
  * GXCore.getEmployees() measured ~9.8s on its own, and the roster also reads Crew's attribute
  * sheet — together comfortably past the 8s JSONP budget in gx-client, so every attempt timed
  * out and the roster never loaded at all. Most of that is fixed overhead (library load +
- * SpreadsheetApp open), not row count, so it does not shrink as we optimise the join.
+ * SpreadsheetApp open), not row count, so it does not shrink as we optimize the join.
  *
  * We cache the expensive part — the identity x attributes join — and keep the per-user bits
  * (role, can_edit) outside it, so the cache can never hand one user another user's permissions.
@@ -2171,7 +2171,7 @@ function rosterJoin_() {
       /* Derived once here so the UI and rowFlags_ cannot disagree about it. */
       wage_exempt: wageExempt_(a.pay_type, a.not_on_payroll),
       permit_number: a.permit_number || '',
-      /* NORMALISED, like hire_date two lines up — this was the one date on the row that was not,
+      /* NORMALIZED, like hire_date two lines up — this was the one date on the row that was not,
          and the omission was silent in the worst way. readAttrs_ does String() over the cell, so
          a permit_expires that Sheets stored as a real Date comes back as
          "Sat May 19 2029 00:00:00 GMT-0700 (Pacific Daylight Time)". dateFromIso_ cannot read
@@ -2555,7 +2555,7 @@ function saveRosterAttrs_(p) {
     digest_opt_in:      p.digest_opt_in == null
                         ? (existing.digest_opt_in || '')
                         : (isTruthyFlag_(p.digest_opt_in) ? 'yes' : ''),
-    /* One letter, upper case. Normalised on the way in rather than trusted: the payroll export
+    /* One letter, upper case. Normalized on the way in rather than trusted: the payroll export
        reads this straight into a name and "j." or "James" would land in the file as typed. */
     middle_initial:     p.middle_initial == null
                         ? (existing.middle_initial || '')
@@ -2599,7 +2599,7 @@ function saveRosterAttrs_(p) {
  * `digest_opt_in` on the employee record, ticked from their own record in the app. Two conditions,
  * and the second is not a formality: they must have opted in, AND have a `user_id` — the GX
  * account, which is where the address comes from. Somebody with no account has nowhere to receive
- * it, so the control says so rather than storing a preference that can never be honoured.
+ * it, so the control says so rather than storing a preference that can never be honored.
  *
  * NO FALLBACK LIST. An "if nobody opted in, send to these people" default would mail somebody who
  * had just turned it off, which is the one thing a preference must never do. Nobody opted in means
@@ -2630,9 +2630,9 @@ var CREW_URL  = 'https://greencrosscanna.github.io/greencross-crew/';
  * did rather than by calling getCelebrations_ — that route re-reads GXCore.getEmployees() and
  * readAttrs_() to rebuild a roster this function is holding.
  *
- * `celebrations_opt_out` IS HONOURED HERE. The flag's declaration scopes it to "the kiosk
+ * `celebrations_opt_out` IS HONORED HERE. The flag's declaration scopes it to "the kiosk
  * celebrations feed", and one could argue a private managers' email is the opposite of the
- * all-staff screen it was written against — it is how Mike knows to buy a card. It is honoured
+ * all-staff screen it was written against — it is how Mike knows to buy a card. It is honored
  * anyway, for two reasons. The flag is named for celebrations and this is a celebrations
  * section; and the person who ticked it is Sky, who is also the person the digest is mailed to,
  * so ignoring it would show him his own anniversary in an email he asked for — exactly the
@@ -2911,7 +2911,7 @@ function displayNameOf_(r) {
  *
  * The deployment runs executeAs USER_DEPLOYING, so the mail scope has to be granted by the user
  * the DEPLOYMENT belongs to — which is not necessarily the account sitting in the editor. Running
- * a function in the IDE authorises the editor session; it does not re-authorise a deployment that
+ * a function in the IDE authorizes the editor session; it does not re-authorize a deployment that
  * a different account created. Guessing between those two costs a round trip each time, so ask. */
 function mailCheck_() {
   var who = '(unknown — userinfo.email not granted)';
@@ -2945,13 +2945,13 @@ function mailCheck_() {
            note: quota === null
              ? 'The account above is the one that must grant the mail scope — open the script ' +
                'signed in AS THAT ACCOUNT, run sendDigestNow(), accept the prompt.'
-             : 'Mail is authorised for this deployment.' };
+             : 'Mail is authorized for this deployment.' };
 }
 
 function sendDigest_(p) {
   var to = String(p.to || '').trim();
   /* WHERE it ran, recorded because the two contexts fail identically and are fixed differently:
-     an editor run is authorised by the signed-in owner, a web-app run by the deployment. Passed
+     an editor run is authorized by the signed-in owner, a web-app run by the deployment. Passed
      in rather than sniffed — there is no scope-free way to ask, and the caller always knows.
      Declared HERE, above the preview return that reads it: `var` hoists but the assignment did
      not, so every preview reported `source: undefined`. */
@@ -3018,12 +3018,12 @@ function sendDigest_(p) {
                 celebrations: d.celebrations.length, eom_reminder: !!d.eom });
 }
 
-/* Trigger entry point, and the editor-runnable twin for the one-time mail authorisation. */
+/* Trigger entry point, and the editor-runnable twin for the one-time mail authorization. */
 function weeklyDigest() { return sendDigest_({ send: 'yes', source: 'trigger' }); }
 
 /* RUN THIS ONE FROM THE EDITOR to send a digest by hand.
  *
- * It THROWS on a failed send, and that is deliberate. sendDigest_ catches the authorisation error
+ * It THROWS on a failed send, and that is deliberate. sendDigest_ catches the authorization error
  * so the web app can answer with a useful object rather than a 500 — but from the editor that
  * turned a refused send into an execution logged as **Completed**, which is a lie told in the one
  * place somebody goes to check. A run that did not send should read Failed. */
@@ -3128,7 +3128,7 @@ function installNightlyScan_(p) {
      previously use. Apps Script detects scopes from the code, so the requirement appears the
      moment this ships — and a web app deployed as USER_DEPLOYING cannot grant itself a scope the
      owner has not consented to. Caught and NAMED rather than thrown, so the answer is "the owner
-     has to authorise this once" instead of a stack trace from a 5am cron nobody is watching. */
+     has to authorize this once" instead of a stack trace from a 5am cron nobody is watching. */
   try {
     return installNightlyScanUnsafe_(p);
   } catch (e) {
@@ -3139,14 +3139,14 @@ function installNightlyScan_(p) {
   }
 }
 
-/** Editor-runnable wrapper, for the one-time authorisation described above. */
+/** Editor-runnable wrapper, for the one-time authorization described above. */
 function installNightlyScan() { return installNightlyScanUnsafe_({ enabled: 'yes' }); }
 
 function installNightlyScanUnsafe_(p) {
   var on = String(p.enabled || 'yes') !== 'no';
 
   /* CAN THIS CONTEXT SEND MAIL? A trigger runs under the authority of whoever created it, so one
-     created from the web app inherits the deployment's authorisation and one created from the
+     created from the web app inherits the deployment's authorization and one created from the
      editor inherits the signed-in user's. Those differ here: the deployment has never been
      granted script.send_mail, the owner's account has.
      
@@ -3465,7 +3465,7 @@ function incentiveRelink_(p) {
   if (dry) { out.note = 'dry run — nothing written. Re-send with confirm=yes.'; return out; }
 
   /* One column, one cell at a time. Writing the whole row back — even "unchanged" — is how a
-     rounded or re-serialised figure gets in, and these are numbers that paid people. */
+     rounded or re-serialized figure gets in, and these are numbers that paid people. */
   hits.forEach(function (rowNum) { sh.getRange(rowNum, ID_COL).setValue(empId); });
   out.written = hits.length;
   return out;
@@ -3535,7 +3535,7 @@ function incentiveHistory_(p) {
  *             Nothing is computed and nothing is editable — see the header on crew_incentive_history.
  *   live      Leaderboard's incentiveperf slice plus Crew's own inputs. The bonus MATH runs in the
  *             browser (crew.js calcBud/calcMgr/calcAdmin) so an attendance or SPIFF edit re-scores
- *             immediately, which is the behaviour the Leaderboard dashboard had and staff expect.
+ *             immediately, which is the behavior the Leaderboard dashboard had and staff expect.
  *
  * THE SPLIT THAT SURVIVES THE MOVE. Leaderboard stays the PERFORMANCE engine — Dutchie ingest,
  * aggregateTransactions_, the discretionary-discount classification, and the frozen closed-period
@@ -3689,7 +3689,7 @@ function stampEmployeeIds_(live) {
   }
   /* LEADERBOARD'S STORE SLUGS ARE NOT GX CORE'S. LB says baseline / century / portland / river;
      the registry says hillsboro / bend / portland-rd / river-rd. Only `center` and `commercial`
-     coincide — which is why exactly those two rows had a coloured dot and the other four were grey.
+     coincide — which is why exactly those two rows had a colored dot and the other four were gray.
      Resolved through GXCore.resolveStore on the DISPLAY NAME, whose aliases already cover every one
      of these ('Baseline' → hillsboro, 'Century' → bend), rather than a local translation table that
      would need editing every time a store is renamed.
@@ -3898,7 +3898,7 @@ function incentiveSpiffRefresh_(p) {
  * that tab has no row with this program_id at all.
  *
  *   active  → pay. Running now, this is the ordinary case.
- *   closed  → PAY. "Closed" is SPIFF's word for paid out, not for cancelled, and a pay period is
+ *   closed  → PAY. "Closed" is SPIFF's word for paid out, not for canceled, and a pay period is
  *             approved AFTER it ends — by which time its programs have closed. Excluding these
  *             would zero the vendor column on every period anybody ever approves, which is the
  *             opposite of the bug being fixed and would look exactly like a quiet fortnight.
@@ -3907,7 +3907,7 @@ function incentiveSpiffRefresh_(p) {
  *             SPIFF keeps orphans distinct from "no rows" on purpose, and a filter is where that
  *             distinction disappears.
  *   other   → PAY, and report it. A status this file has not heard of is far more likely to be a
- *             new flavour of active/closed than a reason to withhold money — and paying wrongly is
+ *             new flavor of active/closed than a reason to withhold money — and paying wrongly is
  *             a number on screen somebody can question, while withholding wrongly is a $0 that
  *             looks exactly like a budtender who sold nothing.
  */
@@ -3916,12 +3916,12 @@ function spiffPayable_(status) {
   if (st === 'active' || st === 'closed') return { pay: true, why: '' };
   if (st === 'draft') return { pay: false, why: 'draft — never started' };
   if (st === '') return { pay: false, why: 'SPIFF has no record of this program' };
-  return { pay: true, why: 'unrecognised status "' + st + '" — counted, please check' };
+  return { pay: true, why: 'unrecognized status "' + st + '" — counted, please check' };
 }
 
 /* The pay-period START out of whatever shape SPIFF stored. The column has held a bare date, a
  * human-readable range ("2026-08-17 - 2026-08-30"), and — before `forceProgressTextDates_` pinned it
- * to plain text — a Date object that serialised to an ISO timestamp. The first YYYY-MM-DD in the
+ * to plain text — a Date object that serialized to an ISO timestamp. The first YYYY-MM-DD in the
  * string is the period start in every one of those shapes. */
 function spiffPeriodOf_(v) {
   var m = String(v == null ? '' : v).match(/\d{4}-\d{2}-\d{2}/);
@@ -3981,7 +3981,7 @@ function spiffPeriodRangeStart_(v) {
  *
  *   pay_period    the stored period, if SPIFF ever starts writing it. Authoritative when present.
  *   exact_window  start and end equal the period's. The normal case for anything picked from the
- *                 dropdown, and it separates a programme that ENDED on the 30th from one that
+ *                 dropdown, and it separates a program that ENDED on the 30th from one that
  *                 STARTED on the 31st without caring whether either is still marked active.
  *   majority      the old share-of-window rule, for historical records whose dates never lined up.
  *                 Counted, but REPORTED — this is the typo list Sky said he would fix, and it
@@ -4045,7 +4045,7 @@ function applySpiffEarnings_(live, ppStart) {
   var ppFrom = d10(ppStart);
   /* Does this SPIFF deployment resolve status at all? If NOT A SINGLE row carries the key, it
      predates the read-time join, and applying the payability filter would read every row as an
-     orphan and zero the whole column. Degrade to the old date-only behaviour and SAY SO, rather
+     orphan and zero the whole column. Degrade to the old date-only behavior and SAY SO, rather
      than silently withholding every vendor dollar because the other app is behind. */
   var hasStatus = (sp.rows || []).some(function (r) { return r && r.status !== undefined; });
 
@@ -4190,7 +4190,7 @@ function applySpiffEarnings_(live, ppStart) {
                  period_conflicts: bagList(conflicts),
                  /* Counted on their dates; their pay_period column holds a payout date. */
                  payout_date_pay_periods: bagList(payoutDates),
-                 /* Counted, but with a status this file does not recognise. */
+                 /* Counted, but with a status this file does not recognize. */
                  odd_status: bagList(oddStatus),
                  /* False = the SPIFF deployment predates the read-time status join, so nothing was
                     filtered on payability and a dead program could still be in the figures. */
@@ -4251,7 +4251,7 @@ function getIncentive_(p) {
 /* Every pay period from the anchor to the one running today, newest first. Dates are TEXT and the
  * arithmetic runs at NOON UTC on purpose: a period boundary computed at midnight lands on the wrong
  * side of a DST change twice a year, which would shift a whole fortnight's worth of sales into the
- * neighbouring period. `back` limits how far the picker reaches; imported periods are added
+ * neighboring period. `back` limits how far the picker reaches; imported periods are added
  * separately and are not bounded by it. */
 function computedPeriods_(back) {
   var anchorStr = '', days = 14;
@@ -4752,7 +4752,7 @@ function wfMoney_(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('e
  * Extracted 2026-08-31. The `preview=1` branch of incentive_send computed its own totals and never
  * called applySpiffEarnings_ at all, so the route whose entire job is "show me what approving this
  * would do" folded no vendor money and reported not one of these checks — no unmatched people, no
- * unpayable programmes, no date conflicts. Its payroll figure was right, because SPIFF cancels out
+ * unpayable programs, no date conflicts. Its payroll figure was right, because SPIFF cancels out
  * of payroll on both sides, which is precisely why the gap was invisible: the number you check
  * agrees while everything you would check it AGAINST is missing.
  *
@@ -4887,7 +4887,7 @@ function incentiveSend_(p) {
     : wfApproverEmails_();
   /* The preview echoes the SAME blocks the approval dry run returns. Returning only totals is what
      made this route quietly useless: it could not have told anyone that vendor money was missing,
-     that a programme was unpayable, or that the period was still open. */
+     that a program was unpayable, or that the period was still open. */
   if (preview && !to.length) return { ok: true, preview: true, pp_start: pp, rows: pre.rows,
                                       payroll_total: pre.payroll_total, split: pre.split,
                                       still_open: !!pre.still_open,
@@ -5056,7 +5056,7 @@ function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reas
 /* ══ Thresholds — GX Core holds them, Crew edits them ════════════════════════════════════════════
  *
  * They were a Leaderboard ScriptProperty, which was wrong twice: compensation policy is not the
- * kiosk's, and LEADERBOARD'S OWN DISCOUNT COLOURING reads budtender.discountMaxPct to decide what
+ * kiosk's, and LEADERBOARD'S OWN DISCOUNT COLORING reads budtender.discountMaxPct to decide what
  * counts as a good discount rate on the board every staff member sees. Two copies of that number
  * means the board grades people against a goal nobody set on it.
  *
@@ -5065,7 +5065,7 @@ function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reas
  * Crew writes; Leaderboard and Crew both read.
  */
 /* Structural equality without JSON.stringify, whose key ORDER is significant — Leaderboard's payload
- * and Core's parsed value hold the same numbers in whatever order each JSON happened to serialise,
+ * and Core's parsed value hold the same numbers in whatever order each JSON happened to serialize,
  * and a false "these disagree" sends somebody hunting a difference that is not there. */
 function deepSame_(a, b) {
   if (a === b) return true;
@@ -5231,7 +5231,7 @@ function incentiveDiscountsRoute_(p) {
   /* The old wire format was `save=<every counted name>`, with absence meaning excluded. Under the
      new merge that would set the checked ones and never set anything back to excluded — unticking
      a box would appear to work and change nothing. So a stale page is refused, loudly, instead of
-     being half-honoured. */
+     being half-honored. */
   if (p.save != null) {
     return { ok: false, error: 'this page is out of date — hard-reload GX Crew and set the discount rules again' };
   }
@@ -5707,7 +5707,7 @@ function statusToken_(s) {
  *     out through writeAttrs_/gxWrite_, and a confident wrong store is worse than a blank one.
  *
  * `stores` is still taken (callers pass it, and it is what dutchieEmployeeList_ needs) but the
- * match no longer reads it — Core memoises the registry per execution (gxStoresCached_, added in
+ * match no longer reads it — Core memoizes the registry per execution (gxStoresCached_, added in
  * v201 for exactly this caller), so resolving one store per (employee × permission location)
  * across the roster is still a single sheet read.
  *
@@ -6292,7 +6292,7 @@ function eomSheet_() {
   return sh;
 }
 
-/** cfg.eom, normalised. undefined = never set, null = deliberately nobody, else the holder. */
+/** cfg.eom, normalized. undefined = never set, null = deliberately nobody, else the holder. */
 function eomCurrent_() {
   var raw;
   try { raw = GXCore.getKv('cfg.eom'); }

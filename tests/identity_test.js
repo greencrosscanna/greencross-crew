@@ -94,7 +94,7 @@ eq(C.normDate_('2026-02-32'), '', 'day 32 refused');
   // Sheets hands back a real Date when a cell was formatted as one — the exact source of the
   // timezone-shift corruption the TEXT rule exists to prevent.
   const got = C.normDate_(new Date(2026, 7, 22));
-  eq(got, '2026-08-22', 'a real Date is normalised to TEXT on the SAME day');
+  eq(got, '2026-08-22', 'a real Date is normalized to TEXT on the SAME day');
 }
 
 /*
@@ -112,7 +112,7 @@ eq(C.normDate_('2026-02-32'), '', 'day 32 refused');
  */
 {
   const SHEETS = 'Sat May 19 2029 00:00:00 GMT-0700 (Pacific Daylight Time)';
-  eq(C.normDate_(SHEETS), '2029-05-19', "a date-formatted cell's String() form is normalised");
+  eq(C.normDate_(SHEETS), '2029-05-19', "a date-formatted cell's String() form is normalized");
   eq(C.dateFromIso_(SHEETS) === null || C.dateFromIso_(SHEETS) === undefined, true,
      'and dateFromIso_ still cannot read it raw — which is why normDate_ has to run first');
   const d = C.dateFromIso_(C.normDate_(SHEETS));
@@ -133,7 +133,7 @@ eq(C.normDate_('2026-02-32'), '', 'day 32 refused');
  */
 console.log('\n2b. pay_type — is an empty wage a gap, or a fact?');
 eq(C.normPayType_('hourly'), 'hourly', 'hourly');
-eq(C.normPayType_('SALARY'), 'salary', 'case is normalised');
+eq(C.normPayType_('SALARY'), 'salary', 'case is normalized');
 eq(C.normPayType_('  none '), 'none',  'whitespace trimmed');
 eq(C.normPayType_(''),     '', 'empty stays empty — and empty MEANS hourly downstream');
 eq(C.normPayType_(null),   '', 'null does not throw');
@@ -185,7 +185,7 @@ eq(NS({ flags: ['wage'], hire_date: '2026-05-26' }), false, '91 days ago is not'
 /*
  * A per-person setting, not a list in the source. Two conditions and BOTH matter: opted in, and
  * has a GX account — the account is where the address comes from, so a preference without one
- * cannot be honoured and must not be treated as if it could.
+ * cannot be honored and must not be treated as if it could.
  *
  * There is deliberately NO fallback list. "If nobody opted in, send to these people instead" would
  * mail somebody who had just switched it off, which is the one thing a preference must never do.
@@ -221,12 +221,12 @@ console.log('\n2e. digestRecipients_ — a setting, not a list');
 /*
  * WHY THIS IS TESTED AT ALL, given it is "just an email". The first version shipped with the
  * newcomer card called with FOUR arguments instead of five, so every value slid one place left:
- * the person's name landed in the kickerColour slot and rendered as an invalid CSS colour (black
+ * the person's name landed in the kickerColour slot and rendered as an invalid CSS color (black
  * on a black card), and the line where the name belonged printed "Still needs wage." Six cards
  * went out, not one of them naming the person it was about, and nothing failed — a wrong-arity
  * call in JavaScript is a silent success.
  *
- * The colour assertion below is the general form of that bug: any CSS colour that is not a hex
+ * The color assertion below is the general form of that bug: any CSS color that is not a hex
  * literal means a value reached a slot meant for one.
  */
 console.log('\n2d. digestHtml_ — the email says who it is about');
@@ -263,7 +263,7 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
 
   /* The two sections added 2026-08-29. Same five-argument card() as the newcomer block above, so
      the same silent-arity bug is reachable here; these assertions are what makes it loud. */
-  eq(html.indexOf('Birthday') >= 0, true, 'a birthday is labelled');
+  eq(html.indexOf('Birthday') >= 0, true, 'a birthday is labeled');
   eq(html.indexOf('1 year with the company') >= 0, true,
      'an anniversary states years of service, SINGULAR at one');
   eq(html.indexOf('Today') >= 0, true, 'and when it lands, in words');
@@ -277,11 +277,11 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
   eq(html.indexOf('September') >= 0, true, 'and it names the month being picked');
   eq(html.indexOf('has held it since last month') >= 0, true, 'the current holder is context');
 
-  /* THE GENERAL GUARD. Every CSS colour in this document is a hex literal; anything else means a
-     value landed in a slot meant for a colour, which is precisely how the name went invisible. */
+  /* THE GENERAL GUARD. Every CSS color in this document is a hex literal; anything else means a
+     value landed in a slot meant for a color, which is precisely how the name went invisible. */
   const colours = html.match(/[^-a-z]color:\s*[^;"']+/g) || [];
   const bad = colours.filter((c) => !/color:\s*#[0-9a-fA-F]{3,8}$/.test(c.trim()));
-  eq(bad.length, 0, 'every CSS colour is a hex literal' + (bad.length ? ' — GOT: ' + bad.join(' | ') : ''));
+  eq(bad.length, 0, 'every CSS color is a hex literal' + (bad.length ? ' — GOT: ' + bad.join(' | ') : ''));
   eq(colours.length > 10, true, 'and there are colours to check, so the regex is not vacuous');
 }
 

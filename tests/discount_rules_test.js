@@ -296,7 +296,7 @@ t('the same name sent both ways is refused, not resolved by argument order', () 
   assert.ok(/both counted and not counted/i.test(r.error), r.error);
 });
 
-t('the OLD save= wire format is refused loudly, not half-honoured', () => {
+t('the OLD save= wire format is refused loudly, not half-honored', () => {
   fresh();
   /* Under the merge, the old "every counted name" payload would set the checked ones and never set
      anything back to excluded — unticking a box would look like it worked and change nothing. */

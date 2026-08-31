@@ -76,7 +76,7 @@ ok('version "' + version + '" matches the suite scheme MAJOR.BBB', EXPECTED.test
    working tree (a mid-edit tree published a release that was never shipped on 2026-08-23).
 
    The old anchor did not match any more, so this test threw on load and blocked the push. That is
-   the LOAD FAILED behaviour working as intended — it refused to pass while it could no longer see
+   the LOAD FAILED behavior working as intended — it refused to pass while it could no longer see
    what it was checking, rather than quietly asserting nothing. Still lifted from deploy.sh rather
    than copied: a test that reimplements the extractor cannot catch the extractor changing, which is
    the whole point of assertion 2. */

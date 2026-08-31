@@ -52,7 +52,7 @@ _extract_version() {   # $1 = index.html contents on stdin-ish (passed as a sing
   # A monolith has no external .js file to hang a cache-buster on, so #1 alone found nothing. Under
   # `set -euo pipefail` a no-match grep aborts the whole script, which is why releases for those two
   # apps went unrecorded for a while. Every grep here is `|| true` so a miss falls through.
-  # Accepts APP_VERSION = 'v2.95' and APP_VERSION = '2.0' alike; the v is normalised on.
+  # Accepts APP_VERSION = 'v2.95' and APP_VERSION = '2.0' alike; the v is normalized on.
   _v="$(printf '%s' "$_src" | grep -oE "(APP_VERSION|GC\.VERSION)[[:space:]]*=[[:space:]]*['\"][^'\"]+['\"]" 2>/dev/null \
         | head -1 | grep -oE "['\"][^'\"]+['\"]" | tr -d "\"'" || true)"
   case "$_v" in

@@ -4,7 +4,7 @@
  *   RUN:  node tests/avatar_picker_adoption_test.js     (from the repo root; no deps, no network)
  *
  * WHY THESE
- * Crew used to carry its own 105-line `avatarPanel`. It was retired on 2026-08-25 in favour of
+ * Crew used to carry its own 105-line `avatarPanel`. It was retired on 2026-08-25 in favor of
  * gx-theme's `GXAvatarPicker` — the Leaderboard one, promoted — so that a face is built the same
  * way in both apps. Sky's words: "I like the LB picker better... the current, simplified version
  * in Crew is efficient but not intuitive and just adds noise."
@@ -14,7 +14,7 @@
  * avatars its own way again. Nothing errors — the faces still save. That is exactly how there came
  * to be two avatar writers in the first place, and it took a GX Core library cut to undo.
  *
- * These are source assertions, deliberately. The behaviour lives in a browser (click the circle ->
+ * These are source assertions, deliberately. The behavior lives in a browser (click the circle ->
  * picker mounts -> save -> reload -> remove), which needs a DOM, a network fetch of gx-theme and a
  * running server — the wrong shape for a push gate that has to run in a second with no deps. What
  * a push gate CAN hold is the contract: which files load, which globals are used, and which local

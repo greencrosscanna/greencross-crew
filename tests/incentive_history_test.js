@@ -15,7 +15,7 @@
  * data freezes but its thresholds do not, so editing the discount goal re-scores every period that
  * already paid out.
  *
- * Runs the ENGINE's real incentiveImport_ against an in-memory sheet, so these are behaviours, not
+ * Runs the ENGINE's real incentiveImport_ against an in-memory sheet, so these are behaviors, not
  * a reading of the source.
  */
 'use strict';
@@ -286,7 +286,7 @@ ok('unmatched lands on the PAYLOAD, not on some other object',
 /* ── Leaderboard's store slugs are not GX Core's ──
    LB says baseline / century / portland / river; the registry says hillsboro / bend / portland-rd /
    river-rd. Only `center` and `commercial` coincide, which is why exactly those two rows had a
-   coloured dot and the other four were grey.
+   colored dot and the other four were gray.
    The SLUG MUST SURVIVE: thresholds express lowVolStores in LEADERBOARD's slugs, and the bonus math
    matches against it — rewriting it to the registry id would move two stores off the low-volume
    transaction bar and change what their staff are paid. */
@@ -325,7 +325,7 @@ ok('and appended at the END, so existing columns keep their positions',
 ok('the pre-existing row is left where it was', sheet.getDataRange().getValues()[1][0] === 'v0');
 
 /* ── the thresholds GX Core stores are validated before they can pay anybody ──
-   The scheme moved to GX Core so Crew can edit it and Leaderboard's kiosk colouring reads the same
+   The scheme moved to GX Core so Crew can edit it and Leaderboard's kiosk coloring reads the same
    discount target. It is edited as JSON, so the engine is the only thing standing between a typo
    and a payroll run. Every rule below is one whose absence pays the wrong amount rather than
    erroring. */

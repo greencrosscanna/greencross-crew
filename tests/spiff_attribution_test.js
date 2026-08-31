@@ -80,7 +80,7 @@ const share = (a, b) => E.share(a, b, PP[0], PP[1]).share;
   const straddles = [['2026-08-10', '2026-08-23'],   // half in the previous period, half in this
                      ['2026-08-24', '2026-09-06'],   // half in this, half in the next
                      ['2026-08-03', '2026-08-30'],   // exactly two whole periods
-                     ['2026-06-01', '2026-08-31']];  // a long vendor programme
+                     ['2026-06-01', '2026-08-31']];  // a long vendor program
   for (const [a, b] of straddles) {
     const hits = [prev, PP, next].filter(pp => inP(a, b, pp)).length;
     if (hits > 1) { bad('program ' + a + ' → ' + b + ' counts in ' + hits + ' periods — the same money twice'); return; }
@@ -95,18 +95,18 @@ const share = (a, b) => E.share(a, b, PP[0], PP[1]).share;
   if (v.share !== 0.5) bad('two whole periods must read as exactly half in each, got ' + v.share);
   else ok('a program covering two whole periods reads 0.50 — counted nowhere, reported instead');
   const long = E.share('2026-06-01', '2026-08-31', PP[0], PP[1]).share;
-  if (!(long > 0 && long < 0.5)) bad('a long programme must overlap without owning the period, got ' + long);
-  else ok('a long vendor programme overlaps this period without belonging to it');
+  if (!(long > 0 && long < 0.5)) bad('a long program must overlap without owning the period, got ' + long);
+  else ok('a long vendor program overlaps this period without belonging to it');
 })();
 
-/* No overlap at all is 0, not a negative or a NaN — a neighbouring fortnight's programme must be
+/* No overlap at all is 0, not a negative or a NaN — a neighboring fortnight's program must be
    silently absent, not reported as straddling. */
 (function () {
   for (const [a, b] of [['2026-08-03', '2026-08-16'], ['2026-08-31', '2026-09-13'], ['2025-01-01', '2025-01-14']]) {
     const v = E.share(a, b, PP[0], PP[1]);
-    if (v.bad || v.share !== 0) { bad('a programme outside the period must read exactly 0, got ' + JSON.stringify(v)); return; }
+    if (v.bad || v.share !== 0) { bad('a program outside the period must read exactly 0, got ' + JSON.stringify(v)); return; }
   }
-  ok('a programme in a neighbouring period reads 0 and is not reported as straddling');
+  ok('a program in a neighboring period reads 0 and is not reported as straddling');
 })();
 
 /* Junk dates are FLAGGED, never scored. `bad` and `share: 0` are different claims: one says "this
@@ -122,12 +122,12 @@ const share = (a, b) => E.share(a, b, PP[0], PP[1]).share;
   ok('malformed program windows are flagged for a human, never scored as 0 (' + junk.length + ' cases)');
 })();
 
-/* A single-day programme inside the period is wholly in it — the divisor is an INCLUSIVE day count,
+/* A single-day program inside the period is wholly in it — the divisor is an INCLUSIVE day count,
    so a start==end window must not divide by zero. */
 (function () {
   const v = E.share('2026-08-20', '2026-08-20', PP[0], PP[1]);
-  if (v.share !== 1) bad('a one-day programme inside the period must be wholly in it, got ' + v.share);
-  else ok('a one-day programme does not divide by zero');
+  if (v.share !== 1) bad('a one-day program inside the period must be wholly in it, got ' + v.share);
+  else ok('a one-day program does not divide by zero');
 })();
 
 /* DST. The period arithmetic runs at noon UTC for the same reason computedPeriods_ does: a day count
@@ -153,24 +153,24 @@ const share = (a, b) => E.share(a, b, PP[0], PP[1]).share;
 const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], stored);
 
 (function () {
-  /* THE CASE SKY DESCRIBED, and the reason he asked for this: a programme that ENDED on the 30th
+  /* THE CASE SKY DESCRIBED, and the reason he asked for this: a program that ENDED on the 30th
      and one that STARTED on the 31st, both still marked active because nobody has closed the first
      one yet. Exact windows separate them without status having an opinion. */
   const NEXT = ['2026-08-31', '2026-09-13'];
   const ended = ['2026-08-17', '2026-08-30'], started = ['2026-08-31', '2026-09-13'];
 
   const a = M(ended[0], ended[1]);
-  if (!a.match || a.how !== 'exact_window') bad('the programme that just ended must match the period that just ended, exactly');
-  else ok('a programme whose dates ARE the pay period matches it exactly');
+  if (!a.match || a.how !== 'exact_window') bad('the program that just ended must match the period that just ended, exactly');
+  else ok('a program whose dates ARE the pay period matches it exactly');
 
-  if (M(started[0], started[1]).match) bad('the programme that starts tomorrow must NOT count in the period that just ended');
-  else ok('a programme starting the day after does not count in the period that just ended');
+  if (M(started[0], started[1]).match) bad('the program that starts tomorrow must NOT count in the period that just ended');
+  else ok('a program starting the day after does not count in the period that just ended');
 
-  if (!E.match(started[0], started[1], NEXT[0], NEXT[1], '').match) bad('the new programme must match the new period');
-  else ok('the new programme matches the new period');
+  if (!E.match(started[0], started[1], NEXT[0], NEXT[1], '').match) bad('the new program must match the new period');
+  else ok('the new program matches the new period');
 
-  if (E.match(ended[0], ended[1], NEXT[0], NEXT[1], '').match) bad('the ended programme must not leak into the new period');
-  else ok('two overlapping-in-time programmes are told apart with no reference to status');
+  if (E.match(ended[0], ended[1], NEXT[0], NEXT[1], '').match) bad('the ended program must not leak into the new period');
+  else ok('two overlapping-in-time programs are told apart with no reference to status');
 
   /* An exact window must not need the majority rule to agree with it — that is the whole point of
      promoting it above the heuristic. */
@@ -188,8 +188,8 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
   ok('the period start is read from every shape that column has held');
 
   /* ONLY A RANGE IS A PAY PERIOD. The same column holds two different facts: the record editor's
-     picker writes a range, and the 22 programmes seeded from the .docx files on 2026-08-30 carry a
-     SINGLE date that is four or five days after the programme ENDED — the payout date. None of the
+     picker writes a range, and the 22 programs seeded from the .docx files on 2026-08-30 carry a
+     SINGLE date that is four or five days after the program ENDED — the payout date. None of the
      11 populated seed values lands on a pay-period start, while their DATES are exact periods. */
   if (E.rangeStart('2026-08-17 - 2026-08-30') !== '2026-08-17') bad('a range must yield its start');
   for (const notRange of ['2026-02-20', '2026-08-17T00:00:00.000Z', '', null]) {
@@ -205,14 +205,14 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
   for (const [a, b, payout] of SEEDED) {
     const r = E.match(a, b, a, b, payout);
     if (!r.match || r.how !== 'exact_window') {
-      bad('a seeded programme (' + a + '..' + b + ', payout ' + payout + ') must match its own ' +
+      bad('a seeded program (' + a + '..' + b + ', payout ' + payout + ') must match its own ' +
           'period on its DATES — its pay_period column is a payout date, not a period'); return;
     }
     if (r.ignored_pay_period !== payout) { bad('the ignored payout date must be reported, got ' + r.ignored_pay_period); return; }
   }
-  ok('a seeded programme matches on its dates, and the payout date it carries is reported not obeyed');
+  ok('a seeded program matches on its dates, and the payout date it carries is reported not obeyed');
 
-  /* THE INVARIANT, stated on its own: a stored pay_period must never SILENTLY cost a programme a
+  /* THE INVARIANT, stated on its own: a stored pay_period must never SILENTLY cost a program a
      match its dates alone would have earned. It may disambiguate; it may raise a conflict somebody
      can see; it may not quietly subtract. */
   const withPayout = E.match('2026-02-02', '2026-02-15', '2026-02-02', '2026-02-15', '2026-02-20').match;
@@ -241,8 +241,8 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
   if (!E.isPeriod('2025-11-24', '2025-12-07', ANCHOR, DAYS)) bad('a 2025 period must read as one — the picker no longer reaches it, the arithmetic does');
   if (E.isPeriod('2026-08-18', '2026-08-31', ANCHOR, DAYS)) bad('right length, off the cadence — must NOT read as a period');
   if (E.isPeriod('2026-08-17', '2026-08-29', ANCHOR, DAYS)) bad('on the cadence, wrong length — must NOT read as a period');
-  if (E.isPeriod('2026-06-01', '2026-06-30', ANCHOR, DAYS)) bad('a 30-day programme is not a pay period');
-  ok('a period window is recognised by cadence AND length, forward and back');
+  if (E.isPeriod('2026-06-01', '2026-06-30', ANCHOR, DAYS)) bad('a 30-day program is not a pay period');
+  ok('a period window is recognized by cadence AND length, forward and back');
 
   /* THE ACTUAL VALUE IN THE LIVE CACHE, pinned as a literal. On 2026-08-31 the cache held 38 rows
      reading exactly this. It is a RANGE, so a raw `stored === pp_start` is false and rung 1 would
@@ -276,14 +276,14 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
   else ok('a historical date typo still pays, flagged as majority-matched rather than exact');
 
   const split = M('2026-08-10', '2026-08-23');
-  if (split.match) bad('a programme split evenly across two periods must not pay in either');
-  else ok('a programme no period owns still pays in neither');
+  if (split.match) bad('a program split evenly across two periods must not pay in either');
+  else ok('a program no period owns still pays in neither');
 })();
 
 /* ── Is the money owed at all? (Sky, 2026-08-31: BeGoat is not active) ──────────────────────────
  *
  * Crew had no status check whatever — every cache row whose dates lined up was paid. SPIFF's
- * vocabulary is three words and the middle one is a trap: `closed` means PAID OUT, not cancelled.
+ * vocabulary is three words and the middle one is a trap: `closed` means PAID OUT, not canceled.
  */
 (function () {
   /* CLOSED MUST PAY. This is the one that would quietly break every approval there will ever be: a
@@ -317,12 +317,12 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
   }
   ok('status matching survives casing and padding');
 
-  /* An UNRECOGNISED status is counted and flagged, not withheld. Withholding wrongly produces a $0
+  /* An UNRECOGNIZED status is counted and flagged, not withheld. Withholding wrongly produces a $0
      that looks exactly like a quiet fortnight; counting wrongly produces a number somebody queries. */
   const odd = E.payable('paused');
-  if (!odd.pay) bad('an unrecognised status must be counted, not silently withheld — $0 hides, a number gets questioned');
-  else if (!odd.why) bad('an unrecognised status must be reported even though it is counted');
-  else ok('an unrecognised status is counted AND flagged, never silently withheld');
+  if (!odd.pay) bad('an unrecognized status must be counted, not silently withheld — $0 hides, a number gets questioned');
+  else if (!odd.why) bad('an unrecognized status must be reported even though it is counted');
+  else ok('an unrecognized status is counted AND flagged, never silently withheld');
 })();
 
 /* ── The scheme an approval is computed against ─────────────────────────────────────────────────
@@ -425,7 +425,7 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
  * sides. A dry run that is right about the one number nobody doubts, and silent on everything you
  * would check it against, is worse than no dry run: it gets trusted.
  *
- * Source-level, because the behaviour needs a live Leaderboard, a live SPIFF and a session. What
+ * Source-level, because the behavior needs a live Leaderboard, a live SPIFF and a session. What
  * can be pinned without them is that the preview branch still folds SPIFF and still reports
  * through the SAME builders approval uses — which is what stops the two drifting apart again. */
 (function previewRunsTheSameChecks() {

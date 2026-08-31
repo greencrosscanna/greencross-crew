@@ -261,7 +261,7 @@ console.log((admChecked === admTotal ? '  ✓' : '  ✗') +
   ' admin: ' + admChecked + '/' + admTotal + ' tier and cap combinations agree exactly');
 
 /* ── The properties the grid alone would not state out loud ──────────────────────────────────────
-   Each of these is a rule someone could "clean up" without any boundary case changing colour. */
+   Each of these is a rule someone could "clean up" without any boundary case changing color. */
 
 /* SPIFF is vendor money and must never reach the Capstone export, which carries `payroll` only. */
 (function () {
@@ -457,7 +457,7 @@ console.log((admChecked === admTotal ? '  ✓' : '  ✗') +
  * record disagreed for everyone who had not typed a figure, which is nearly everyone.
  *
  * The grid above proves the extension is INERT: none of its 12,040 combinations sets `spiff_earned`,
- * and they still agree with the frozen Leaderboard oracle exactly. What follows is the behaviour the
+ * and they still agree with the frozen Leaderboard oracle exactly. What follows is the behavior the
  * grid cannot state, and the browser/engine agreement that keeps two implementations honest. */
 (function () {
   const bud = { nameKey: 'sx', storeSlug: 'bend', txn: 400, aov: 40, discount: 0.001 };
@@ -558,7 +558,7 @@ console.log((admChecked === admTotal ? '  ✓' : '  ✗') +
 
 /* ── Drift check ─────────────────────────────────────────────────────────────────────────────────
    While Leaderboard's dashboard still exists, the frozen oracle above must still match it. Compares
-   whitespace-normalised bodies so a reformat does not fail the push, but any change to the
+   whitespace-normalized bodies so a reformat does not fail the push, but any change to the
    arithmetic does. Skips cleanly once the file is gone — which is the plan for it. */
 (function driftCheck() {
   const lbPath = __dirname + '/../../greencross-leaderboard/index.html';
