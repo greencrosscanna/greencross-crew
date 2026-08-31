@@ -400,7 +400,7 @@ function route_(e) {
       // the registry — it writes nothing but its own pending tab. Safe to call any time.
       case 'new_hires':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
-        return json_(dutchieNewHireScan_(), p.callback);
+        return json_(dutchieNewHireScan_(p && p.secret), p.callback);
 
       // Install or remove the nightly schedule. confirm=yes because a trigger is a standing
       // arrangement that keeps running long after whoever set it up has forgotten.
@@ -424,7 +424,7 @@ function route_(e) {
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
-        return json_(permitCoverage_(), p.callback);
+        return json_(permitCoverage_(p), p.callback);
 
       // Incentive history: imported once from the payout PDFs, then read-only. POST for the
       // import (a year of rows will not fit in a query string); both are deploy-secret.
@@ -3050,8 +3050,8 @@ function sendDigestNow() {
  * then samePerson_ fuzzy. Two detectors that disagree about whether somebody is already on the
  * roster would either hide a real hire or propose a duplicate of an existing one.
  */
-function dutchieNewHireScan_() {
-  var b = buildIdentityRows_();
+function dutchieNewHireScan_(secret) {
+  var b = buildIdentityRows_(secret);
   /* A failed Dutchie read must not empty the tab. Same rule as the roster cache: writing "no new
      hires" because the source was unreachable is a worse answer than saying nothing, because it
      looks exactly like good news. */
@@ -5729,7 +5729,7 @@ function mapPermissionLocation_(label, stores) {
  * every person up to 6 times. We fetch once and dedupe on userId (stable), rather than per store
  * and dedupe on name (which would also merge two real people who share a name).
  */
-function buildIdentityRows_() {
+function buildIdentityRows_(secret) {
   var stores = GXCore.getStores() || [];
   var errors = [], sample = null, facets = {};
   FACET_FIELDS.forEach(function (f) { facets[f] = {}; });
@@ -5748,7 +5748,7 @@ function buildIdentityRows_() {
     });
   }
 
-  var list = dutchieEmployeeList_(stores, errors);
+  var list = dutchieEmployeeList_(stores, errors, secret);
   if (!list) return { rows: [], errors: errors, sample: null, seen: 0, skipped_inactive: 0,
                       skipped_non_person: 0, excluded: [], multi_store: [], facets: {} };
 
@@ -5894,13 +5894,47 @@ function seedIdentityCommit() {
  * every store, so we try each store only until one answers — a second success would just be the
  * same rows again.
  */
-function dutchieEmployeeList_(stores, errors) {
+function dutchieEmployeeList_(stores, errors, secret) {
+  /* WAS GXCore.dutchieEmployees(dn), WHICH COULD NEVER HAVE WORKED (fixed 2026-08-31).
+   * PropertiesService.getScriptProperties() scopes to the CALLING project, so the library looked
+   * for DUTCHIE_STORE_KEYS_JSON in THIS project, which has never held one. Every store threw, the
+   * throws went into `errors`, and callers treated a null list as "Dutchie had nothing" -- so this
+   * has returned nothing since the day it was written. GX Core's own gx_core.gs:187 documents the
+   * same constraint; GX_DUTCHIE_CACHE_SCOPE.md asserted the opposite and was wrong.
+   *
+   * The web route executes AS GX Core and reads Core's properties, which is the thing a library
+   * call cannot do. It takes a store_id, so the Dutchie label never leaves Core.
+   *
+   * THE SECRET, AND WHY THIS IS FIDDLY: this app deliberately holds no deploy secret -- it asks
+   * Core to validate an incoming one instead (see deploySecretOk_), precisely to avoid one more
+   * copy to leak and rotate. So a REQUEST can pass its own secret straight through, and a
+   * request-driven path works with no new configuration. The nightly 5am trigger has no request
+   * and therefore no secret; it works only if GX_DEPLOY_SECRET is set locally, which
+   * deploySecretOk_ already anticipates. Until then it fails LOUDLY here rather than silently
+   * returning nothing, which is what it did for months.
+   */
+  var sec = String(secret || '').trim()
+         || PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET') || '';
+  if (!sec) {
+    if (errors) errors.push('no deploy secret available — a request must pass secret=, or set '
+                          + 'GX_DEPLOY_SECRET on this project for the nightly trigger to work');
+    return null;
+  }
+
   var list = null;
   for (var i = 0; i < stores.length && !list; i++) {
-    var dn = String(stores[i].dutchie_name || '').trim();
-    if (!dn) continue;
-    try { list = GXCore.dutchieEmployees(dn) || []; }
-    catch (e) { if (errors) errors.push(String(stores[i].store_id) + ': ' + String((e && e.message) || e)); }
+    var id = String(stores[i].store_id || '').trim();
+    if (!id) continue;
+    try {
+      var url = GXCORE_URL + '?action=dutchie_employees&store=' + encodeURIComponent(id)
+              + '&secret=' + encodeURIComponent(sec);
+      var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+      var d = JSON.parse(res.getContentText() || 'null');
+      if (d && d.ok === true && d.employees) { list = d.employees; break; }
+      if (errors && d && d.ok === false) errors.push(id + ': ' + (d.error || 'refused'));
+    } catch (e) {
+      if (errors) errors.push(id + ': ' + String((e && e.message) || e));
+    }
   }
   return list;
 }
@@ -5914,10 +5948,10 @@ function dutchieEmployeeList_(stores, errors) {
  * COVERAGE ONLY — counts and expiry buckets. A worker permit number is a government ID; this
  * never returns one, and never returns a name alongside a date.
  */
-function permitCoverage_() {
+function permitCoverage_(p) {
   var errors = [];
   var stores = GXCore.getStores() || [];
-  var list = dutchieEmployeeList_(stores, errors);
+  var list = dutchieEmployeeList_(stores, errors, p && p.secret);
   if (!list) return { ok: false, error: 'could not read Dutchie employees', store_errors: errors };
 
   var today = todayInStoreTz_();
