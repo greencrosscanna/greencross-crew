@@ -134,8 +134,10 @@ const E = (function () {
      like the test is broken rather than like the extraction list is short. Any future helper the
      math reaches for has to be added here too. */
   return new Function(
-    grab('incHours_') + grab('incCalcBud_') + grab('incCalcMgr_') + grab('incCalcAdmin_') +
-    '; return { calcBud: incCalcBud_, calcMgr: incCalcMgr_, calcAdmin: incCalcAdmin_, hours: incHours_ };')();
+    grab('incHours_') + grab('incSpiff_') +
+    grab('incCalcBud_') + grab('incCalcMgr_') + grab('incCalcAdmin_') +
+    '; return { calcBud: incCalcBud_, calcMgr: incCalcMgr_, calcAdmin: incCalcAdmin_,' +
+    '           hours: incHours_, spiff: incSpiff_ };')();
 })();
 
 /* ── Crew's port, loaded from the SHIPPED crew.js ────────────────────────────────────────────────
@@ -444,6 +446,113 @@ console.log((admChecked === admTotal ? '  ✓' : '  ✗') +
       }
     }
     console.log('  ✓ the browser and engine hour helpers answer identically');
+  })();
+})();
+
+/* ── SPIFF: measured by default, overridden on purpose (2026-08-31) ──────────────────────────────
+ *
+ * SPIFF is READ from SPIFF's progress cache and lands on each live row as `spiff_earned`; the input
+ * column is an OVERRIDE for when the measurement missed. The engine ignored `spiff_earned` entirely
+ * until this date — the browser used it, `incentiveApprove_` did not — so the screen and the frozen
+ * record disagreed for everyone who had not typed a figure, which is nearly everyone.
+ *
+ * The grid above proves the extension is INERT: none of its 12,040 combinations sets `spiff_earned`,
+ * and they still agree with the frozen Leaderboard oracle exactly. What follows is the behaviour the
+ * grid cannot state, and the browser/engine agreement that keeps two implementations honest. */
+(function () {
+  const bud = { nameKey: 'sx', storeSlug: 'bend', txn: 400, aov: 40, discount: 0.001 };
+  const mgr = { nameKey: 'mx', storeSlug: 'bend', target: 100, sales: 120, discount: 0.001, aov: 40 };
+
+  /* No input row at all — the ordinary case, and the one that froze $0. */
+  (function () {
+    const earned = M.calcBud(Object.assign({ spiff_earned: 120 }, bud), T, {});
+    if (earned.spiff !== 120) bad('a measured SPIFF must be used when nobody typed an override (got ' + earned.spiff + ')');
+    else console.log('  ✓ a measured SPIFF is used when there is no override');
+    const e2 = E.calcBud(Object.assign({ spiff_earned: 120 }, bud), T, {});
+    if (!Object.is(e2.spiff, earned.spiff) || !Object.is(e2.bonus, earned.bonus) || !Object.is(e2.hr, earned.hr)) {
+      bad('browser and engine disagree on a measured SPIFF — the approved record would not match the screen');
+    } else console.log('  ✓ browser and engine agree on the measured figure (screen == frozen record)');
+  })();
+
+  /* THE ROW EXISTS BUT THE CELL IS BLANK. This is what an attendance tick creates, and treating
+     that blank as a deliberate $0 is precisely the bug: `inputsFor_` must send null, not 0. */
+  (function () {
+    for (const blank of [undefined, null, '']) {
+      const inp = { sx: { att: true, spiff: blank } };
+      const r = M.calcBud(Object.assign({ spiff_earned: 75 }, bud), T, inp);
+      const e = E.calcBud(Object.assign({ spiff_earned: 75 }, bud), T, inp);
+      if (r.spiff !== 75 || e.spiff !== 75) {
+        bad('a blank SPIFF cell (' + JSON.stringify(blank) + ') must mean "no override", not $0 — ' +
+            'ticking attendance creates exactly this row'); return;
+      }
+    }
+    console.log('  ✓ a blank SPIFF cell falls through to the measured amount, however it is spelled');
+  })();
+
+  /* ...and a typed 0 does NOT. Zeroing a miss is a decision, and a refresh must not revert it. */
+  (function () {
+    for (const zero of [0, '0']) {
+      const inp = { sx: { att: true, spiff: zero } };
+      if (M.calcBud(Object.assign({ spiff_earned: 500 }, bud), T, inp).spiff !== 0 ||
+          E.calcBud(Object.assign({ spiff_earned: 500 }, bud), T, inp).spiff !== 0) {
+        bad('a typed 0 must beat the measured amount (' + JSON.stringify(zero) + ') — ' +
+            'otherwise a background refresh silently reverts an override'); return;
+      }
+    }
+    const inp = { sx: { att: true, spiff: 40 } };
+    if (M.calcBud(Object.assign({ spiff_earned: 500 }, bud), T, inp).spiff !== 40) bad('a typed override must beat the measured amount');
+    else console.log('  ✓ a typed override wins over the measurement, including a deliberate 0');
+  })();
+
+  /* Managers take SPIFF from the opposite direction; the same resolution has to reach them. */
+  (function () {
+    const r = M.calcMgr(Object.assign({ spiff_earned: 90 }, mgr), T, {}, []);
+    const e = E.calcMgr(Object.assign({ spiff_earned: 90 }, mgr), T, {}, []);
+    if (r.spiff !== 90 || !Object.is(e.spiff, r.spiff) || !Object.is(e.bonus, r.bonus)) {
+      bad('managers must resolve a measured SPIFF the same way budtenders do');
+    } else console.log('  ✓ managers resolve the measured SPIFF identically');
+  })();
+
+  /* THE SAFETY ARGUMENT, restated as an assertion: SPIFF is vendor money and cannot move payroll,
+     which is the only column the Capstone export carries. If this fails, a vendor's measurement has
+     started deciding what Green Cross pays. */
+  (function () {
+    let checked = 0;
+    for (const earnedAmt of [0, 25, 500.5]) {
+      for (const att of [true, false]) {
+        const b0 = M.calcBud(Object.assign({}, bud), T, { sx: { att } });
+        const b1 = M.calcBud(Object.assign({ spiff_earned: earnedAmt }, bud), T, { sx: { att } });
+        const m0 = M.calcMgr(Object.assign({}, mgr), T, { mx: { att } }, []);
+        const m1 = M.calcMgr(Object.assign({ spiff_earned: earnedAmt }, mgr), T, { mx: { att } }, []);
+        if (!Object.is(b0.payroll, b1.payroll) || !Object.is(b0.qual, b1.qual) ||
+            !Object.is(m0.payroll, m1.payroll)) {
+          bad('a measured SPIFF of ' + earnedAmt + ' changed PAYROLL — vendor money must never reach it'); return;
+        }
+        checked++;
+      }
+    }
+    console.log('  ✓ the measured SPIFF moves bonus and $/hr only — payroll identical across ' +
+                checked + ' combinations');
+  })();
+
+  /* Two implementations of one rule; assert they answer identically rather than trusting they were
+     edited together. Same arrangement as the hours helpers above. */
+  (function () {
+    const CASES = [[undefined, undefined], [{}, undefined], [{}, 0], [{}, 300],
+                   [{ spiff: '' }, 40], [{ spiff: null }, 40], [{ spiff: 0 }, 40],
+                   [{ spiff: '0' }, 40], [{ spiff: 12.5 }, 40], [{ spiff: '12.5' }, 40],
+                   [{ spiff: 'x' }, 40], [{ spiff: -5 }, 40]];
+    for (const [i, earnedAmt] of CASES) {
+      const row = earnedAmt === undefined ? {} : { spiff_earned: earnedAmt };
+      const mine = M.incInput({ k: i }, 'k', row).spiff;
+      const theirs = E.spiff(i, row);
+      if (!Object.is(mine, theirs)) {
+        bad('SPIFF resolution disagrees between browser and engine for input ' + JSON.stringify(i) +
+            ' / earned ' + JSON.stringify(earnedAmt) + ': browser ' + mine + ' vs engine ' + theirs);
+        return;
+      }
+    }
+    console.log('  ✓ the browser and engine SPIFF helpers answer identically (' + CASES.length + ' cases)');
   })();
 })();
 
