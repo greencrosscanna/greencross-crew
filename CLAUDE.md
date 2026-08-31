@@ -412,8 +412,17 @@ live would re-derive a paid fortnight against today's thresholds.
 
 **Never recompute a closed period.** The benchmarks have already moved once: the source spreadsheet
 measured **gross** discount against a ~2.75% bar, the app measures budtender-controlled
-**discretionary** discount against 1.5%. Same staff, same fortnight, 7.30% and 2.81%. So the PDFs are
-history, *not* a penny-match corpus — run the app's formulas over them and they disagree, correctly.
+**discretionary** discount against whatever the settings tray holds. Same staff, same fortnight,
+7.30% and 2.81%. So the PDFs are history, *not* a penny-match corpus — run the app's formulas over
+them and they disagree, correctly.
+
+*Corrected 2026-08-31: this named Crew's bar as **1.5%**; the live value in GX Core kv
+`incentiveThresholds` is **1.0**. Sky: "my notes about 1.5 should be irrelevant, we built a setting
+that can be updated and that should be what influences the calculations." The ~2.75% stays because
+it describes the old spreadsheet, which really is frozen; Crew's own bar is a setting and naming it
+here just dates the file. Same failure as the `spiff_payouts` and `version_history` corrections
+above — a doc asserting a value nothing can contradict. Read `budtender.discountMaxPct` from the
+tray, never from this paragraph.*
 Leaderboard still has this bug in miniature: its performance figures freeze but its thresholds do
 not, so editing the discount goal re-scores every period it already paid.
 
@@ -640,6 +649,153 @@ have none). Anyone whose store does not resolve exports under `UNASSIGNED` rathe
 **On screen, stores come from the registry** — `GXStores.name(store_id)`, never the label the row
 arrived with. The original shows on hover.
 
+### What the APPROVAL path was computing, and it was not what the screen showed (2026-08-31)
+
+Found the day before the first live approval, all on the one path that writes
+`crew_incentive_history` — the table that cannot be edited afterwards. None of it changed anybody's
+**pay**: SPIFF cancels out of `payroll` on both sides (`bonus - spiff` for budtenders, `payroll +
+spiff` for managers) and the Capstone export carries `payroll` only. What was wrong was the frozen
+`spiff`, `bonus` and `$/hr` columns, plus one that *would* have moved payroll.
+
+- **`incentiveApprove_` never called `applySpiffEarnings_`.** The engine's calcs read `spiff` from
+  the inputs tab alone and never looked at `spiff_earned`, so everyone whose SPIFF was **measured**
+  rather than typed — the normal case, and the entire point of reading it from SPIFF — froze at $0.
+  Fixed by folding SPIFF in before computing, and by `incSpiff_`, which mirrors the browser's
+  `incInput` exactly. **A typed 0 still beats the measurement** (zeroing a miss is a decision); only
+  an absent one falls through.
+- **A blank spiff cell was read as a deliberate $0, and this broke the SCREEN too.** `inputsFor_`
+  did `Number(r.spiff || 0) || 0`, so a blank came back as 0 and the browser treated it as an
+  override. Ticking **attendance** creates the inputs row with spiff still empty — so every person
+  with an att tick displayed $0 SPIFF on the live dashboard, not just in history. `inputsFor_` now
+  returns `null` for a blank, the same shape `hours` already used for the same reason.
+- **Approval computed against Leaderboard's thresholds; the screen computed against GX Core's.**
+  `getIncentive_` has always overridden `live.thresholds` with `incentiveThresholds_()`;
+  `incentiveApprove_` and the send preview did not. They agree while LB's own read of Core succeeds
+  — but LB falls back to its local ScriptProperty and then to its **defaults**, so the two diverge
+  exactly when Core is unreachable. **Unlike SPIFF, this moves payroll.** `approvalThresholds_` is
+  now the one source, it **refuses** rather than falling back (freezing pay against a scheme Core
+  cannot confirm is not a degradation, it is a wrong record), and `freezeScheme_` records the scheme
+  actually used. The dry run reports `leaderboard_agrees` — false is not an error, it means the
+  **board** is grading people against a different scheme from the one they are paid on.
+
+**Two refusals, one rule: an unreadable source must not freeze as an empty one.** A failed SPIFF
+read now refuses the approval instead of writing $0 for everybody; `spiff_unavailable=yes` is the
+acknowledgement, and it is written into every row's note so the record says the column is
+incomplete. A *successful* read with no programs is not a failure and needs no acknowledgement.
+
+### A SPIFF program belongs to ONE pay period — majority, not overlap (2026-08-31)
+
+SPIFF measures a program over **its own window** (`sellthrough_` runs `prog.start_date` →
+`prog.end_date`, never per fortnight), so `earned` is one figure for the whole program. Crew
+attributed it to every period the window **overlapped** — a program spanning two fortnights paid its
+full total into **both**, and the closed one showed money earned after it ended.
+
+**The match is the pay period, and majority is only the fallback** (Sky, 2026-08-31: *"let's use the
+pay period as the match. It is the thing that doesn't change and they are always linked… the program
+dates are selected by pay period ranges, so they should always match."*)
+
+**The field of that name is half the answer, and it is not a date.** `pay_period` is populated on
+some programs and blank on others, and where it is set it holds a human-readable **range**. Live
+cache, 2026-08-31: 38 rows read `"2026-08-17 - 2026-08-30"`, 25 read `""`. So it cannot be the only
+rung — a blank one would pay nobody — and **it must never be compared raw**: `stored ===
+'2026-08-17'` is false against that range. That is the same trap already recorded against
+`?action=progress`, where it made the column read **$0 for everyone**. `spiffPeriodOf_` takes the
+first date out of whatever shape is stored. The picker also fills the dates **from** the period, so
+an exact window is the link for everything the column is blank on. Three rungs, most authoritative
+first:
+
+| rung | test | when |
+|---|---|---|
+| `pay_period` | the stored **range**'s start equals `pp_start` | programs saved through the record editor |
+| `exact_window` | program start **and** end equal the period's | everything else that was picked from the dropdown |
+| `majority` | more than half the window falls inside | historical records whose dates never lined up |
+
+***Only a RANGE counts as a pay period, and that distinction is load-bearing.*** The column holds two
+different facts. The picker writes a range; the **22 programs seeded from the .docx files on
+2026-08-30 carry a single date four or five days after the program ENDED — the day it was paid out.**
+
+| program | dates | stored `pay_period` |
+|---|---|---|
+| `green-cross-test-202608` | 08-17 → 08-30 | `2026-08-17 - 2026-08-30` — the period |
+| `freshy-2026-02-02…` | 02-02 → 02-15 | `2026-02-20` — a payout date |
+| `kaprikorn-2025-11-24…` | 11-24 → 12-07 | `2025-12-12` — a payout date |
+
+**Not one of the 11 populated seed values lands on a pay-period start, while their dates are exact
+periods** (02-02 → 02-15 *is* the 2026-02-02 fortnight). An earlier cut of this read every value as
+a period start and let it win outright, which excluded those programs from **every period at once**
+— not mis-filed by a fortnight, gone, at $0, and unreported, because they are payable and their
+dates are fine so no other check looks at them. Latent only because the progress cache holds two
+programs today; the seeded ones are `closed`, and closed pays, so the first refresh including them
+would have zeroed 22 legacy vendor programs across the whole history. Caught before shipping,
+2026-08-31.
+
+**The invariant that prevents the next version of it:** a stored `pay_period` may *disambiguate*, and
+it may raise a conflict somebody can see — it may **never silently cost a program a match its dates
+alone would have earned**. A bare date is ignored and listed in
+`live.spiff.payout_date_pay_periods`, which is the cleanup that eventually makes rung 1 trustworthy
+for everything. **Those rows are counted correctly, on their dates** — the list is a cleanup queue,
+not a list of wrong numbers, and its wording says so, because read as a warning it sends somebody
+hunting a figure that is already right. It is deliberately **not** narrowed to programs that could
+still move a figure: that would hide the very records the cleanup exists for.
+
+**The cleanup is a SPIFF code change, not data entry.** `pay_period` cannot be edited from the SPIFF
+UI at all — the period picker's save key is stripped (`spiff.js:1118`), so choosing a period fills
+`start_date`/`end_date` and never writes the column, and every program write path requires a session
+token with no deploy-secret route. Don't send anyone to a screen to fix it.
+
+**A range contradicting exact dates pays ONCE — in the period the range names — and is reported on
+BOTH sides.** The second half of that is the fix, not the decoration: an earlier cut raised the
+conflict only where the *dates* pointed, which is the period that pays **nothing**. Approving the
+period the range named handed over the money with `period_conflicts: []` and nothing on the dry run
+to look at — the disagreement was invisible in the one run where money moved, which is precisely the
+decision-nobody-can-see this bag exists to prevent. `spiffIsPeriodWindow_` is what lets the paying
+side raise it: dates merely **edited** off the period are legitimate (SPIFF's own picker says *"they
+stay editable — not every program lines up with payroll"*) and must not become noise, so the warning
+fires only when the dates are exactly **another** pay period — right length *and* on the cadence,
+computed arithmetically so it still answers for 2025 dates the picker no longer reaches.
+
+`exact_window` is what separates a program that **ended on the 30th** from one that **started on the
+31st** — with no reference to status, so it holds even when nobody has closed the first one yet.
+That was the case Sky asked this for.
+
+Majority survives because Sky's older rule still applies to the back catalogue — *"a historical date
+that does not line up is a typo"* — so those still pay, at more than half the window, and are named
+in `live.spiff.loose_dates` while they do. That list empties itself as the dates are corrected,
+rather than becoming a permanent warning nobody reads. `live.spiff.matched_by` counts the rungs; a
+`majority` above zero is the work remaining. Only one period can hold more than half of anything, so
+**double-counting is impossible by construction**, and a program no period owns pays in neither and
+is reported with its amount (`live.spiff.straddling`).
+
+### `closed` means PAID OUT — the status filter that would have zeroed every approval
+
+Crew had **no status check at all** and paid any cache row whose dates lined up, which is how a
+deleted program (BeGoat, Sky 2026-08-31) reached the payout screen. SPIFF's vocabulary is exactly
+three words, from its own status picker: **draft** — not started · **active** — running now ·
+**closed** — *paid out*.
+
+**The obvious filter is the wrong one.** `status === 'active'` looks right and would zero the vendor
+column on **every period anybody ever approves**, because a period is approved *after* it ends, by
+which time its programs have closed — and a $0 there is indistinguishable from a fortnight in which
+nobody earned. So: `active` and `closed` **pay**; `draft` does not; `''` does not.
+
+`''` is not "an old cache row" — SPIFF resolves status at **read time** by joining to its `programs`
+tab, so `''` means that tab has no row for this `program_id`. It is reported by name
+(`live.spiff.not_payable`), never dropped quietly: SPIFF keeps orphans distinct from "no rows" on
+purpose, and a silent filter is where that distinction disappears. An **unrecognised** status is
+counted **and** flagged — withholding wrongly produces a $0 that hides, counting wrongly produces a
+number somebody questions.
+
+Two guards that are one deleted line from becoming silent, both pinned by
+`tests/spiff_attribution_test.js`: payability is settled **before** the window is scored (or a dead
+program that also straddles gets reported as missing money and hand-entered — the worst of the three
+outcomes), and if **no** row carries a `status` key at all the filter is skipped entirely, because a
+SPIFF deployment predating the read-time join would otherwise read every row as an orphan and
+withhold every vendor dollar.
+
+**Still SPIFF's to fix, not Crew's:** a program spanning two fortnights, and any test program left
+`active` (`green-cross-test-202608`, vendor "Green Cross", was live at the time of writing). Crew
+reports both; it does not code around them.
+
 ## Access
 Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
 deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
@@ -662,4 +818,4 @@ above automatically.
 **Close the loop when you're done:** when a dispatched or `/gxwhatsnext`-started task's goals look met,
 proactively tell Sky and **offer to ship/close it out.** Shipping (open/return the PR → `dev_update …
 status=in_review`; on merge → `dev_ship`) auto-completes the Asana to-do and clears it from the Command
-Center. Find the job via `dev_queue` (filtered to `crew`) if you need its id.
+Center. Find the job via `dev_queue` (filtered to this app) when you need its id for the `curl` — but **refer to it by its `title`, never its id**. `job_mtg9vyxs_ewd9` means nothing to Sky; every job carries the to-do text in the same response the id came from, so say that instead, summarised if it's long ("the employee email column"). Same for `bug_…` and note ids.

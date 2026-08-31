@@ -3550,7 +3550,14 @@ function inputsFor_(ppStart) {
   var out = Object.create(null);
   readTab_(INPUTS_TAB, INPUTS_HEADERS).forEach(function (r) {
     if (r.pp_start !== ppStart || !r.employee_id) return;
-    out[r.employee_id] = { att: isTruthyFlag_(r.att), spiff: Number(r.spiff || 0) || 0,
+    /* A BLANK SPIFF CELL IS NOT A ZERO. `null` means "nobody typed anything", which is what lets
+       the measured figure from SPIFF's progress cache stand; a real 0 is Mike deliberately zeroing
+       a miss and must beat it. Collapsing the two here is what broke both halves of this column:
+       ticking ATTENDANCE creates the row with spiff still empty, so every person with a tick was
+       sent `spiff: 0`, the browser read that as a deliberate override, and the measured amount
+       never showed. Same shape as `hours` directly below, for the same reason. */
+    out[r.employee_id] = { att: isTruthyFlag_(r.att),
+                           spiff: (r.spiff === '' || r.spiff == null) ? null : (Number(r.spiff) || 0),
                            hours: r.hours === '' ? null : (Number(r.hours) || null) };
   });
   return out;
@@ -3848,20 +3855,261 @@ function incentiveSpiffRefresh_(p) {
  * that a background refresh silently reverted would be worse than no automation at all: he would
  * fix it, watch it come back, and stop trusting the column. Both are returned; the screen shows the
  * computed one, marks a row where they disagree, and the export uses whichever is in force. */
+/* WHICH PAY PERIOD A SPIFF PROGRAM'S MONEY BELONGS TO.
+ *
+ * SPIFF measures a program over ITS OWN WINDOW — `sellthrough_` runs from `prog.start_date` to
+ * `prog.end_date`, never per fortnight — so `earned` is one figure for the whole program. This used
+ * to be attributed to every pay period the window OVERLAPPED, which means a program spanning two
+ * fortnights paid its full total into BOTH: the same vendor dollars counted twice, and the earlier
+ * period showing money earned after it had already closed.
+ *
+ * Sky's rule stands and is why this is not simple containment: "SPIFFs run concurrent to the pay
+ * period, and a historical date that does not line up is a typo." A program two days out of line
+ * must still land in the fortnight it plainly belongs to. So the test is MAJORITY, not overlap and
+ * not containment — a program counts for the period holding more than half its window:
+ *
+ *   exact match ............. 1.00  → counts here
+ *   off by a day or two ..... 0.86  → counts here (Sky's tolerance, intact)
+ *   split evenly across two . 0.50  → counts NOWHERE, and is reported
+ *   a 90-day vendor program . 0.16  → counts NOWHERE, and is reported
+ *
+ * Only one period can hold more than half of anything, so double-counting is impossible by
+ * construction rather than by nobody having noticed. The excluded cases are REPORTED with their
+ * amounts, not dropped — vendor money nobody can see is the exact failure this column exists to
+ * prevent, and the override field is the answer until SPIFF can measure per period.
+ *
+ * Dates are TEXT and the arithmetic runs at NOON UTC, the same brace `computedPeriods_` uses: a day
+ * count computed at midnight lands on the wrong side of a DST change twice a year. */
+/* IS THIS PROGRAM'S MONEY OWED AT ALL? Crew had no such check until 2026-08-31 — it took every row
+ * in the cache whose dates lined up, which is how a deleted program (BeGoat, Sky 2026-08-31) still
+ * reached the payout screen.
+ *
+ * SPIFF's vocabulary is exactly three (`spiff.js`, the status picker): draft — not started ·
+ * active — running now · closed — PAID OUT. Status is not stored on a cached row; SPIFF resolves it
+ * at read time by joining to its `programs` tab, so what arrives here is current, and `''` means
+ * that tab has no row with this program_id at all.
+ *
+ *   active  → pay. Running now, this is the ordinary case.
+ *   closed  → PAY. "Closed" is SPIFF's word for paid out, not for cancelled, and a pay period is
+ *             approved AFTER it ends — by which time its programs have closed. Excluding these
+ *             would zero the vendor column on every period anybody ever approves, which is the
+ *             opposite of the bug being fixed and would look exactly like a quiet fortnight.
+ *   draft   → no. Never started; nothing is owed.
+ *   ''      → no. SPIFF has no record of the program. Reported by name, never dropped quietly:
+ *             SPIFF keeps orphans distinct from "no rows" on purpose, and a filter is where that
+ *             distinction disappears.
+ *   other   → PAY, and report it. A status this file has not heard of is far more likely to be a
+ *             new flavour of active/closed than a reason to withhold money — and paying wrongly is
+ *             a number on screen somebody can question, while withholding wrongly is a $0 that
+ *             looks exactly like a budtender who sold nothing.
+ */
+function spiffPayable_(status) {
+  var st = String(status == null ? '' : status).trim().toLowerCase();
+  if (st === 'active' || st === 'closed') return { pay: true, why: '' };
+  if (st === 'draft') return { pay: false, why: 'draft — never started' };
+  if (st === '') return { pay: false, why: 'SPIFF has no record of this program' };
+  return { pay: true, why: 'unrecognised status "' + st + '" — counted, please check' };
+}
+
+/* The pay-period START out of whatever shape SPIFF stored. The column has held a bare date, a
+ * human-readable range ("2026-08-17 - 2026-08-30"), and — before `forceProgressTextDates_` pinned it
+ * to plain text — a Date object that serialised to an ISO timestamp. The first YYYY-MM-DD in the
+ * string is the period start in every one of those shapes. */
+function spiffPeriodOf_(v) {
+  var m = String(v == null ? '' : v).match(/\d{4}-\d{2}-\d{2}/);
+  return m ? m[0] : '';
+}
+
+/* THE SAME COLUMN MEANS TWO DIFFERENT THINGS, and only one of them is a pay period.
+ *
+ * Programs saved through the record editor carry a RANGE — "2026-08-17 - 2026-08-30" — which is the
+ * period, written by the picker. The 22 programs seeded from the .docx files on 2026-08-30 carry a
+ * SINGLE date that is consistently four or five days AFTER the program ends: the day the spiff was
+ * PAID OUT, not the fortnight it was earned in.
+ *
+ *   green-cross-test-202608   pp "2026-08-17 - 2026-08-30"   dates 08-17..08-30   period
+ *   freshy-2026-02-02…        pp "2026-02-20"                dates 02-02..02-15   payout date
+ *   kaprikorn-2025-11-24…     pp "2025-12-12"                dates 11-24..12-07   payout date
+ *
+ * Not one of the 11 seeded values that is populated lands on a pay-period start — while their DATES
+ * are exact periods (02-02..02-15 IS the 2026-02-02 fortnight). So reading every value as a period
+ * start and letting it win excluded those programs from EVERY period at once: not mis-attributed by
+ * a fortnight, gone, at $0, with nothing raised — the programs are payable and their dates are fine,
+ * so no other report catches them. Latent only because the progress cache holds two programs today;
+ * the seeded ones are `closed`, and closed pays, so the first refresh that included them would have
+ * zeroed 22 legacy vendor programs across the whole history.
+ *
+ * Hence: only a RANGE is treated as a pay period. A bare date is the legacy payout-date shape and
+ * gets no vote — the window decides, which for those records is exactly right. */
+function spiffPeriodRangeStart_(v) {
+  var m = String(v == null ? '' : v).match(/\d{4}-\d{2}-\d{2}/g);
+  return (m && m.length >= 2) ? m[0] : '';
+}
+
+/* WHICH PAY PERIOD A PROGRAM BELONGS TO — exact first, heuristic only as a fallback.
+ *
+ * Sky, 2026-08-31: "let's use the pay period as the match. It is the thing that doesn't change and
+ * they are always linked… the program dates are selected by pay period ranges, so they should
+ * always match." That is right, and it is a better rule than a share of a window. It just cannot be
+ * read off the field of that name:
+ *
+ *   `pay_period` IS POPULATED ON SOME PROGRAMS AND BLANK ON OTHERS, and it holds a human-readable
+ *   RANGE, not a start date. Live cache, 2026-08-31: 38 rows carry "2026-08-17 - 2026-08-30" and 25
+ *   carry "". So it cannot be the only rung — a blank one would pay nobody — and it cannot be
+ *   compared raw: `stored === '2026-08-17'` is false against that range, which is the trap already
+ *   recorded against the `?action=progress` filter, where it made the whole column read $0.
+ *   `spiffPeriodOf_` takes the FIRST date out of whatever shape is stored; that is the period start
+ *   in all of them. Never compare the raw string.
+ *
+ *   (Corrected 2026-08-31, same day: this comment claimed the column was empty on EVERY program,
+ *   reasoned from the source — the record editor's period picker has its save key stripped, and the
+ *   calculator import writes ''. Live data disproved it within the hour. Some writer or a hand edit
+ *   populates it; reading the code did not find which, and the honest version of that is this
+ *   sentence rather than a mechanism nobody verified.)
+ *
+ * The picker also FILLS THE DATES FROM THE PERIOD, so a program tied to one carries that period's
+ * exact start and end — which is the link for every program whose `pay_period` is blank. Three
+ * rungs, most authoritative first:
+ *
+ *   pay_period    the stored period, if SPIFF ever starts writing it. Authoritative when present.
+ *   exact_window  start and end equal the period's. The normal case for anything picked from the
+ *                 dropdown, and it separates a programme that ENDED on the 30th from one that
+ *                 STARTED on the 31st without caring whether either is still marked active.
+ *   majority      the old share-of-window rule, for historical records whose dates never lined up.
+ *                 Counted, but REPORTED — this is the typo list Sky said he would fix, and it
+ *                 disappears on its own as those records are corrected.
+ */
+/* Is this window a pay period in its own right — the right length AND on the cadence? Used to tell
+ * a program whose dates were EDITED away from its period (legitimate; SPIFF's own picker says "they
+ * stay editable — not every program lines up with payroll") from one whose dates are exactly some
+ * OTHER period, which is a contradiction worth a human. Arithmetic rather than a list, so it answers
+ * for 2025 dates the period picker no longer reaches back to. Noon UTC, same DST brace as
+ * `computedPeriods_`. */
+function spiffIsPeriodWindow_(a, b, anchor, days) {
+  var ISO = /^\d{4}-\d{2}-\d{2}$/;
+  if (!ISO.test(a) || !ISO.test(b) || !ISO.test(anchor) || !(days > 0)) return false;
+  var noon = function (d) { return Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 12); };
+  if (Math.round((noon(b) - noon(a)) / 86400000) + 1 !== days) return false;
+  var off = Math.round((noon(a) - noon(anchor)) / 86400000);
+  return off % days === 0;
+}
+
+function spiffPeriodMatch_(progStart, progEnd, ppStart, ppEnd, payPeriod) {
+  var v = spiffShare_(progStart, progEnd, ppStart, ppEnd);
+  if (v.bad) return { bad: true, how: '', match: false, share: 0 };
+  var exact = (progStart === ppStart && progEnd === ppEnd);
+  var stored = spiffPeriodRangeStart_(payPeriod);
+  if (stored) {
+    if (stored === ppStart) return { bad: false, how: 'pay_period', match: true, share: 1 };
+    /* A range that names one period while the dates are exactly another. Counted in NEITHER and
+       reported: guessing would either double-pay (letting both rungs win in their own period) or
+       silently zero it (letting the range exclude). The one thing that must not happen is a
+       decision nobody can see. */
+    if (exact) return { bad: false, how: 'conflict', match: false, share: 1, conflict: true };
+    return { bad: false, how: 'pay_period', match: false, share: v.share };
+  }
+  /* A bare date was present and deliberately ignored — the legacy payout-date shape. Reported on
+     BOTH remaining rungs: the seeded records match on `exact_window`, so attaching it only to
+     `majority` would report the ignored value for nobody it actually applies to. */
+  var ignored = spiffPeriodOf_(payPeriod) || '';
+  if (exact) return { bad: false, how: 'exact_window', match: true, share: 1, ignored_pay_period: ignored };
+  return { bad: false, how: 'majority', match: v.share > 0.5, share: v.share, ignored_pay_period: ignored };
+}
+
+function spiffShare_(progStart, progEnd, ppStart, ppEnd) {
+  var ISO = /^\d{4}-\d{2}-\d{2}$/;
+  if (!ISO.test(progStart) || !ISO.test(progEnd) || progStart > progEnd) return { bad: true, share: 0 };
+  if (!ISO.test(ppStart) || !ISO.test(ppEnd) || ppStart > ppEnd) return { bad: true, share: 0 };
+  var noon = function (d) { return Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10), 12); };
+  var days = function (a, b) { return Math.round((noon(b) - noon(a)) / 86400000) + 1; };   // inclusive
+  var from = progStart > ppStart ? progStart : ppStart;
+  var to   = progEnd   < ppEnd   ? progEnd   : ppEnd;
+  if (from > to) return { bad: false, share: 0 };                    // no overlap at all
+  return { bad: false, share: days(from, to) / days(progStart, progEnd) };
+}
+
 function applySpiffEarnings_(live, ppStart) {
   var sp = spiffProgressFor_(ppStart);
   if (sp.ok === false) { live.spiff = { ok: false, error: sp.error }; return; }
 
-  /* Sky: SPIFFs run concurrent to the pay period, and a historical date that does not line up is a
-     typo. So a program counts for this period when its window OVERLAPS — not when a string matches. */
   var d10 = function (v) { return String(v || '').slice(0, 10); };
   var ppEnd = d10((live.payPeriod || {}).end);
   var ppFrom = d10(ppStart);
-  var rows = (sp.rows || []).filter(function (r) {
+  /* Does this SPIFF deployment resolve status at all? If NOT A SINGLE row carries the key, it
+     predates the read-time join, and applying the payability filter would read every row as an
+     orphan and zero the whole column. Degrade to the old date-only behaviour and SAY SO, rather
+     than silently withholding every vendor dollar because the other app is behind. */
+  var hasStatus = (sp.rows || []).some(function (r) { return r && r.status !== undefined; });
+
+  /* The cadence, for the "are these dates exactly ANOTHER period" cross-check below. Read once, and
+     an unreadable config just disables that one warning rather than failing the fold. */
+  var ppAnchor = '', ppDays = 0;
+  try { ppAnchor = String(GXCore.getKv('cfg.payPeriodAnchor') || '').slice(0, 10); } catch (e) {}
+  try { ppDays = Number(GXCore.getKv('cfg.payPeriodDays')) || 14; } catch (e) { ppDays = 14; }
+
+  var rows = [], straddle = Object.create(null), malformed = Object.create(null);
+  var notPayable = Object.create(null), oddStatus = Object.create(null);
+  var looseDates = Object.create(null), matchedBy = Object.create(null);
+  var conflicts = Object.create(null), payoutDates = Object.create(null);
+  function note(bag, r, a, b, why) {
+    var k = String(r.program_id);
+    var e = bag[k] || (bag[k] = { program_id: r.program_id, vendor: r.vendor, name: r.program_name,
+                                  window: (a || '?') + ' → ' + (b || '?'), status: r.status,
+                                  reason: why, earned: 0 });
+    e.earned = Math.round((e.earned + (Number(r.earned) || 0)) * 100) / 100;
+  }
+  (sp.rows || []).forEach(function (r) {
     var a = d10(r.start_date), b = d10(r.end_date);
-    if (!a || !b) return false;
-    return a <= ppEnd && b >= ppFrom;
+    /* PAYABILITY IS CHECKED FIRST, before the window is even looked at. A dead program that also
+       straddles two fortnights would otherwise be reported as "$350 of vendor money nobody can
+       see, use the override" — which is precisely the wrong prompt for money that is not owed. */
+    if (hasStatus) {
+      var pay = spiffPayable_(r.status);
+      if (!pay.pay) { note(notPayable, r, a, b, pay.why); return; }
+      if (pay.why) note(oddStatus, r, a, b, pay.why);
+    }
+    var v = spiffPeriodMatch_(a, b, ppFrom, ppEnd, r.pay_period);
+    if (v.bad) { malformed[String(r.program_id)] = (r.program_name || r.program_id) +
+                 ' (' + (a || '?') + ' → ' + (b || '?') + ')'; return; }
+    if (v.conflict) { note(conflicts, r, a, b, 'pay_period says ' +
+                        spiffPeriodRangeStart_(r.pay_period) + ' but the dates are this period'); return; }
+    if (v.match) {
+      rows.push(r);
+      matchedBy[v.how] = (matchedBy[v.how] || 0) + 1;
+      /* THE CONFLICT MUST BE VISIBLE ON THE SIDE THAT PAYS. Raising it only where the DATES point
+         put the warning on the one period that pays nothing: approve the period the range names and
+         the money arrives with an empty conflicts list and nothing on the dry run to look at. A
+         disagreement invisible in the run where money moves is the decision nobody can see that
+         this whole bag exists to prevent. Only when the dates are exactly ANOTHER pay period —
+         merely custom dates are legitimate and must not become noise. */
+      if (v.how === 'pay_period' && !(a === ppFrom && b === ppEnd) &&
+          spiffIsPeriodWindow_(a, b, ppAnchor, ppDays)) {
+        note(conflicts, r, a, b, 'paid into ' + ppFrom + ' because pay_period says so, but its dates are the ' + a + ' period');
+      }
+      /* A legacy payout-date value that was ignored so the dates could decide. Worth listing once:
+         cleaning them up in SPIFF is what eventually makes rung 1 trustworthy for everything. */
+      /* Wording matters more than usual here: this row's money IS counted, on its dates, correctly.
+         The entry is a DATA-CLEANUP item, not a discrepancy — read as a warning it would send
+         somebody hunting a figure that is already right. Deliberately not filtered down to programs
+         that could still move a number: that would hide exactly the records the cleanup is for. */
+      if (v.ignored_pay_period) note(payoutDates, r, a, b,
+                                     'counted correctly on its dates; its pay_period column holds the payout date "' +
+                                     v.ignored_pay_period + '" rather than a period — cleanup, not a discrepancy');
+      /* Counted, but its dates do not line up with any pay period — the record Sky is going to
+         fix. Named while it still pays, so the list empties itself as the typos are corrected
+         rather than becoming a permanent warning nobody reads. */
+      if (v.how === 'majority') note(looseDates, r, a, b, 'dates do not match a pay period exactly');
+      return;
+    }
+    if (v.how === 'majority' && v.share > 0) {
+      var k = String(r.program_id);
+      var e = straddle[k] || (straddle[k] = { program_id: r.program_id, vendor: r.vendor,
+                                             name: r.program_name, window: a + ' → ' + b,
+                                             in_period_pct: Math.round(v.share * 100), earned: 0 });
+      e.earned = Math.round((e.earned + (Number(r.earned) || 0)) * 100) / 100;
+    }
   });
+  var bagList = function (bag) { return Object.keys(bag).map(function (k) { return bag[k]; }); };
 
   /* SPIFF's employee_id is DUTCHIE'S numeric id (42790), not GX Core's slug (tyler_goldsmith) —
      it attributes from Dutchie's own export. The registry already carries dutchie_employee_id for
@@ -3916,7 +4164,29 @@ function applySpiffEarnings_(live, ppStart) {
   });
   live.spiff = { ok: true, refreshed_at: sp.refreshed_at || '', matched: matched,
                  unmatched: unmatched, people: (sp.by_employee || []).length,
-                 rows_in_window: rows.length, rows_in_cache: (sp.rows || []).length };
+                 rows_in_window: rows.length, rows_in_cache: (sp.rows || []).length,
+                 /* Programs whose window no single pay period holds a majority of. Their money is
+                    NOT in the figures above — it is listed here so it can be entered by hand
+                    rather than silently double-counted or silently lost. */
+                 straddling: bagList(straddle),
+                 malformed: Object.keys(malformed).map(function (k) { return malformed[k]; }),
+                 /* Programs whose money is NOT owed — draft, or deleted from SPIFF's programs tab.
+                    Named rather than dropped, so "SPIFF lost a row" stays distinguishable from
+                    "nothing was earned", which is the distinction SPIFF itself keeps. */
+                 not_payable: bagList(notPayable),
+                 /* HOW each counted program was tied to this period. `majority` above zero means
+                    somebody's dates need correcting; it should fall to zero and stay there. */
+                 matched_by: matchedBy,
+                 loose_dates: bagList(looseDates),
+                 /* Counted in no period because its two claims disagree — needs a human, not a guess. */
+                 period_conflicts: bagList(conflicts),
+                 /* Counted on their dates; their pay_period column holds a payout date. */
+                 payout_date_pay_periods: bagList(payoutDates),
+                 /* Counted, but with a status this file does not recognise. */
+                 odd_status: bagList(oddStatus),
+                 /* False = the SPIFF deployment predates the read-time status join, so nothing was
+                    filtered on payability and a dead program could still be in the figures. */
+                 status_checked: hasStatus };
 }
 
 /**
@@ -4078,6 +4348,19 @@ function saveIncentiveInput_(p) {
     }
   }
 
+  /* SPIFF IS REFUSED LOUDLY TOO, and for a sharper reason than hours. `inputsFor_` now reads a
+     blank as "no override" and anything else as a deliberate amount — so an unparseable cell would
+     read back as an override of $0 and SUPPRESS the figure SPIFF measured, which is the one
+     outcome this column exists to prevent. Empty still clears, which is how a row goes back to
+     the measured value. Negatives are allowed: a clawback is a real correction. */
+  if (p.spiff !== undefined && String(p.spiff).trim() !== '') {
+    var sv = Number(String(p.spiff).trim());
+    if (!isFinite(sv)) {
+      return { ok: false, error: 'invalid SPIFF: ' + p.spiff +
+               ' (expected a number, or empty to use the amount SPIFF measured)' };
+    }
+  }
+
   var sh = sheetOf_(INPUTS_TAB, INPUTS_HEADERS);
   var rows = readTab_(INPUTS_TAB, INPUTS_HEADERS);
   var idx = -1;
@@ -4143,9 +4426,28 @@ function incHours_(i, T) {
   return (isFinite(h) && h > 0) ? h : T.hoursPerPeriod;
 }
 
+/* SPIFF: measured unless somebody overrode it. Mirrors the browser's `incInput` EXACTLY — the two
+ * implementations exist on purpose (see the header) and this is the rule they have to agree on.
+ *
+ * The engine read only `inputs` until 2026-08-31, so `spiff_earned` — the figure SPIFF actually
+ * measured, which is the whole point of the column and the only one most people have — never
+ * reached the engine's arithmetic. The screen showed it, `incentiveApprove_` froze 0. Payroll was
+ * never affected (SPIFF cancels out of it on both sides, and the Capstone export carries payroll),
+ * so nobody was paid the wrong amount; the permanent record's `spiff`, `bonus` and `$/hr` columns
+ * were simply wrong, and history is immutable.
+ *
+ * ORDER MATTERS AND IS NOT SYMMETRIC: a manual entry wins even when it is 0, because zeroing a miss
+ * is a decision. Only an ABSENT one falls through to what SPIFF measured. */
+function incSpiff_(i, row) {
+  var manual = (i && i.spiff != null && i.spiff !== '') ? Number(i.spiff) : null;
+  if (manual != null && isFinite(manual)) return manual;
+  var earned = (row && row.spiff_earned != null) ? Number(row.spiff_earned) : 0;
+  return isFinite(earned) ? earned : 0;
+}
+
 function incCalcBud_(b, T, inputs) {
   var t = T.budtender, i = inputs[b.employee_id || b.nameKey] || {};
-  var spiff = Number(i.spiff || 0) || 0, att = !!i.att;
+  var spiff = incSpiff_(i, b), att = !!i.att;
   var low  = (t.lowVolStores || []).indexOf(b.storeSlug) !== -1;
   var qual = b.txn >= (low ? t.txnQualifyLowVol : t.txnQualify);
   var aovB = (qual && b.aov >= t.aovTarget) ? t.aovBonus : 0;
@@ -4158,7 +4460,7 @@ function incCalcBud_(b, T, inputs) {
 
 function incCalcMgr_(mgr, T, inputs, budtenders) {
   var t = T.manager, i = inputs[mgr.employee_id || mgr.nameKey] || {};
-  var spiff = Number(i.spiff || 0) || 0;
+  var spiff = incSpiff_(i, mgr);
   var pct = mgr.target > 0 ? mgr.sales / mgr.target * 100 : 0;
   var sB = 0;
   for (var a = 0; a < t.salesTiers.length; a++) {
@@ -4229,9 +4531,38 @@ function incentiveApprove_(p) {
              live.payPeriod.end + '). Sales bonuses are not final until it ends.' };
   }
 
-  var T = live.thresholds, inputs = inputsFor_(pp), rows = [];
+  /* FOLD SPIFF IN BEFORE COMPUTING. This was missing until 2026-08-31: approval computed from
+     `inputs` alone, so every person whose SPIFF was MEASURED rather than typed — which is the
+     normal case, and the entire point of reading it from SPIFF — was frozen at 0. Nobody was paid
+     wrongly (SPIFF cancels out of payroll, and the export carries payroll), but `crew_incentive_
+     history` is what every later view reads and it is immutable. Ordered after the open-period
+     refusal so a period that cannot be approved does not pay for a cross-app round trip. */
+  applySpiffEarnings_(live, live.payPeriod.start);
+
+  /* A FAILED SPIFF READ IS NOT AN EMPTY ONE, and approval is the one write that cannot be taken
+     back. Same rule as the nightly Dutchie scan and the Core read behind the discount rules:
+     freezing $0 for everybody because SPIFF was unreachable looks exactly like a fortnight in
+     which no vendor money was earned, and there is no way to tell the two apart afterwards.
+     `spiff_unavailable=yes` is the acknowledgement, not a bypass — it is recorded on every row it
+     writes, so the record says the column is incomplete instead of quietly claiming zero. A
+     successful read with no programs is NOT a failure and needs no acknowledgement. */
+  var spiffFailed = !!(live.spiff && live.spiff.ok === false);
+  var spiffAck = String(p.spiff_unavailable || '') === 'yes';
+  if (spiffFailed && !spiffAck) {
+    return { ok: false, error: 'SPIFF could not be read (' + (live.spiff.error || 'unknown') +
+             '), so vendor amounts would freeze at $0 for everyone and this record cannot be ' +
+             'edited afterwards. Fix the SPIFF connection and approve again, or re-send with ' +
+             'spiff_unavailable=yes to approve without them and say so on the record.' };
+  }
+
+  var scheme = approvalThresholds_(live);
+  if (!scheme.ok) return { ok: false, error: scheme.error };
+  live.thresholds = scheme.T;                 // so freezeScheme_ records the one that was USED
+
+  var T = scheme.T, inputs = inputsFor_(pp), rows = [];
   var now = new Date().toISOString();
   var by  = String(auth.user || '');
+  var noteTxt = 'approved by ' + by + (spiffFailed ? ' — SPIFF unreadable, vendor amounts not included' : '');
   function push(section, r, c, extra) {
     rows.push([pp, String(live.payPeriod.end || ''), section, r.employee_id || '', r.name || '',
                r.storeName || '', r.storeSlug || '',
@@ -4239,7 +4570,7 @@ function incentiveApprove_(p) {
                extra.disc == null ? '' : extra.disc, extra.aov == null ? '' : extra.aov,
                c.spiff == null ? '' : c.spiff, c.bonus, c.hr,
                c.payroll == null ? c.bonus : c.payroll,
-               'approved by ' + by, 'approved', now]);
+               noteTxt, 'approved', now]);
   }
   (live.budtenders || []).forEach(function (b) {
     push('budtender', b, incCalcBud_(b, T, inputs),
@@ -4266,9 +4597,34 @@ function incentiveApprove_(p) {
   }
   var split = { manager: sectionTotal('manager'), budtender: sectionTotal('budtender'),
                 admin: sectionTotal('admin') };
+  /* The SPIFF column, stated in the dry run rather than only in the rows it writes. This is what
+     `incentive_send` puts in front of the approver, and a vendor total of $0 is the symptom of
+     every failure mode this fold has — an unreachable SPIFF, a join that matched nobody, a stale
+     cache. Reporting it here is what makes it noticeable BEFORE the immutable write. */
+  var spiffTotal = Math.round(rows.reduce(function (a, r) { return a + (Number(r[11]) || 0); }, 0) * 100) / 100;
+  var spiffInfo = { ok: !spiffFailed, error: (live.spiff && live.spiff.error) || '',
+                    acknowledged: spiffFailed && spiffAck,
+                    refreshed_at: (live.spiff && live.spiff.refreshed_at) || '',
+                    matched: (live.spiff && live.spiff.matched) || 0,
+                    unmatched: (live.spiff && live.spiff.unmatched) || [],
+                    /* Money deliberately NOT included — a program no single period owns. Listed
+                       here because this is the last screen before an immutable write. */
+                    straddling: (live.spiff && live.spiff.straddling) || [],
+                    not_payable: (live.spiff && live.spiff.not_payable) || [],
+                    matched_by: (live.spiff && live.spiff.matched_by) || {},
+                    loose_dates: (live.spiff && live.spiff.loose_dates) || [],
+                    period_conflicts: (live.spiff && live.spiff.period_conflicts) || [],
+                    odd_status: (live.spiff && live.spiff.odd_status) || [],
+                    status_checked: !!(live.spiff && live.spiff.status_checked),
+                    total: spiffTotal };
+  /* `lb_agrees: false` is not an error and does not block: the figures here are GX Core's, which is
+     the authority. It means LEADERBOARD is grading the board against a different scheme from the one
+     people are paid on — worth knowing, and invisible from either app on its own. */
+  var schemeInfo = { source: scheme.source, leaderboard_agrees: scheme.lb_agrees };
   if (String(p.confirm || '') !== 'yes') {
     return { ok: true, dry_run: true, pp_start: pp, rows: rows.length, pp_end: live.payPeriod.end,
-             payroll_total: Math.round(total * 100) / 100, split: split,
+             payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
+             thresholds: schemeInfo,
              unmatched: live.unmatched || [], note: 'nothing written — re-send with confirm=yes' };
   }
 
@@ -4295,8 +4651,8 @@ function incentiveApprove_(p) {
   freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
   wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
-           payroll_total: Math.round(total * 100) / 100, split: split,
-           unmatched: live.unmatched || [] };
+           payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
+           thresholds: schemeInfo, unmatched: live.unmatched || [] };
 }
 
 /* ══ Approval — who prepares, who decides, and how a mistake gets undone ══════════════════════════
@@ -4436,7 +4792,11 @@ function incentiveSend_(p) {
     var live = fetchLivePerf_(pp);
     if (live.ok === false) return live;
     stampEmployeeIds_(live);
-    var T = live.thresholds, inputs = inputsFor_(pp), n = 0;
+    /* GX Core's scheme, the same one incentiveApprove_ will use. A preview computed against
+       Leaderboard's copy would show a total the approval then does not produce. */
+    var _sch = approvalThresholds_(live);
+    if (!_sch.ok) return { ok: false, error: _sch.error };
+    var T = _sch.T, inputs = inputsFor_(pp), n = 0;
     var sp = { budtender: 0, manager: 0, admin: 0 };
     (live.budtenders || []).forEach(function (b) { sp.budtender += incCalcBud_(b, T, inputs).payroll || 0; n++; });
     (live.managers || []).forEach(function (m) {
@@ -4640,6 +5000,46 @@ function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reas
  * prefix is public on ?action=config and comp policy should not be readable by anyone with the URL.
  * Crew writes; Leaderboard and Crew both read.
  */
+/* Structural equality without JSON.stringify, whose key ORDER is significant — Leaderboard's payload
+ * and Core's parsed value hold the same numbers in whatever order each JSON happened to serialise,
+ * and a false "these disagree" sends somebody hunting a difference that is not there. */
+function deepSame_(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null || typeof a !== 'object' || typeof b !== 'object') return Object.is(a, b);
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  var ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  for (var i = 0; i < ka.length; i++) {
+    if (!Object.prototype.hasOwnProperty.call(b, ka[i]) || !deepSame_(a[ka[i]], b[ka[i]])) return false;
+  }
+  return true;
+}
+
+/* THE SCHEME AN APPROVAL IS COMPUTED AGAINST, and it is GX Core's — never the copy Leaderboard sent.
+ *
+ * `getIncentive_` has always overridden `live.thresholds` with this; `incentiveApprove_` and the
+ * send preview did not, until 2026-08-31. So the screen scored against GX Core and the immutable
+ * record scored against whatever Leaderboard happened to hand over. They agree while LB's own read
+ * of Core succeeds — but LB falls back to its local ScriptProperty and then to its DEFAULTS when
+ * Core is unreachable, which is exactly the moment the two silently diverge. Unlike SPIFF, this
+ * moves PAYROLL: a threshold that differs by a tenth of a point flips whole bonuses.
+ *
+ * NO FALLBACK AND NO OVERRIDE HERE, deliberately. Displaying LB's copy is a reasonable degradation
+ * — the board keeps scoring as it did. Freezing payroll against a scheme GX Core cannot confirm is
+ * not, and it cannot be edited afterwards. Refusing costs a minute in the settings tray; the other
+ * way costs a fortnight of wrong bonuses nobody can tell from right ones. */
+function approvalThresholds_(live) {
+  var core = incentiveThresholds_();
+  if (!core) {
+    return { ok: false, error: 'GX Core holds no incentive thresholds (kv `incentiveThresholds`), ' +
+             'so this would be approved against whatever Leaderboard sent — which falls back to its ' +
+             'own defaults when it cannot reach Core. Open the Incentive settings tray, save the ' +
+             'thresholds, and approve again.' };
+  }
+  return { ok: true, T: core, source: 'gx_core',
+           lb_agrees: deepSame_(live.thresholds || null, core) };
+}
+
 function incentiveThresholds_() {
   var ok = function (t) { return t && t.budtender && t.manager && t.admin; };
   try {

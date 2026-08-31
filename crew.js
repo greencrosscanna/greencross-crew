@@ -2270,6 +2270,12 @@
   function incInput(inputs, key, row) {
     var i = inputs && inputs[key];
     var manual = i && i.spiff !== '' && i.spiff != null ? +i.spiff : null;   // null = no override
+    /* An UNPARSEABLE cell is not an override of NaN. `incentive_save` refuses a non-numeric SPIFF
+       now, so this only catches one written before that guard existed — but without it a single
+       junk cell renders NaN in a money column and, worse, suppresses the amount SPIFF measured.
+       Falling through to the measurement is what the engine's incSpiff_ does, and the two are
+       driven against each other in tests/incentive_math_test.js. */
+    if (manual != null && !isFinite(manual)) manual = null;
     var earned = row && row.spiff_earned != null ? Number(row.spiff_earned) : null;
     return { att: !!(i && i.att),
              spiff: manual != null ? manual : (earned || 0),
