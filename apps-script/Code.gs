@@ -3473,9 +3473,17 @@ function incentiveRelink_(p) {
 
 /** Read imported history back: ?action=incentive_history[&pp_start=YYYY-MM-DD]. */
 function incentiveHistory_(p) {
-  // getIncentive_ calls this after its own requireCrew_ gate, so an internal call skips the
-  // secret check rather than the engine having to hold its own secret to talk to itself.
-  if (!p.__internal && !deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  /* getIncentive_ calls this after its own requireCrew_ gate, so an internal call skips the
+     secret check rather than the engine having to hold its own secret to talk to itself.
+
+     STRICTLY `=== true`, AND THAT IS THE WHOLE GUARD. `p` is `e.parameter`, so every key here can
+     be set by whoever builds the URL — `?action=incentive_history&__internal=1` reached this as a
+     truthy STRING and walked straight past the secret, returning every name, sales figure and
+     payout amount in a closed period to anyone holding the /exec link. Verified live and fixed
+     2026-08-31. A query parameter is always a string, so comparing against the boolean the one
+     real caller passes closes it exactly; `!p.__internal` did not. Any future internal-call flag
+     needs the same treatment — truthiness is not an authentication check. */
+  if (p.__internal !== true && !deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var want = String(p.pp_start || '');
   if (!want) return { ok: true, periods: historyPeriods_() };
   var rows = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
@@ -4526,10 +4534,8 @@ function incentiveApprove_(p) {
   var live = fetchLivePerf_(pp);
   if (live.ok === false) return live;
   stampEmployeeIds_(live);
-  if (live.payPeriod && live.payPeriod.current) {
-    return { ok: false, error: 'this pay period is still open (' + live.payPeriod.start + ' → ' +
-             live.payPeriod.end + '). Sales bonuses are not final until it ends.' };
-  }
+  var _open = incentiveBlockers_(live, false, false);
+  if (_open.length) return { ok: false, error: _open[0].message };
 
   /* FOLD SPIFF IN BEFORE COMPUTING. This was missing until 2026-08-31: approval computed from
      `inputs` alone, so every person whose SPIFF was MEASURED rather than typed — which is the
@@ -4548,11 +4554,11 @@ function incentiveApprove_(p) {
      successful read with no programs is NOT a failure and needs no acknowledgement. */
   var spiffFailed = !!(live.spiff && live.spiff.ok === false);
   var spiffAck = String(p.spiff_unavailable || '') === 'yes';
-  if (spiffFailed && !spiffAck) {
-    return { ok: false, error: 'SPIFF could not be read (' + (live.spiff.error || 'unknown') +
-             '), so vendor amounts would freeze at $0 for everyone and this record cannot be ' +
-             'edited afterwards. Fix the SPIFF connection and approve again, or re-send with ' +
-             'spiff_unavailable=yes to approve without them and say so on the record.' };
+  var _blocked = incentiveBlockers_(live, spiffFailed, spiffAck);
+  if (_blocked.length) {
+    return { ok: false, error: _blocked[0].message + ' Fix the SPIFF connection and approve ' +
+             'again, or re-send with spiff_unavailable=yes to approve without them and say so ' +
+             'on the record.' };
   }
 
   var scheme = approvalThresholds_(live);
@@ -4602,21 +4608,7 @@ function incentiveApprove_(p) {
      every failure mode this fold has — an unreachable SPIFF, a join that matched nobody, a stale
      cache. Reporting it here is what makes it noticeable BEFORE the immutable write. */
   var spiffTotal = Math.round(rows.reduce(function (a, r) { return a + (Number(r[11]) || 0); }, 0) * 100) / 100;
-  var spiffInfo = { ok: !spiffFailed, error: (live.spiff && live.spiff.error) || '',
-                    acknowledged: spiffFailed && spiffAck,
-                    refreshed_at: (live.spiff && live.spiff.refreshed_at) || '',
-                    matched: (live.spiff && live.spiff.matched) || 0,
-                    unmatched: (live.spiff && live.spiff.unmatched) || [],
-                    /* Money deliberately NOT included — a program no single period owns. Listed
-                       here because this is the last screen before an immutable write. */
-                    straddling: (live.spiff && live.spiff.straddling) || [],
-                    not_payable: (live.spiff && live.spiff.not_payable) || [],
-                    matched_by: (live.spiff && live.spiff.matched_by) || {},
-                    loose_dates: (live.spiff && live.spiff.loose_dates) || [],
-                    period_conflicts: (live.spiff && live.spiff.period_conflicts) || [],
-                    odd_status: (live.spiff && live.spiff.odd_status) || [],
-                    status_checked: !!(live.spiff && live.spiff.status_checked),
-                    total: spiffTotal };
+  var spiffInfo = incentiveSpiffReport_(live, spiffFailed, spiffAck, spiffTotal);
   /* `lb_agrees: false` is not an error and does not block: the figures here are GX Core's, which is
      the authority. It means LEADERBOARD is grading the board against a different scheme from the one
      people are paid on — worth knowing, and invisible from either app on its own. */
@@ -4755,6 +4747,53 @@ function wfApproverEmails_() {
 
 function wfMoney_(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
 
+/* THE SPIFF REPORT THAT SITS IN FRONT OF AN APPROVER, built in exactly one place.
+ *
+ * Extracted 2026-08-31. The `preview=1` branch of incentive_send computed its own totals and never
+ * called applySpiffEarnings_ at all, so the route whose entire job is "show me what approving this
+ * would do" folded no vendor money and reported not one of these checks — no unmatched people, no
+ * unpayable programmes, no date conflicts. Its payroll figure was right, because SPIFF cancels out
+ * of payroll on both sides, which is precisely why the gap was invisible: the number you check
+ * agrees while everything you would check it AGAINST is missing.
+ *
+ * Two builders for "what would approval write" is the same shape of bug as the two bonus-math
+ * implementations, minus the differential test that makes those safe. So there is one builder, and
+ * both callers pass through it. */
+function incentiveSpiffReport_(live, failed, ack, total) {
+  var s = live.spiff || {};
+  return { ok: !failed, error: s.error || '', acknowledged: !!(failed && ack),
+           refreshed_at: s.refreshed_at || '',
+           matched: s.matched || 0, unmatched: s.unmatched || [],
+           /* Money deliberately NOT included — a program no single period owns. Listed
+              here because this is the last screen before an immutable write. */
+           straddling: s.straddling || [], not_payable: s.not_payable || [],
+           matched_by: s.matched_by || {}, loose_dates: s.loose_dates || [],
+           period_conflicts: s.period_conflicts || [], odd_status: s.odd_status || [],
+           payout_date_pay_periods: s.payout_date_pay_periods || [],
+           status_checked: !!s.status_checked, total: total };
+}
+
+/* WHAT WOULD STOP THIS PERIOD BEING APPROVED, as data rather than as an early return.
+ *
+ * incentiveApprove_ refuses on these and says why. The preview must not refuse — it writes nothing,
+ * and it is deliberately allowed on an OPEN period so the email can be dry-run before the first
+ * real fortnight closes — but it must SAY the same things, or "the preview looked fine" means
+ * nothing. Same predicates, one list, two dispositions. */
+function incentiveBlockers_(live, spiffFailed, spiffAck) {
+  var out = [];
+  if (live.payPeriod && live.payPeriod.current) {
+    out.push({ code: 'period_open', message: 'this pay period is still open (' +
+      live.payPeriod.start + ' → ' + live.payPeriod.end +
+      '). Sales bonuses are not final until it ends.' });
+  }
+  if (spiffFailed && !spiffAck) {
+    out.push({ code: 'spiff_unreadable', message: 'SPIFF could not be read (' +
+      ((live.spiff && live.spiff.error) || 'unknown') + '), so vendor amounts would freeze at $0 ' +
+      'for everyone and this record cannot be edited afterwards.' });
+  }
+  return out;
+}
+
 /**
  * ?action=incentive_send&pp_start=…  — Mike hands a closed period to Sky.
  * Computes it exactly as approval will, so the email says what approval would write.
@@ -4796,17 +4835,36 @@ function incentiveSend_(p) {
        Leaderboard's copy would show a total the approval then does not produce. */
     var _sch = approvalThresholds_(live);
     if (!_sch.ok) return { ok: false, error: _sch.error };
+    /* FOLD SPIFF, exactly as approval does. Omitting this was the whole bug: the preview reported
+       no vendor money and none of the checks, while its payroll total agreed with approval's —
+       because SPIFF cancels out of payroll. A dry run that is only right about the number nobody
+       doubted is worse than none, because it is trusted. */
+    var _spiffFailed = false, _spiffTotal = 0;
+    var _ack = String(p.spiff_unavailable || '') === 'yes';
+    applySpiffEarnings_(live, (live.payPeriod || {}).start || pp);
+    _spiffFailed = !!(live.spiff && live.spiff.ok === false);
+
     var T = _sch.T, inputs = inputsFor_(pp), n = 0;
     var sp = { budtender: 0, manager: 0, admin: 0 };
-    (live.budtenders || []).forEach(function (b) { sp.budtender += incCalcBud_(b, T, inputs).payroll || 0; n++; });
+    (live.budtenders || []).forEach(function (b) {
+      var c = incCalcBud_(b, T, inputs); sp.budtender += c.payroll || 0;
+      _spiffTotal += Number(c.spiff) || 0; n++;
+    });
     (live.managers || []).forEach(function (m) {
-      sp.manager += incCalcMgr_(m, T, inputs, live.budtenders || []).payroll || 0; n++;
+      var c = incCalcMgr_(m, T, inputs, live.budtenders || []);
+      sp.manager += c.payroll || 0; _spiffTotal += Number(c.spiff) || 0; n++;
     });
     if (live.admin) { sp.admin += incCalcAdmin_(live.admin, T).bonus || 0; n++; }
     Object.keys(sp).forEach(function (k) { sp[k] = Math.round(sp[k] * 100) / 100; });
+    _spiffTotal = Math.round(_spiffTotal * 100) / 100;
+    /* The blockers are REPORTED, not enforced: the preview writes nothing, and it is deliberately
+       allowed on an open period. `would_block` is empty for a period approval would accept. */
     pre = { ok: true, rows: n, payroll_total: Math.round((sp.budtender + sp.manager + sp.admin) * 100) / 100,
             split: sp, pp_end: (live.payPeriod || {}).end || '', unmatched: live.unmatched || [],
-            still_open: !!(live.payPeriod || {}).current };
+            still_open: !!(live.payPeriod || {}).current,
+            spiff: incentiveSpiffReport_(live, _spiffFailed, _ack, _spiffTotal),
+            thresholds: { source: _sch.source, leaderboard_agrees: _sch.lb_agrees },
+            would_block: incentiveBlockers_(live, _spiffFailed, _ack) };
   } else {
     pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
     if (pre.ok === false) return pre;
@@ -4827,9 +4885,15 @@ function incentiveSend_(p) {
   var to = preview
     ? String(p.to || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean)
     : wfApproverEmails_();
+  /* The preview echoes the SAME blocks the approval dry run returns. Returning only totals is what
+     made this route quietly useless: it could not have told anyone that vendor money was missing,
+     that a programme was unpayable, or that the period was still open. */
   if (preview && !to.length) return { ok: true, preview: true, pp_start: pp, rows: pre.rows,
                                       payroll_total: pre.payroll_total, split: pre.split,
                                       still_open: !!pre.still_open,
+                                      spiff: pre.spiff, thresholds: pre.thresholds,
+                                      would_block: pre.would_block || [],
+                                      unmatched: pre.unmatched || [],
                                       to: wfApproverEmails_(), html: html,
                                       note: 'nothing sent — add &to=someone@… to actually mail it' };
 

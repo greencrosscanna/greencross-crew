@@ -415,6 +415,75 @@ const M = (a, b, pp0, pp1, stored) => E.match(a, b, pp0 || PP[0], pp1 || PP[1], 
         'otherwise an older SPIFF deployment zeroes every vendor dollar');
   } else ok('a SPIFF deployment that sends no status degrades to dates-only rather than paying nobody');
 })();
+/* ── The preview must run the same checks as the approval ────────────────────────────────────────
+ *
+ * `?action=incentive_send&preview=1` exists so an approval email can be dry-run before a real
+ * fortnight closes, and it is the route used to show somebody what approving would do. Until
+ * 2026-08-31 it computed its own totals down a separate branch that never called
+ * applySpiffEarnings_ — so it folded no vendor money and reported none of the checks, while its
+ * PAYROLL figure agreed with approval's exactly, because SPIFF cancels out of payroll on both
+ * sides. A dry run that is right about the one number nobody doubts, and silent on everything you
+ * would check it against, is worse than no dry run: it gets trusted.
+ *
+ * Source-level, because the behaviour needs a live Leaderboard, a live SPIFF and a session. What
+ * can be pinned without them is that the preview branch still folds SPIFF and still reports
+ * through the SAME builders approval uses — which is what stops the two drifting apart again. */
+(function previewRunsTheSameChecks() {
+  const gs = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+  const body = (name) => {
+    const i = gs.indexOf('function ' + name + '(');
+    if (i < 0) throw new Error('missing ' + name);
+    let d = 0;
+    for (let k = gs.indexOf('{', i); k < gs.length; k++) {
+      if (gs[k] === '{') d++; else if (gs[k] === '}') { d--; if (!d) return gs.slice(i, k + 1); }
+    }
+    throw new Error('unterminated ' + name);
+  };
+
+  const send = body('incentiveSend_'), approve = body('incentiveApprove_');
+  const prev = send.slice(send.indexOf('if (preview) {'), send.indexOf('} else {'));
+
+  if (!/applySpiffEarnings_\(/.test(prev)) {
+    bad('the preview branch no longer folds SPIFF — it will report $0 vendor money and every check empty');
+  }
+  if (!/approvalThresholds_\(/.test(prev)) {
+    bad('the preview branch no longer takes thresholds from GX Core');
+  }
+  ['incentiveSpiffReport_', 'incentiveBlockers_'].forEach((fn) => {
+    if (!prev.includes(fn)) bad('the preview branch no longer calls ' + fn + ' — the two paths can now disagree');
+    if (!approve.includes(fn)) bad('incentiveApprove_ no longer calls ' + fn + ' — the two paths can now disagree');
+  });
+
+  /* One builder, not two. A second inline copy of the report is how they diverged the first time. */
+  const reports = (gs.match(/period_conflicts:\s*(s\.|\(live\.spiff)/g) || []).length;
+  if (reports !== 1) bad('expected exactly one SPIFF report builder, found ' + reports);
+
+  /* The preview must NOT refuse — it writes nothing and is deliberately allowed on an open period. */
+  if (/if \(_blocked\.length\)|return \{ ok: false, error: _open/.test(prev)) {
+    bad('the preview now refuses on a blocker; it must report `would_block` and carry on');
+  }
+  if (!/would_block/.test(send)) bad('the preview no longer returns would_block');
+
+  console.log('  ✓ the send preview folds SPIFF and reports through the same builders as approval');
+})();
+
+/* The `__internal` flag on incentive_history is an AUTH BYPASS, and `p` is the query string.
+ * `?action=incentive_history&__internal=1` arrived as a truthy STRING and walked past the deploy
+ * secret, returning every name, sales figure and payout amount in a closed period to anyone with
+ * the /exec URL. Verified against the live deployment on 2026-08-31. A query parameter is always a
+ * string, so the guard has to compare against the boolean the one real caller passes. */
+(function internalFlagIsNotSpoofable() {
+  const gs = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+  const i = gs.indexOf('function incentiveHistory_(');
+  const gate = gs.slice(i, i + 1400);
+  if (!/p\.__internal !== true/.test(gate)) {
+    bad('incentive_history no longer requires __internal === true — ?__internal=1 bypasses the deploy secret');
+  }
+  if (/if \(!p\.__internal &&/.test(gs)) {
+    bad('a truthy __internal check is back: a query string can set it and skip the secret');
+  }
+  console.log('  ✓ __internal cannot be set from a query string to bypass the deploy secret');
+})();
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nspiff attribution: all passed');
 process.exit(fail ? 1 : 0);
