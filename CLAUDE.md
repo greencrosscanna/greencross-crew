@@ -315,11 +315,11 @@ attempt records its outcome and its **source** (`editor` / `webapp` / `trigger`)
 property, readable via `?action=mail_check`, which also lists the live triggers.
 
 **Adding a new OAuth scope does not re-prompt, and costs a day if you do not know that.** Adding
-`MailApp` meant the project needed `script.send_mail`; Google decided the authorisation was
+`MailApp` meant the project needed `script.send_mail`; Google decided the authorization was
 already settled and never showed a consent dialog. Every symptom pointed elsewhere:
 
 - Running the function from the editor **grants your account, not the deployment.** The web app
-  is `executeAs: USER_DEPLOYING` and carries its own stored authorisation.
+  is `executeAs: USER_DEPLOYING` and carries its own stored authorization.
 - **`clasp update-deployment` never raises a consent prompt.** Redeploying does not help.
 - The editor logged the run as **Completed** because `sendDigest_` catches the auth error and
   returns it. A refused send looked exactly like a successful one. `sendDigestNow` now rethrows.
@@ -328,7 +328,7 @@ already settled and never showed a consent dialog. Every symptom pointed elsewhe
 [myaccount.google.com/permissions](https://myaccount.google.com/permissions) → *Remove access*,
 then run `sendDigestNow()` from the editor. With no stored grant Apps Script re-derives every
 scope and prompts for the full set. **The engine is down between those two steps** — the web app
-runs on that same authorisation — so it is a minute of outage, not a free action.
+runs on that same authorization — so it is a minute of outage, not a free action.
 
 Deliberately NOT fixed by pinning `oauthScopes` in `appsscript.json`: an explicit list replaces
 auto-detection and would have to enumerate everything **GXCore** needs as well as this script's.
@@ -338,7 +338,7 @@ A scope missed there breaks the roster and the review queue, not just email.
 `GXCore.setAvatar(ref, config, by)` — **v225** — is the single avatar write in the suite, and it is
 **Crew's own logic, promoted**: seed pinned to `employee_number`, lock contention retried, a clear
 NAMED in `clear=` and then verified to have landed. Leaderboard had a second implementation that did
-none of that, so which behaviour a staff member got depended on which app they stood in front of.
+none of that, so which behavior a staff member got depended on which app they stood in front of.
 
 Two consequences for this repo:
 
@@ -383,7 +383,7 @@ Leaderboard. Crew mounts it; it does not own it.
   `core-admin` — it belongs in the shared component, and a local table would diverge on day one.
 - `tests/avatar_picker_adoption_test.js` pins the contract a push gate can hold: both files loaded,
   no vendored copy, no local `.gxava-*` override, `avatarPanel` and the option tables gone. The
-  behaviour (click → save → reload → remove) needs a browser and is not in the gate.
+  behavior (click → save → reload → remove) needs a browser and is not in the gate.
 
 ## Incentive — transplanted from Leaderboard (2026-08-27)
 
@@ -481,7 +481,7 @@ Email links carry a single-use 72-hour token bound to the period **and the total
 **Thresholds live in GX Core kv as `incentiveThresholds`.** Deliberately **not** a `cfg.` key: that
 prefix is public on `?action=config`, and comp policy should not be readable by anyone with the URL.
 They were a Leaderboard ScriptProperty, which was wrong twice — compensation is not the kiosk's, and
-**Leaderboard's own discount colouring reads `budtender.discountMaxPct`** to decide what counts as a
+**Leaderboard's own discount coloring reads `budtender.discountMaxPct`** to decide what counts as a
 good rate on the board every staff member sees. Two copies of that number means the board grades
 people against a goal nobody set on it.
 
@@ -495,7 +495,7 @@ appears to do nothing for minutes.
 
 **The tray's CSS is copied verbatim from `greencross-leaderboard/index.html`** (the `.ist-*` and
 `.inc-tray-*` blocks). Sky designed it; a rewrite was worse. The only change is a variable bridge —
-that sheet names colours `--text`/`--green`/`--border`, gx-theme names them `--gx-*` — aliased once
+that sheet names colors `--text`/`--green`/`--border`, gx-theme names them `--gx-*` — aliased once
 and scoped to the tray. **Re-copy on any change there rather than hand-editing**, and keep the class
 names: renaming one silently unstyles a section instead of erroring.
 
@@ -781,7 +781,7 @@ nobody earned. So: `active` and `closed` **pay**; `draft` does not; `''` does no
 `''` is not "an old cache row" — SPIFF resolves status at **read time** by joining to its `programs`
 tab, so `''` means that tab has no row for this `program_id`. It is reported by name
 (`live.spiff.not_payable`), never dropped quietly: SPIFF keeps orphans distinct from "no rows" on
-purpose, and a silent filter is where that distinction disappears. An **unrecognised** status is
+purpose, and a silent filter is where that distinction disappears. An **unrecognized** status is
 counted **and** flagged — withholding wrongly produces a $0 that hides, counting wrongly produces a
 number somebody questions.
 
@@ -818,4 +818,4 @@ above automatically.
 **Close the loop when you're done:** when a dispatched or `/gxwhatsnext`-started task's goals look met,
 proactively tell Sky and **offer to ship/close it out.** Shipping (open/return the PR → `dev_update …
 status=in_review`; on merge → `dev_ship`) auto-completes the Asana to-do and clears it from the Command
-Center. Find the job via `dev_queue` (filtered to this app) when you need its id for the `curl` — but **refer to it by its `title`, never its id**. `job_mtg9vyxs_ewd9` means nothing to Sky; every job carries the to-do text in the same response the id came from, so say that instead, summarised if it's long ("the employee email column"). Same for `bug_…` and note ids.
+Center. Find the job via `dev_queue` (filtered to this app) when you need its id for the `curl` — but **refer to it by its `title`, never its id**. `job_mtg9vyxs_ewd9` means nothing to Sky; every job carries the to-do text in the same response the id came from, so say that instead, summarized if it's long ("the employee email column"). Same for `bug_…` and note ids. **Then re-list what's open, numbered `[1] [2] [3]…`, instead of proposing a next task** — re-fetch `action=whats_next` (the board moved while you worked) and let Sky pick by number rather than from memory.

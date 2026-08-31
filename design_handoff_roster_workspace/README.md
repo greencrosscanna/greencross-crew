@@ -18,23 +18,23 @@ Approved direction: **B. People workspace**.
 ## About the design files
 
 The `.dc.html` files in this bundle are **design references written in HTML** — working
-prototypes that show the intended look and behaviour. They are **not production code to copy**.
+prototypes that show the intended look and behavior. They are **not production code to copy**.
 They render through a small local runtime (`support.js`) that turns the template + logic class
 into React at load time; that runtime is a preview harness, not something to ship.
 
 The task is to **recreate these designs inside GX Crew's actual environment**: no build step,
 plain ES5-flavoured JavaScript in `crew.js`, DOM built with the existing `el()` / `esc()` /
-`card()` helpers, all colour and type from `gx-theme.css` custom properties loaded from Pages.
+`card()` helpers, all color and type from `gx-theme.css` custom properties loaded from Pages.
 Every literal hex in the prototypes maps to a `--gx-*` token (table below) — **use the token,
 never the hex**. Do not restyle or fork a shared `gx-theme` component from inside Crew; if the
 shared layer needs something, `add_note` to `core-admin`.
 
 ## Fidelity
 
-**High-fidelity.** Colours, type sizes, spacing, radii and states are final and are all taken
-from `gx-theme.css`. Recreate pixel-for-pixel. The one deliberate stand-in: store colours in the
+**High-fidelity.** Colors, type sizes, spacing, radii and states are final and are all taken
+from `gx-theme.css`. Recreate pixel-for-pixel. The one deliberate stand-in: store colors in the
 prototype are hard-coded (`bend #22d3ee`, `center #60a5fa`, `river-rd #a78bfa`, `corporate` no
-colour). In the real app they must come from `GXStores.color(id)` — store colour is data from
+color). In the real app they must come from `GXStores.color(id)` — store color is data from
 the GX Core registry, never a constant in the app.
 
 Sample people, permit numbers, wages and review items in `crew-data.js` are **invented**. No real
@@ -51,7 +51,7 @@ PII is in this bundle.
   then the right cluster (clock + user chip). Min-height 52px, `--gx-surface` background,
   1px `--gx-border` bottom.
 - The tab row keeps whatever the app's real sibling tabs are; **Roster** is the active tab
-  (`box-shadow: inset 0 -2px 0 var(--gx-green)`, colour `--gx-text`). The prototype shows
+  (`box-shadow: inset 0 -2px 0 var(--gx-green)`, color `--gx-text`). The prototype shows
   `Roster / Incentive / Payroll` as placeholders — substitute the real ones.
 - Review and EoM disappear as tabs. Their content moves into this screen (see §3).
 
@@ -66,7 +66,7 @@ solid var(--gx-border)`. Contents left to right:
 | Search | `flex:1 1 320px; max-width:460px`. Input: `--gx-surface-3` bg, 1px `--gx-border`, radius `--gx-radius-md` (8px), 13px text, padding `7px 12px 7px 32px`, `⌕` glyph absolutely positioned at left 11px / top 7px in `--gx-text-mute`. Placeholder "Search people, permits, stores…". Matches name, **nickname**, store label, role, employee number **and permit number**. |
 | Scope segmented | Container `--gx-surface-2`, 1px `--gx-border`, radius 8px, 2px padding. Three buttons — `Active`, `Gaps <n>`, `Retired` — 12px/600, padding `6px 12px`, radius `--gx-radius` (6px). Selected: `--gx-border` background, `--gx-text`. Unselected: transparent, `--gx-text-dim`. Replaces today's three loose checkboxes. |
 | Divider | 1px × 22px, `--gx-border`. |
-| Store pills | Unchanged behaviour from today's `storePills()`: multi-select, derived from the loaded roster (not the registry, so `corporate` and the "No store" defect bucket both appear), counts computed after search but before the store filter, zero-count pills dim to `.45` rather than disappearing. Visual: `padding:4px 10px`, radius pill, `--gx-surface-2` bg, 11.5px/600, 6px colour dot, tabular-nums count in `--gx-text-mute`. Selected: border becomes the store colour, label `--gx-text`. |
+| Store pills | Unchanged behavior from today's `storePills()`: multi-select, derived from the loaded roster (not the registry, so `corporate` and the "No store" defect bucket both appear), counts computed after search but before the store filter, zero-count pills dim to `.45` rather than disappearing. Visual: `padding:4px 10px`, radius pill, `--gx-surface-2` bg, 11.5px/600, 6px color dot, tabular-nums count in `--gx-text-mute`. Selected: border becomes the store color, label `--gx-text`. |
 | Attention chip | `margin-left:auto`. Pill button, `padding:6px 13px`, 12px/600. Label `"<n> to look at"`, or `"All clear"` at zero. 7px status dot: `--gx-red` if any high-severity item, `--gx-gold` if any, else `--gx-green`. When the overview is showing (nobody selected) the chip is "on": `rgba(212,168,71,.07)` background, `--gx-gold-line` border, `--gx-gold` text. Otherwise transparent / `--gx-border` / `--gx-text-dim`. Clicking it deselects the current person and returns to the overview. |
 
 ### 3. Body — two panes, full height
@@ -82,7 +82,7 @@ scrolls sideways.
 Scrolls vertically, `padding:6px 0 40px`.
 
 **Store group header** — sticky at the top of its group (`position:sticky; top:0`, same
-background, z-index 1): 6px store-colour dot, label 10px/700 uppercase 1.2px tracking in
+background, z-index 1): 6px store-color dot, label 10px/700 uppercase 1.2px tracking in
 `--gx-text-mute`, count right-aligned 10.5px `#3d4744` tabular-nums. Padding `10px 14px 6px`.
 
 **Person row** — a full-width `<button>`: `display:flex; align-items:center; gap:10px;
@@ -117,11 +117,11 @@ render at `opacity:.6`. Groups with no matches are omitted entirely.
    a gap (gold if any).
 3. **Open questions** — section head 11px/700 uppercase 1.4px `--gx-text-dim`, with the
    qualifier "nothing here has been applied" in `--gx-text-mute` beside it. One card per item:
-   `--gx-surface`, 1px `--gx-border`, `border-left:3px solid` severity colour (`--gx-red` high,
+   `--gx-surface`, 1px `--gx-border`, `border-left:3px solid` severity color (`--gx-red` high,
    `--gx-gold` warn, `--gx-border-strong` info), radius 9px, padding `12px 14px`, 8px apart.
    Card is `display:flex; flex-wrap:wrap; gap:12px 14px` with three children: a person button
    (`flex:0 1 190px; min-width:150px` — 28px avatar, name 13px/600, kind label 9.5px/700
-   uppercase in the severity colour), the detail text (`flex:1 1 240px; min-width:180px`, 12.5px
+   uppercase in the severity color), the detail text (`flex:1 1 240px; min-width:180px`, 12.5px
    `--gx-text-dim`), and the action pair (`margin-left:auto`, nowrap): a primary green button
    whose label depends on the kind — "Merge them" / "Apply METRC spelling" / "Apply Leaderboard
    role" / "Open record" — and a secondary "Not a problem".
@@ -158,7 +158,7 @@ never reused").
 **OLCC permit** — read-only card: permit number in `ui-monospace` 14px with `.5px` tracking, a
 status pill (ACTIVE green / gold when inside 90 days / red when expired or unknown), and a right-
 aligned line: "*n* days left · expires *date*" or "Expired *n* days ago · *date*" or "METRC has
-no matching record under this name". A 4px progress bar underneath in the status colour. Card
+no matching record under this name". A 4px progress bar underneath in the status color. Card
 border turns `rgba(239,68,68,.4)` when expired or missing.
 
 **Links & visibility** — three pills (Dutchie id, GX account, employee #), each `--gx-surface-3`
@@ -173,11 +173,11 @@ the right, above a `--gx-border` rule.
 
 ---
 
-## Interactions & behaviour
+## Interactions & behavior
 
 - **No Edit mode.** Every control is live. A field commits on change and a toast confirms:
   pill at the bottom centre, `--gx-surface-2`, 1px `--gx-green-dim`, radius pill, `8px 18px`,
-  12.5px `--gx-green`, auto-dismiss at 1.6s. Recommended production behaviour: debounce text
+  12.5px `--gx-green`, auto-dismiss at 1.6s. Recommended production behavior: debounce text
   fields ~600ms, commit selects and dates immediately, and offer an undo inside the toast.
 - **One field per write.** Today `roster_save` posts five fields at once. Field-level saves must
   still go through the read-merge-write path — a partial write blanks `dutchie_employee_id` and
@@ -247,13 +247,13 @@ uppercase field labels.
 
 - `role_title` is a **closed set of four** — Admin, Store Manager, Assistant Manager, Budtender —
   enforced server-side. An off-list value already held on a record is carried as its own selected
-  option and labelled, never silently dropped.
+  option and labeled, never silently dropped.
 - `employee_number` is **issued, never typed**, and never reused. Read-only everywhere in the UI.
 - **Every write is read-merge-write.** `gxWrite_` replaces the whole row.
 - Birthdays are **month + day only**. Leaderboard receives a derived celebrations flag, never a
   date. Celebrations opt-out stays an explicit per-person toggle — it cannot be inferred from role
   or store.
-- Store colours come from `GXStores`, sourced from the GX Core registry.
+- Store colors come from `GXStores`, sourced from the GX Core registry.
 - The store pill set is derived from the **loaded roster**, not the registry, so `corporate` and
   the empty "No store" bucket stay reachable.
 - The bug-report snapshot must keep omitting the search box contents — Crew holds the PII.

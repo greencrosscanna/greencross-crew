@@ -34,16 +34,16 @@ of the intended look, not production code. It renders through a small local prev
 
 The task is to recreate it inside GX Crew's real environment: no build step, plain
 ES5-flavoured JavaScript in `crew.js`, DOM assembled with the existing `el()` / `esc()` string
-builders, and **every colour and radius from a `--gx-*` custom property in `gx-theme.css`** —
+builders, and **every color and radius from a `--gx-*` custom property in `gx-theme.css`** —
 the prototype inlines hex values only because the harness has no stylesheet. The mapping table
-below is exhaustive; there is no colour in this design that is not already a token.
+below is exhaustive; there is no color in this design that is not already a token.
 
 Do not restyle or fork a shared `gx-theme` component from inside Crew. If the shared layer
 needs something, `add_note` to `core-admin`.
 
 ## Fidelity
 
-**High-fidelity.** Colours, type sizes, spacing, radii and the column grid are final.
+**High-fidelity.** Colors, type sizes, spacing, radii and the column grid are final.
 Recreate pixel-for-pixel.
 
 Two deliberate stand-ins:
@@ -57,8 +57,8 @@ Two deliberate stand-ins:
   `teamAttendancePerHead` 25; admin tiers 110→$600, 105→$450, 100→$300, `maxPerStore` 50).
   Jo Castellan's row is deliberate: bonus $20, payroll $0, so the "payroll is a muted em-dash,
   not `$0`" rule is visible.
-- **Store colours are hard-coded** (`bend #22d3ee`, `center #60a5fa`, `river-rd #a78bfa`).
-  In the app they come from `GXStores.color(id)` — store colour is registry data, never a
+- **Store colors are hard-coded** (`bend #22d3ee`, `center #60a5fa`, `river-rd #a78bfa`).
+  In the app they come from `GXStores.color(id)` — store color is registry data, never a
   constant. Store *names* likewise come from `incStoreName()` / `GXStores.name()`, never the
   label the row arrived with.
 
@@ -75,7 +75,7 @@ are **unchanged in structure** — apply the same visual rules and keep today's 
 
 `.gx-topnav` from `gx-theme.css`: brand (`gx-logo.png`, 22px) + `Crew` subtitle
 (11px/700, `--gx-text-mute`, uppercase, 1.1px tracking), tab row (`Roster`, `Incentive` —
-Incentive active: `box-shadow: inset 0 -2px 0 var(--gx-green)`, colour `--gx-text`), then the
+Incentive active: `box-shadow: inset 0 -2px 0 var(--gx-green)`, color `--gx-text`), then the
 clock and user chip. Min-height 52px, `--gx-surface`, 1px `--gx-border` bottom.
 
 The roster sub nav stays hidden on this tab, exactly as `paintTab()` does today.
@@ -102,7 +102,7 @@ Replaces `.crew-inc-head` + `.crew-inc-tot` + the free-floating `.crew-inc-gear`
 
 `Print PDF` (`.gx-btn.gx-btn-green`) · `Export Payroll CSV` (`.gx-btn`; the "(Capstone)"
 qualifier moves to the button's `title`) · the 34×34 gear (`.gx-btn`, approver-only, unchanged
-behaviour, `title` unchanged). On a closed period the primary slot carries
+behavior, `title` unchanged). On a closed period the primary slot carries
 `Send for approval` / `Approve & Print PDF` per `incHeadActions()` — that logic is untouched.
 
 **Totals tiles** — `margin-top:16px`, `display:grid; grid-template-columns:repeat(4,minmax(160px,1fr));
@@ -173,13 +173,13 @@ body cells.
 | **Payroll** | `--gx-green`, weight 700, cell background `#101614`, dotted underline `--gx-border-strong` at `3px` offset, `cursor:help`, breakdown in `title` — all as today |
 | A zero or absent payroll | `--gx-text-mute`, weight 400, em-dash. `''` and `0` stay different claims. |
 
-The specificity trap in today's CSS still applies: every colour rule must be written
+The specificity trap in today's CSS still applies: every color rule must be written
 `.crew-inc-tbl td.crew-inc-hit`, not `.crew-inc-hit`.
 
 **SPIFF field** — `display:inline-flex` shell: `--gx-surface-3`, 1px `--gx-border`, radius 6px,
 `padding:0 6px 0 7px`; inside it a `$` in 11.5px `--gx-text-mute`, then the existing
 `<input type="number" min="0" step="5">` with `background:transparent; border:0; outline:none;
-width:46px; text-align:right; padding:4px 2px; 12.5px; tabular-nums`. Behaviour unchanged:
+width:46px; text-align:right; padding:4px 2px; 12.5px; tabular-nums`. Behavior unchanged:
 600ms debounce on input, commit again on blur. When not editable it renders as plain text
 (`--gx-text-mute` em-dash at zero), and the print rules that strip the input still apply — they
 now need to strip the `$` shell too, since paper shows the value with its own `$`.
@@ -194,13 +194,13 @@ precedes each store's block: `background:#101614`, 1px `--crew-rule` top and bot
 `padding:7px 12px`, a 6px store dot, the store name at 10px/700 uppercase 1.2px `--gx-text-dim`,
 and the count in 10.5px `--crew-count` — the same treatment as the roster rail's sticky group
 header. Rows stay in the order the engine sent them, grouped by `store_id`. The per-row Store
-cell stays visible; it is the store's colour that carries the grouping, and hiding the cell
+cell stays visible; it is the store's color that carries the grouping, and hiding the cell
 would break the shared grid.
 
 **Footnote** — unchanged copy, `margin:14px 0 0`, 12px `--gx-text-mute`, `max-width:760px`,
 `line-height:1.55`. The imported-period second paragraph is unchanged too.
 
-## Interactions & behaviour
+## Interactions & behavior
 
 Everything here already exists in `crew.js`; nothing new is introduced.
 
@@ -251,7 +251,7 @@ All from `gx-theme.css` except the three app-local half-steps already declared o
 | Radii | `--gx-radius` 6 · `--gx-radius-md` 8 · `--gx-radius-lg` 10 · pill 999 | 7px on the header-band buttons, 9px on the table shell |
 | Type | 20/700 title · 22/700 tile figure · 12.5px table body · 11.5px/700 section label · 10.5px/700 column header · 10px/700 group header | `--gx-font` throughout |
 
-Store colours: `GXStores.color(store_id)`, with the prototype's `bend #22d3ee`,
+Store colors: `GXStores.color(store_id)`, with the prototype's `bend #22d3ee`,
 `center #60a5fa`, `river-rd #a78bfa` standing in.
 
 ## Assets
