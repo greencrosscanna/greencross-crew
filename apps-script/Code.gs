@@ -3753,12 +3753,21 @@ function fetchLivePerfFromCore_(ppStart) {
     return {
       name:      String(r.name || ''),
       nameKey:   nameToKey_(String(r.name || '')),
+      /* The LEGAL name rides along: the screen shows the friendly one, the Capstone export needs
+         this one. Leaderboard never sent it and stampEmployeeIds_ filled it in from the registry;
+         GX Core already knows it, so it arrives rather than being re-derived. */
+      full_name: String(r.full_name || ''),
       storeSlug: String(r.store || ''),
       storeName: String(r.store_name || ''),
       txn:       Number(r.transactions) || 0,
       sales:     Number(r.sales) || 0,
       discount:  Number(r.discount_rate) || 0,   // a RATE, as Leaderboard sent it — not a dollar amount
-      aov:       Number(r.aov) || 0
+      aov:       Number(r.aov) || 0,
+      /* THE TARGET. Dropped by the first cut of this mapping, so every manager row rendered "—"
+         under TARGET and 0.0% under % GOAL while the engine was returning real figures. A field
+         that arrives as undefined reads downstream as nothing at all, which is exactly why the
+         mapping is written out one line at a time rather than spread. */
+      target:    (r.target == null ? null : Number(r.target))
     };
   };
   return {
