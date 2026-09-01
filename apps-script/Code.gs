@@ -3601,8 +3601,26 @@ function incentiveCompare_(p) {
   function fieldsOf(o) {
     return Object.keys(o || {}).filter(function (k) { return o[k] !== undefined && o[k] !== null; }).sort();
   }
+  /* FIELDS CREW SUPPLIES ITSELF, so their absence from the engine payload is expected and must not
+     trip the guard. A check that cries wolf is one people learn to click past, which is the failure
+     this whole comparison exists to avoid — so each entry here is verified, not assumed:
+
+       periods     Crew computes the calendar in periodList_/computedPeriods_ and deliberately does
+                   NOT borrow it: a null list once stranded the picker on an imported period with no
+                   way back to the current one.
+       thresholds  overlaid from GX Core kv `incentiveThresholds` in the view; confirmed complete
+                   (budtender, manager, admin) on 2026-09-01.
+       saved       nothing reads it on the incentive path. crew.js's only `.saved` is the roster_save
+                   response, an unrelated route. Crew builds its own via inputsFor_(). */
+  var CREW_SUPPLIES = ['periods', 'thresholds', 'saved'];
+
   var lbFields = fieldsOf(lb), gxFields = fieldsOf(gx);
-  var missingInGx = lbFields.filter(function (k) { return gxFields.indexOf(k) === -1; });
+  var missingInGx = lbFields.filter(function (k) {
+    return gxFields.indexOf(k) === -1 && CREW_SUPPLIES.indexOf(k) === -1;
+  });
+  var supplied = lbFields.filter(function (k) {
+    return gxFields.indexOf(k) === -1 && CREW_SUPPLIES.indexOf(k) !== -1;
+  });
   var extraInGx   = gxFields.filter(function (k) { return lbFields.indexOf(k) === -1; });
 
   // Sub-shapes that matter: a present-but-empty admin or payPeriod is as bad as a missing one.
@@ -3620,8 +3638,11 @@ function incentiveCompare_(p) {
       if (!k) return;
       m[k] = (m[k] || 0) + (Number(r.sales) || 0);
     });
-    if (payload.admin) m['(admin) ' + nameToKey_(payload.admin.name || '')] =
-      Number(payload.admin.actual) || 0;
+    /* Keyed on the ROLE, not the name. Leaderboard hardcoded 'Mike Kettler'; GX Core reads the
+       roster and gets the legal 'Michael Kettler'. Keying on the name made one row look like two
+       different people appearing and disappearing. The name difference is reported separately,
+       where it is information rather than an alarm. */
+    if (payload.admin) m['(admin)'] = Number(payload.admin.actual) || 0;
     return m;
   }
   var a = index(lb), b = index(gx);
@@ -3653,11 +3674,17 @@ function incentiveCompare_(p) {
     /* Read THIS before the numbers. A field Leaderboard sends and GX Core does not is a feature that
        disappears on the flip, and it will not show up as a delta — it shows up as nothing at all. */
     fields_missing_in_gxcore: missingInGx,
+    fields_crew_supplies_itself: supplied,
     fields_only_in_gxcore: extraInGx,
     shape: shape,
     admin_row: { leaderboard: !!lb.admin, gxcore: !!gx.admin,
-                 names_match: !!(lb.admin && gx.admin &&
-                   nameToKey_(lb.admin.name || '') === nameToKey_(gx.admin.name || '')) },
+                 leaderboard_name: (lb.admin || {}).name || '',
+                 gxcore_name: (gx.admin || {}).name || '',
+                 /* samePerson_ is the ladder the rest of this engine uses to decide whether two
+                    spellings are one human, so the comparison asks it rather than inventing a
+                    second opinion about whether Mike and Michael are the same person. */
+                 same_person: !!(lb.admin && gx.admin &&
+                   samePerson_(lb.admin.name || '', gx.admin.name || '')) },
     /* The two known, intended reasons the totals can differ. Anything NOT explained by these is
        what the comparison exists to surface. */
     gxcore_ignored_returns: (gx.returns_not_counted || []).length,

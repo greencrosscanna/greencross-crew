@@ -58,16 +58,22 @@ print()
 # disappears on the flip — it never shows up as a delta, it shows up as nothing at all.
 miss = d.get("fields_missing_in_gxcore") or []
 print("  fields Leaderboard sends that GX Core does NOT: %s" % (", ".join(miss) if miss else "none"))
+sup = d.get("fields_crew_supplies_itself") or []
+if sup:
+    print("  (Crew supplies these itself, not a gap: %s)" % ", ".join(sup))
 ar = d.get("admin_row") or {}
-print("  admin row     leaderboard=%s  gxcore=%s  names match=%s"
-      % (ar.get("leaderboard"), ar.get("gxcore"), ar.get("names_match")))
+print("  admin row     leaderboard=%s  gxcore=%s  same person=%s"
+      % (ar.get("leaderboard"), ar.get("gxcore"), ar.get("same_person")))
+if ar.get("leaderboard_name") != ar.get("gxcore_name"):
+    print("     named %r vs %r — the legal name from the roster, not a different human"
+          % (ar.get("leaderboard_name"), ar.get("gxcore_name")))
 sh = d.get("shape") or {}
 for k in ("admin", "payPeriod"):
     v = sh.get(k) or {}
     lbf, gxf = v.get("leaderboard") or [], v.get("gxcore") or []
     gap = [x for x in lbf if x not in gxf]
     print("  %-10s sub-fields missing in GX Core: %s" % (k, ", ".join(gap) if gap else "none"))
-if miss or not ar.get("gxcore"):
+if miss or not ar.get("gxcore") or not ar.get("same_person"):
     print()
     print("  *** DO NOT FLIP — something Leaderboard provides is missing on the GX Core side. ***")
 print()
