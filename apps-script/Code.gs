@@ -4452,8 +4452,16 @@ function getIncentive_(p) {
   /* GX Core is the source of truth for the scheme. Leaderboard sends its own read of the same kv
      key, so these agree today — but if LB ever falls back to its local copy, Crew must not compute
      against a number GX Core does not hold. */
+  /* NO SCHEME, NO SCREEN. Falling through with whatever the engine happened to send would compute
+     bonuses against a scheme GX Core does not hold — and once the engine is GX Core, against no
+     scheme at all, which renders as a page of zeros indistinguishable from a quiet fortnight. */
   var coreT = incentiveThresholds_();
-  if (coreT) live.thresholds = coreT;
+  if (!coreT.ok) {
+    return { ok: false, stage: 'thresholds', error: coreT.error,
+             hint: 'Set incentiveThresholds in GX Core kv. Crew owns compensation; the scheme is '
+                 + 'read from there and no longer travels in the performance payload.' };
+  }
+  live.thresholds = coreT.thresholds;
   stampEmployeeIds_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
   applySpiffEarnings_(live, live.payPeriod.start);
@@ -5318,24 +5326,51 @@ function deepSame_(a, b) {
  * not, and it cannot be edited afterwards. Refusing costs a minute in the settings tray; the other
  * way costs a fortnight of wrong bonuses nobody can tell from right ones. */
 function approvalThresholds_(live) {
-  var core = incentiveThresholds_();
-  if (!core) {
-    return { ok: false, error: 'GX Core holds no incentive thresholds (kv `incentiveThresholds`), ' +
-             'so this would be approved against whatever Leaderboard sent — which falls back to its ' +
-             'own defaults when it cannot reach Core. Open the Incentive settings tray, save the ' +
-             'thresholds, and approve again.' };
+  var coreRes = incentiveThresholds_();
+  if (!coreRes.ok) {
+    /* Carries the SPECIFIC reason now — not set, unreadable, malformed, or missing a tier — rather
+       than one message for four different problems, each with a different fix. */
+    return { ok: false, error: 'GX Core holds no usable incentive thresholds: ' + coreRes.error +
+             '. Approving would freeze payroll against a scheme Core cannot confirm. Open the ' +
+             'Incentive settings tray, save the thresholds, and approve again.' };
   }
+  var core = coreRes.thresholds;
   return { ok: true, T: core, source: 'gx_core',
            lb_agrees: deepSame_(live.thresholds || null, core) };
 }
 
+/* GX CORE HOLDS THE THRESHOLDS, AND THERE IS NOTHING BEHIND THEM.
+ *
+ * This returned null on any failure and the caller fell back to "whatever Leaderboard sent" — which
+ * worked only while Leaderboard was also sending them. GX Core's engine does not, deliberately:
+ * Crew owns compensation and reads the scheme from kv, so a second copy travelling in the payload
+ * is exactly the drift the move was meant to end.
+ *
+ * So the fallback is gone, and the failure is loud. Silently computing a bonus against a MISSING
+ * scheme is the worst available outcome: calcBud would read undefined tiers, every bonus would come
+ * out zero, and a payroll of zeros looks exactly like a fortnight in which nobody earned anything.
+ * The screen showing an error instead is strictly better — it is wrong in a way somebody notices.
+ *
+ * Returns { ok, thresholds, error } rather than a bare value, so the caller cannot mistake a
+ * failure for an empty scheme. */
 function incentiveThresholds_() {
-  var ok = function (t) { return t && t.budtender && t.manager && t.admin; };
-  try {
-    var t = JSON.parse(GXCore.getKv('incentiveThresholds') || 'null');
-    if (ok(t)) return t;
-  } catch (e) {}
-  return null;      // caller falls back to whatever Leaderboard sent
+  var complete = function (t) { return !!(t && t.budtender && t.manager && t.admin); };
+  var raw = null;
+  try { raw = GXCore.getKv('incentiveThresholds'); }
+  catch (e) {
+    return { ok: false, thresholds: null,
+             error: 'could not read incentiveThresholds from GX Core: ' + String((e && e.message) || e) };
+  }
+  if (!raw) return { ok: false, thresholds: null, error: 'GX Core kv incentiveThresholds is not set' };
+  var t = null;
+  try { t = JSON.parse(raw); }
+  catch (e) { return { ok: false, thresholds: null, error: 'incentiveThresholds is not valid JSON' }; }
+  if (!complete(t)) {
+    return { ok: false, thresholds: null,
+             error: 'incentiveThresholds is incomplete — needs budtender, manager and admin; has: '
+                  + Object.keys(t || {}).sort().join(', ') };
+  }
+  return { ok: true, thresholds: t, error: '' };
 }
 
 /* ══ Discount rules — GX Core holds the STATE, Leaderboard still supplies the NAMES ═════════════
@@ -5590,8 +5625,9 @@ function incentiveThresholdsRoute_(p) {
 
   var raw = p.save == null ? '' : String(p.save);
   if (!raw) {
-    return { ok: true, thresholds: incentiveThresholds_(), can_edit: canApprove_(auth),
-             source: 'gx-core' };
+    var cur = incentiveThresholds_();
+    return { ok: cur.ok, thresholds: cur.thresholds, error: cur.error,
+             can_edit: canApprove_(auth), source: 'gx-core' };
   }
   /* Editing the scheme is the approver's call, not any editor's. Mike prepares a period; he does
      not move the bar people are measured against. */
@@ -5602,7 +5638,8 @@ function incentiveThresholdsRoute_(p) {
   var bad = thresholdProblems_(t);
   if (bad.length) return { ok: false, error: 'rejected: ' + bad.join('; ') };
 
-  var before = incentiveThresholds_();
+  var beforeRes = incentiveThresholds_();
+  var before = beforeRes.ok ? beforeRes.thresholds : null;   // unreadable != empty; the audit says which
   /* THE `GXCore.setKv` BRANCH HAS NEVER RUN. The library exposes `getKv` but no kv WRITER to bound
      callers — not at the v225 pin, not at HEAD — so the guard is always false and the secret-gated
      web route below is the only path this write has ever taken. The guard is correct and stays:
