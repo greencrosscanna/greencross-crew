@@ -168,18 +168,31 @@
   }
 
   /* Store display names come from GX Core's registry, so Crew shows "Century" and "Baseline"
-     like every other app instead of inventing its own labels from the store_id slug. */
-  async function loadStores() {
-    try {
-      var r = await GXCore.jsonp('stores', {}, { retries: 1, timeoutMs: 6000 });
-      /* sort_order comes along because the filter pills below render in registry order. Falling
-         back to the array index rather than 0 keeps a registry that ever stops sending the column
-         in ITS OWN order instead of collapsing every store to a tie. */
-      (r && r.stores || []).forEach(function (s, i) {
-        state.stores[s.store_id] = s.display_name || s.store_id;
-        state.storeOrder[s.store_id] = (s.sort_order != null && s.sort_order !== '') ? Number(s.sort_order) : i;
-      });
-    } catch (e) { /* fall back to the raw slug */ }
+     like every other app instead of inventing its own labels from the store_id slug.
+
+     READ FROM GXStores, DO NOT FETCH AGAIN. gx-theme's GXStores.load() already pulls this exact
+     registry, caches it in localStorage for six hours and refreshes in the background — and Crew
+     calls it in startChrome() on every load. Crew then fetched the SAME rows a second time, with
+     no cache, and AWAITED that fetch before the roster could start.
+
+     That second fetch is what broke Mike's load on 2026-09-01. GX Core's /exec went through a bad
+     spell — measured 8-32s per call, sometimes answering with Google's 404 HTML page instead of
+     data — and the store registry is only labels: it decides whether a group header reads
+     "Century" or "bend". Blocking a payroll screen on a cosmetic lookup against the flakiest
+     endpoint in the suite is the wrong trade in every weather.
+
+     So this is synchronous now, and it reads whatever GXStores already holds. A first-ever load on
+     a cold cache shows slugs for a moment and repaints when the background refresh lands. */
+  function adoptStores() {
+    if (!window.GXStores) return;
+    /* sort_order comes along because the filter pills below render in registry order. Falling
+       back to the array index rather than 0 keeps a registry that ever stops sending the column
+       in ITS OWN order instead of collapsing every store to a tie. */
+    GXStores.all().forEach(function (s, i) {
+      if (!s || !s.store_id) return;
+      state.stores[s.store_id] = s.display_name || s.store_id;
+      state.storeOrder[s.store_id] = (s.sort_order != null && s.sort_order !== '') ? Number(s.sort_order) : i;
+    });
   }
   /* `corporate` is not a shop and so is deliberately absent from GX Core's store registry —
      it is where the admin team sits. Label it here rather than showing the raw slug. */
@@ -448,6 +461,22 @@
   function renderStatus(html) {
     clear();
     mount.appendChild(card('GX&nbsp;Crew', [el('p', 'gx-muted', html)]));
+  }
+
+  /* A LOAD FAILURE IS RETRYABLE, and until 2026-09-01 it was a dead end. GX Core's /exec goes
+     through bad spells — slow, and sometimes answering with Google's 404 HTML page — and when one
+     caught Mike the screen said "could not load the roster" with nothing to press. The only way
+     back was a full page reload, which throws away the session check, the theme and the store
+     cache and then spends the same 135-second budget again. This retries just the roster. */
+  function renderFailure(html) {
+    clear();
+    var body = el('p', 'gx-muted', html);
+    var again = el('button', 'gx-btn gx-btn-green', 'Try again');
+    again.addEventListener('click', function () { again.disabled = true; boot(); });
+    var hint = el('p', 'gx-muted crew-hint',
+      'GX Core is shared by every app, and it is occasionally slow to wake up. A second attempt ' +
+      'usually lands.');
+    mount.appendChild(card('GX&nbsp;Crew', [body, again, hint]));
   }
 
   /* Flags come from the engine so the roster, the UI and any future export share one
@@ -4022,13 +4051,12 @@
 
     if (!quiet) renderStatus('Loading roster… <span class="crew-hint">(first load reads GX Core, ~10s)</span>');
 
-    /* THESE TWO ARE INDEPENDENT, so they run together. Awaiting them one after the other made first
-       paint pay TWO Apps Script cold starts in series — measured at ~120s on 2026-09-01, of which
-       most was simply waiting twice for the same warm-up. Neither reads the other's result. */
-    await Promise.all([
-      Object.keys(state.stores).length ? Promise.resolve() : loadStores(),
-      Engine ? Promise.resolve() : resolveEngine()
-    ]);
+    /* ONE blocking GX Core lookup at first paint, not two, and it is the one the app cannot start
+       without. Store labels used to be awaited here alongside the engine URL; they are cosmetic and
+       now come free from GXStores' six-hour cache (see adoptStores). resolveEngine short-circuits on
+       a remembered URL, so the common load blocks on nothing at all before asking for the roster. */
+    adoptStores();
+    if (!Engine) await resolveEngine();
 
     {
       if (!Engine) {
@@ -4081,7 +4109,7 @@
       if (state.review === null) loadReview();
       if (state.eom === undefined) loadEom();
     } catch (e) {
-      renderStatus('⚠️ Could not load the roster: ' + esc((e && e.message) || 'unknown error'));
+      renderFailure('⚠️ Could not load the roster: ' + esc((e && e.message) || 'unknown error'));
     }
   }
 
@@ -4090,7 +4118,15 @@
      that uses them renders. */
   function startChrome() {
     if (window.GXTopNav) GXTopNav.startClock();
-    if (window.GXStores) GXStores.load(GXCORE_URL).catch(function () { /* colors are a nicety */ });
+    /* Fire-and-forget: GXStores paints from its own cache immediately and refreshes behind us. When
+       the refresh lands we adopt the labels and repaint the parts that show them, so a cold cache
+       corrects itself in place instead of leaving store slugs on screen until the next reload. */
+    if (window.GXStores) {
+      GXStores.load(GXCORE_URL).then(function () {
+        adoptStores();
+        if (ui) { paintSubnav(); paintRail(); paintPane(); }
+      }).catch(function () { /* colors and labels are a nicety */ });
+    }
   }
 
   if (document.readyState === 'loading') {
