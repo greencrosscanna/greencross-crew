@@ -422,6 +422,11 @@ function route_(e) {
         return json_(sendDigest_(p), p.callback);
 
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
+      // Run BOTH incentive engines for a period and report where they disagree. The thing to look
+      // at before flipping cfg.incentiveEngine, since that switch changes what people are paid on.
+      case 'incentive_compare':
+        return json_(incentiveCompare_(p), p.callback);
+
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(permitCoverage_(p), p.callback);
@@ -3571,10 +3576,163 @@ function inputsFor_(ppStart) {
   return out;
 }
 
+/* Run BOTH engines for a period and report where they disagree — the thing to look at before
+   flipping cfg.incentiveEngine. Names only and per-person deltas; it is already behind the deploy
+   secret, but there is no reason for a comparison tool to print a roster of salaries.
+
+   Deliberately calls each source directly rather than going through fetchLivePerf_, so it reports
+   what the two ENGINES say and cannot be fooled by whichever one the flag currently selects. */
+function incentiveCompare_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var pp = String((p && p.pp_start) || '').trim();
+
+  var lb = fetchLivePerfLeaderboard_(pp);
+  var gx = fetchLivePerfFromCore_(pp);
+  if (lb.ok === false) return { ok: false, stage: 'leaderboard', error: lb.error };
+  if (gx.ok === false) return { ok: false, stage: 'gxcore', error: gx.error };
+
+  function index(payload) {
+    var m = Object.create(null);
+    (payload.budtenders || []).concat(payload.managers || []).forEach(function (r) {
+      var k = nameToKey_(r.name);
+      if (!k) return;
+      m[k] = (m[k] || 0) + (Number(r.sales) || 0);
+    });
+    return m;
+  }
+  var a = index(lb), b = index(gx);
+  var names = Object.create(null);
+  Object.keys(a).forEach(function (k) { names[k] = 1; });
+  Object.keys(b).forEach(function (k) { names[k] = 1; });
+
+  var diffs = [], both = 0, onlyLb = [], onlyGx = [];
+  Object.keys(names).forEach(function (k) {
+    var inA = a[k] !== undefined, inB = b[k] !== undefined;
+    if (inA && inB) {
+      both++;
+      var d = Math.round((b[k] - a[k]) * 100) / 100;
+      if (Math.abs(d) > 0.005) diffs.push({ name_key: k, delta: d });
+    } else if (inA) { onlyLb.push(k); } else { onlyGx.push(k); }
+  });
+  diffs.sort(function (x, y) { return Math.abs(y.delta) - Math.abs(x.delta); });
+
+  var sum = function (o) { return Object.keys(o).reduce(function (t, k) { return t + o[k]; }, 0); };
+  return {
+    ok: true,
+    pp_start: gx.payPeriod.start, pp_end: gx.payPeriod.end,
+    people: { in_both: both, only_leaderboard: onlyLb, only_gxcore: onlyGx },
+    totals: { leaderboard: Math.round(sum(a) * 100) / 100,
+              gxcore: Math.round(sum(b) * 100) / 100,
+              delta: Math.round((sum(b) - sum(a)) * 100) / 100 },
+    differing_people: diffs.length,
+    largest_deltas: diffs.slice(0, 15),
+    /* The two known, intended reasons the totals can differ. Anything NOT explained by these is
+       what the comparison exists to surface. */
+    gxcore_ignored_returns: (gx.returns_not_counted || []).length,
+    gxcore_return_grace_days: gx.return_grace_days,
+    note: 'GX Core excludes voids and scores returns against the SALE period (+grace); Leaderboard '
+        + 'deducts returns in the period they were processed. Store keys also differ: store_id vs '
+        + 'Leaderboard display slugs.'
+  };
+}
+
+/* ─── THE SAME PAYLOAD, FROM GX CORE ─────────────────────────────────────────────────────────────
+ *
+ * Leaderboard has been the performance engine and this app the payout app, with Crew reaching into
+ * Leaderboard over ?action=incentiveperf — app-to-app, which the shared brain forbids, and which
+ * both apps' comments have called TEMPORARY since it was written. GX Core now computes the same
+ * slice (?action=incentive_perf), built on the shared sales_by_employee aggregation rather than a
+ * second Dutchie pull.
+ *
+ * BEHIND A FLAG, and deliberately. kv `cfg.incentiveEngine` selects the source and defaults to
+ * `leaderboard`, so merging this changes nothing. These numbers decide what people are paid; the
+ * switch should be a toggle somebody flips after looking at a comparison, and one that can be
+ * flipped back in seconds without a deploy.
+ *
+ * WHAT DIFFERS, and it is not nothing:
+ *   · GX Core excludes VOIDS. Leaderboard counted them until 2026-08-31 — 403.93 in one fortnight
+ *     across six stores. Both are fixed now, but an old period recomputed from each side can still
+ *     differ if it was scored before that.
+ *   · RETURNS follow the sale, and count only within their own period plus a five-day grace.
+ *     Leaderboard deducts every return in the period it was PROCESSED.
+ *   · store keys are GX Core store_id (bend, hillsboro, portland-rd), not Leaderboard display slugs
+ *     (century, baseline, portland). Everything else in this engine already resolves stores through
+ *     GXCore.resolveStore, so this moves Crew onto the suite vocabulary — but it is a visible change
+ *     to any consumer matching on the old strings, which is the main thing to look at before
+ *     flipping.
+ * ------------------------------------------------------------------------------------------------ */
+function incentiveEngine_() {
+  try { return String(GXCore.getKv('cfg.incentiveEngine') || '').trim().toLowerCase() || 'leaderboard'; }
+  catch (e) { return 'leaderboard'; }   // unreachable kv must not silently switch a pay source
+}
+
+/* GX Core's incentive_perf, mapped into the shape this engine already consumes. The mapping is the
+   whole risk surface, so it is explicit rather than a spread: a renamed field that silently arrives
+   as undefined reads downstream as a zero, and a zero here is somebody's bonus. */
+function fetchLivePerfFromCore_(ppStart) {
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) {
+    return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script, so Crew cannot '
+           + 'authenticate to GX Core for live performance data.', needs: 'GX_DEPLOY_SECRET script property' };
+  }
+  var url = GXCORE_URL + '?action=incentive_perf&secret=' + encodeURIComponent(secret)
+          + (ppStart ? '&pp_start=' + encodeURIComponent(ppStart) : '');
+  var d = null, lastErr = '';
+  for (var i = 0; i < 5; i++) {
+    try {
+      var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+      var body = res.getContentText();
+      if (body && body.charAt(0) === '{') { d = JSON.parse(body); break; }
+      lastErr = 'HTTP ' + res.getResponseCode();
+    } catch (e) { lastErr = String((e && e.message) || e); }
+    Utilities.sleep(400);   // the /exec second hop 404s on ~6% of rapid calls
+  }
+  if (!d) return { ok: false, error: 'GX Core incentive_perf unreachable — ' + lastErr };
+  if (d.ok === false) return { ok: false, error: 'GX Core incentive_perf: ' + (d.error || 'refused') };
+
+  var row = function (r) {
+    return {
+      name:      String(r.name || ''),
+      nameKey:   nameToKey_(String(r.name || '')),
+      storeSlug: String(r.store || ''),
+      storeName: String(r.store_name || ''),
+      txn:       Number(r.transactions) || 0,
+      sales:     Number(r.sales) || 0,
+      discount:  Number(r.discount_rate) || 0,   // a RATE, as Leaderboard sent it — not a dollar amount
+      aov:       Number(r.aov) || 0
+    };
+  };
+  return {
+    ok: true,
+    source: 'gxcore',
+    payPeriod: { start: String(d.pp_start || ''), end: String(d.pp_end || '') },
+    budtenders: (d.budtenders || []).map(row),
+    managers:   (d.managers || []).map(row),
+    adminActual: Number(d.admin_actual) || 0,
+    adminTarget: Number(d.admin_target) || 0,
+    stores: d.stores || {},
+    // Carried through so the screen can show what the engine chose to ignore rather than the
+    // difference appearing as an unexplained few dollars.
+    returns_not_counted: d.returns_not_counted || [],
+    return_grace_days: d.return_grace_days,
+    unresolved: d.unresolved || []
+  };
+}
+
 /* Leaderboard's incentiveperf. A failed read RETURNS AN ERROR rather than an empty period: a
  * dashboard that renders "no bonuses" because a fetch failed looks exactly like a fortnight in
  * which nobody earned anything, and this one is about pay. Same rule as the nightly Dutchie scan. */
 function fetchLivePerf_(ppStart) {
+  return incentiveEngine_() === 'gxcore'
+    ? fetchLivePerfFromCore_(ppStart)
+    : fetchLivePerfLeaderboard_(ppStart);
+}
+
+/* The original app-to-app path. Kept under its own name so incentiveCompare_ can call it directly
+   regardless of which engine the flag selects — a comparison that ran whatever the flag chose would
+   compare one engine against itself and report a clean zero. */
+function fetchLivePerfLeaderboard_(ppStart) {
+
   /* The URL lives in GX Core's kv, not in this file — the same place Leaderboard's own callers
      read it from, so a redeploy that mints a new /exec is fixed in one place for the whole suite. */
   var base = '';
