@@ -54,6 +54,23 @@ if d.get("largest_deltas"):
 print()
 print("  returns GX Core ignored (sale in an earlier period): %s" % d.get("gxcore_ignored_returns"))
 print()
+# STRUCTURE BEFORE NUMBERS. A field Leaderboard sends and GX Core does not is a feature that
+# disappears on the flip — it never shows up as a delta, it shows up as nothing at all.
+miss = d.get("fields_missing_in_gxcore") or []
+print("  fields Leaderboard sends that GX Core does NOT: %s" % (", ".join(miss) if miss else "none"))
+ar = d.get("admin_row") or {}
+print("  admin row     leaderboard=%s  gxcore=%s  names match=%s"
+      % (ar.get("leaderboard"), ar.get("gxcore"), ar.get("names_match")))
+sh = d.get("shape") or {}
+for k in ("admin", "payPeriod"):
+    v = sh.get(k) or {}
+    lbf, gxf = v.get("leaderboard") or [], v.get("gxcore") or []
+    gap = [x for x in lbf if x not in gxf]
+    print("  %-10s sub-fields missing in GX Core: %s" % (k, ", ".join(gap) if gap else "none"))
+if miss or not ar.get("gxcore"):
+    print()
+    print("  *** DO NOT FLIP — something Leaderboard provides is missing on the GX Core side. ***")
+print()
 print("WHAT SHOULD DIFFER: voids Leaderboard counts, and returns it deducts that were sold in an")
 print("earlier period. Anything ELSE, or a person missing from one side, is worth stopping for.")
 '

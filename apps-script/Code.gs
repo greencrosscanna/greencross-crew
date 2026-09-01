@@ -3591,13 +3591,37 @@ function incentiveCompare_(p) {
   if (lb.ok === false) return { ok: false, stage: 'leaderboard', error: lb.error };
   if (gx.ok === false) return { ok: false, stage: 'gxcore', error: gx.error };
 
+  /* STRUCTURE FIRST, NUMBERS SECOND — and this order is the lesson.
+   *
+   * The first version of this compared budtenders and managers, which were the two groups I had in
+   * mind. Leaderboard also sends an `admin` row that the browser renders, scores and exports, and
+   * because nothing compared it, flipping the engine dropped a person off a pay screen while this
+   * tool reported a clean diff. A comparison is only as good as the fields somebody thought to
+   * compare, so it now checks WHICH FIELDS EXIST on each side before looking at any value. */
+  function fieldsOf(o) {
+    return Object.keys(o || {}).filter(function (k) { return o[k] !== undefined && o[k] !== null; }).sort();
+  }
+  var lbFields = fieldsOf(lb), gxFields = fieldsOf(gx);
+  var missingInGx = lbFields.filter(function (k) { return gxFields.indexOf(k) === -1; });
+  var extraInGx   = gxFields.filter(function (k) { return lbFields.indexOf(k) === -1; });
+
+  // Sub-shapes that matter: a present-but-empty admin or payPeriod is as bad as a missing one.
+  function subFields(o, k) { return o && o[k] ? fieldsOf(o[k]) : []; }
+  var shape = {
+    admin:      { leaderboard: subFields(lb, 'admin'),     gxcore: subFields(gx, 'admin') },
+    payPeriod:  { leaderboard: subFields(lb, 'payPeriod'), gxcore: subFields(gx, 'payPeriod') }
+  };
+
   function index(payload) {
     var m = Object.create(null);
+    // ALL THREE groups. The admin row has no `name` in the same sense, so it is keyed explicitly.
     (payload.budtenders || []).concat(payload.managers || []).forEach(function (r) {
       var k = nameToKey_(r.name);
       if (!k) return;
       m[k] = (m[k] || 0) + (Number(r.sales) || 0);
     });
+    if (payload.admin) m['(admin) ' + nameToKey_(payload.admin.name || '')] =
+      Number(payload.admin.actual) || 0;
     return m;
   }
   var a = index(lb), b = index(gx);
@@ -3626,6 +3650,14 @@ function incentiveCompare_(p) {
               delta: Math.round((sum(b) - sum(a)) * 100) / 100 },
     differing_people: diffs.length,
     largest_deltas: diffs.slice(0, 15),
+    /* Read THIS before the numbers. A field Leaderboard sends and GX Core does not is a feature that
+       disappears on the flip, and it will not show up as a delta — it shows up as nothing at all. */
+    fields_missing_in_gxcore: missingInGx,
+    fields_only_in_gxcore: extraInGx,
+    shape: shape,
+    admin_row: { leaderboard: !!lb.admin, gxcore: !!gx.admin,
+                 names_match: !!(lb.admin && gx.admin &&
+                   nameToKey_(lb.admin.name || '') === nameToKey_(gx.admin.name || '')) },
     /* The two known, intended reasons the totals can differ. Anything NOT explained by these is
        what the comparison exists to surface. */
     gxcore_ignored_returns: (gx.returns_not_counted || []).length,
@@ -3705,7 +3737,15 @@ function fetchLivePerfFromCore_(ppStart) {
   return {
     ok: true,
     source: 'gxcore',
-    payPeriod: { start: String(d.pp_start || ''), end: String(d.pp_end || '') },
+    /* payPeriod.current gates editability across the whole incentive view — omitting it reads as
+       false and silently locks the screen for the period people are working in. GX Core computes
+       it; this carries it rather than re-deriving a second opinion about which period is open. */
+    payPeriod: (d.payPeriod && d.payPeriod.start)
+      ? d.payPeriod
+      : { start: String(d.pp_start || ''), end: String(d.pp_end || ''), current: false },
+    /* THE ADMIN ROW. Its absence is what forced the 2026-09-01 rollback: the browser renders,
+       scores, counts and exports this row, and without it a person simply left the pay screen. */
+    admin: d.admin || null,
     budtenders: (d.budtenders || []).map(row),
     managers:   (d.managers || []).map(row),
     adminActual: Number(d.admin_actual) || 0,
