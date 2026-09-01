@@ -6197,11 +6197,29 @@ function dutchieEmployeeList_(stores, errors, secret) {
     var id = String(stores[i].store_id || '').trim();
     if (!id) continue;
     try {
-      var url = GXCORE_URL + '?action=dutchie_employees&store=' + encodeURIComponent(id)
+      /* RAW ROWS, via dutchie_get — NOT ?action=dutchie_employees.
+       *
+       * That route returns a REDUCED shape: { id, name, active }. It was built to resolve one
+       * person's dutchie_employee_id, and for that it is exactly right. This scan needs the whole
+       * record: buildIdentityRows_ filters on `status`, derives the role from PERMISSION GROUPS and
+       * the store from the permission LOCATION, and none of those survive the reduction.
+       *
+       * Measured 2026-09-01: 131 rows came back, zero store errors, and every single row was
+       * dropped as inactive — because `status` was not in the payload at all, so no row could ever
+       * be active. The scan reported "Dutchie returned no usable rows", which reads as a Dutchie
+       * problem and is not one.
+       *
+       * My own regression, from this morning: the library call this replaced returned raw Dutchie
+       * rows, and I swapped it for a route with a different shape without checking what the
+       * consumer reads. dutchie_get forwards the query verbatim and hands back what Dutchie sent,
+       * which is what this needs. */
+      var url = GXCORE_URL + '?action=dutchie_get&store=' + encodeURIComponent(id)
+              + '&path=' + encodeURIComponent('/employees')
+              + '&Skip=0&Take=500'
               + '&secret=' + encodeURIComponent(sec);
       var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
       var d = JSON.parse(res.getContentText() || 'null');
-      if (d && d.ok === true && d.employees) { list = d.employees; break; }
+      if (d && d.ok === true && d.rows && d.rows.length) { list = d.rows; break; }
       if (errors && d && d.ok === false) errors.push(id + ': ' + (d.error || 'refused'));
     } catch (e) {
       if (errors) errors.push(id + ': ' + String((e && e.message) || e));
