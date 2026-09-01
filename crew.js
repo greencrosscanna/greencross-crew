@@ -134,12 +134,34 @@
    * page still works; without this one there is no engine and nothing loads at all. Apps Script
    * cold-starts routinely exceed six seconds — measured at 30s+ on 2026-09-01 right after a deploy,
    * which is exactly when someone reloads to see whether the deploy worked. */
+  var ENGINE_CACHE_KEY = 'gx_crew_engine_url';
+
   async function resolveEngine() {
     var url = ENGINE_URL_FALLBACK;
+    /* A REMEMBERED URL BEATS A COLD LOOKUP. The engine URL changes only when the engine is
+       redeployed to a NEW deployment, which is rare and which config still corrects on the next
+       load. Blocking first paint on a call that can take 30-40s cold, to re-learn a value that was
+       identical last time, is the wrong trade — so a previously confirmed URL is used immediately
+       and config refreshes it in the BACKGROUND. */
+    var remembered = '';
+    try { remembered = localStorage.getItem(ENGINE_CACHE_KEY) || ''; } catch (e) {}
+    if (remembered) {
+      Engine = window.GXClient(remembered);
+      // Correct it for next time without making anyone wait for the answer.
+      GXCore.jsonp('config', { key: 'cfg.crewEngineUrl' }, { retries: 3, timeoutMs: 20000 })
+        .then(function (r) {
+          if (r && r.ok && r.value && String(r.value) !== remembered) {
+            try { localStorage.setItem(ENGINE_CACHE_KEY, String(r.value)); } catch (e) {}
+          }
+        })
+        .catch(function () {});
+      return Engine;
+    }
     try {
       var r = await GXCore.jsonp('config', { key: 'cfg.crewEngineUrl' }, { retries: 3, timeoutMs: 20000 });
       if (r && r.ok && r.value) url = String(r.value);
     } catch (e) { /* fall back to the constant — see ENGINE_URL_FALLBACK above */ }
+    try { if (url) localStorage.setItem(ENGINE_CACHE_KEY, url); } catch (e) {}
     if (!url) return null;
     Engine = window.GXClient(url);
     return Engine;
@@ -3999,10 +4021,16 @@
     if (!token()) { renderLogin(''); return; }
 
     if (!quiet) renderStatus('Loading roster… <span class="crew-hint">(first load reads GX Core, ~10s)</span>');
-    if (!Object.keys(state.stores).length) await loadStores();
 
-    if (!Engine) {
-      await resolveEngine();
+    /* THESE TWO ARE INDEPENDENT, so they run together. Awaiting them one after the other made first
+       paint pay TWO Apps Script cold starts in series — measured at ~120s on 2026-09-01, of which
+       most was simply waiting twice for the same warm-up. Neither reads the other's result. */
+    await Promise.all([
+      Object.keys(state.stores).length ? Promise.resolve() : loadStores(),
+      Engine ? Promise.resolve() : resolveEngine()
+    ]);
+
+    {
       if (!Engine) {
         renderStatus('⚠️ The GX Crew engine is not deployed yet. Deploy <code>apps-script/</code> with ' +
           '<code>clasp deploy</code>, then set <code>cfg.crewEngineUrl</code> in GX Core (or fill ' +
