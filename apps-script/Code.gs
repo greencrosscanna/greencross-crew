@@ -3178,8 +3178,35 @@ function installNightlyScanUnsafe_(p) {
     ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY)
       .atHour(7).inTimezone(STORE_TZ).create();
   }
+  /* PROVE THE CRON PATH, NOW, WHILE SOMEBODY IS WATCHING.
+   *
+   * Installing a trigger and verifying the scan are two different claims, and the request that
+   * installs proves only the second. A REQUEST carries its own secret; the 5am trigger carries
+   * none and falls back to the GX_DEPLOY_SECRET script property. So "?action=new_hires works"
+   * and "the nightly run works" are not the same sentence, and the difference surfaces at 5am
+   * in front of nobody.
+   *
+   * This calls the trigger's exact entry point with no argument -- the same call the scheduler
+   * will make -- so the answer arrives at install time instead of a week later. The scan writes
+   * only its own pending tab and is safe to run on demand. A failure here does NOT unwind the
+   * install: the trigger is correctly scheduled either way, and the fix is a property, not a
+   * schedule. It is reported instead, named. */
+  var dry = null;
+  try {
+    var r = nightlyDutchieScan();
+    dry = (r && r.ok)
+      ? 'OK — ran the real 5am call just now: ' + (r.dutchie_active_people || 0) + ' active in '
+        + 'Dutchie, ' + (r.on_the_roster || 0) + ' already on the roster, '
+        + ((r.new_since_last_scan || []).length) + ' new'
+      : 'FAILING — the schedule is set, but the 5am call itself returns: '
+        + ((r && r.error) || 'unknown') + '. Most likely GX_DEPLOY_SECRET is missing on this '
+        + 'project; a request-driven scan can still pass its own secret and will look fine.';
+  } catch (e) {
+    dry = 'FAILING — the 5am call threw: ' + String((e && e.message) || e);
+  }
+
   return { ok: true, enabled: true, replaced: removed,
-           nightly_scan_hour: 5, timezone: STORE_TZ,
+           nightly_scan_hour: 5, timezone: STORE_TZ, cron_path_check: dry,
            digest_trigger: canMail ? 'installed, MONDAY 07:00' :
              'LEFT UNTOUCHED — this context cannot send mail, so reinstalling it here would ' +
              'replace a working trigger with one that fails silently. Run installNightlyScan() ' +
