@@ -18,7 +18,17 @@
   /* Crew's own Apps Script engine (apps-script/Code.gs).
    * Fill this in after the first `clasp deploy` — or, better, set `cfg.crewEngineUrl` in GX Core's
    * kv tab and every deployment picks it up without a code change (the config read below wins). */
-  var ENGINE_URL_FALLBACK = '';
+  /* THE KNOWN /exec, so a slow config lookup degrades to a WORKING app instead of a dead one.
+   *
+   * This was empty, and the comment below called the config fetch "a nicety, not a dependency".
+   * With an empty fallback it is the opposite: it is the one call the app cannot start without.
+   * On 2026-09-01 GX Core cold-started after a deploy, the 6-second lookup timed out, and Crew
+   * showed "the engine is not deployed yet" — while the engine was healthy and its URL was sitting
+   * correctly in Core config the whole time.
+   *
+   * Config still WINS when it answers: the deployed URL lives in one place for the suite, and a
+   * redeploy that mints a new /exec is fixed there. This is only what to use while waiting. */
+  var ENGINE_URL_FALLBACK = 'https://script.google.com/macros/s/AKfycbxco5dVO8mV-KpIKYpPKfjTa1bpSZFjrjVgJfbYjNNnkR3GujP8LtkgiFs0Z124gLPL/exec';
 
   var TOKEN_KEY = 'gx_crew_token';
   var USER_KEY  = 'gx_crew_user';
@@ -117,14 +127,19 @@
   }
 
   // ─── engine resolution ───────────────────────────────────────────────────────
-  /* Pull the engine URL from GX Core config so the deployed URL lives in one place for the
-   * whole suite. Falls back to the constant above if the key isn't set yet. */
+  /* Pull the engine URL from GX Core config so the deployed URL lives in one place for the whole
+   * suite, falling back to the constant above.
+   *
+   * MORE PATIENCE THAN THE OTHER LOOKUPS, deliberately. Stores and avatars can arrive late and the
+   * page still works; without this one there is no engine and nothing loads at all. Apps Script
+   * cold-starts routinely exceed six seconds — measured at 30s+ on 2026-09-01 right after a deploy,
+   * which is exactly when someone reloads to see whether the deploy worked. */
   async function resolveEngine() {
     var url = ENGINE_URL_FALLBACK;
     try {
-      var r = await GXCore.jsonp('config', { key: 'cfg.crewEngineUrl' }, { retries: 1, timeoutMs: 6000 });
+      var r = await GXCore.jsonp('config', { key: 'cfg.crewEngineUrl' }, { retries: 3, timeoutMs: 20000 });
       if (r && r.ok && r.value) url = String(r.value);
-    } catch (e) { /* config is a nicety, not a dependency */ }
+    } catch (e) { /* fall back to the constant — see ENGINE_URL_FALLBACK above */ }
     if (!url) return null;
     Engine = window.GXClient(url);
     return Engine;
