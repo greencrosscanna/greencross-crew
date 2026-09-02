@@ -2472,6 +2472,12 @@
   function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
   function m2(n) { return '$' + (Math.round((n || 0) * 100) / 100).toFixed(2); }
   function pct1(n) { return (Math.round((n || 0) * 10) / 10).toFixed(1) + '%'; }
+  /* DISCOUNT RATES GET TWO DECIMALS, AND ONLY THEY DO.
+     The manager tiers cut at two-thirds of the budtender goal — 0.67% against a 1.0% goal — so at
+     one decimal a store on 0.70% and a store on 0.65% both read as being comfortably under the 1%
+     bar while one of them quietly took $50 less. Attainment (% of target) stays at pct1: nobody
+     is scored on the second decimal of 96.6%. */
+  function pct2(n) { return (Math.round((n || 0) * 100) / 100).toFixed(2) + '%'; }
   /* A live row carries `discount` as a DECIMAL (0.0185); an imported one carries discount_pct as a
      PERCENT (1.85) because that is the column the report printed. Reading one as the other is off
      by 100x and looks plausible on both ends, so the conversion happens once, here. */
@@ -2857,7 +2863,7 @@
         incTd(3, incDash(m.sales)) +
         incTd(4, c.pct == null ? '—' : esc(pct1(c.pct)),
               c.pct == null ? 'crew-inc-zero' : incGoal(c.pct >= 100)) +
-        incTd(5, esc(pct1(dp)), goal == null ? '' : incGoal(dp <= goal)) +
+        incTd(5, esc(pct2(dp)), goal == null ? '' : incGoal(dp <= goal)) +
         incTd(6, esc(m2(m.aov)), T ? incGoal(m.aov >= T.manager.aovTarget) : '') +
         incTd(7, incDash(c.teamA)) +
         incSpiffCell(m, c, editable, 8) +
@@ -2885,7 +2891,7 @@
       /* Discount spans slots 5+6: budtenders have no % Goal, and leaving a hole there would put
          every figure after it out of step with the two tables above. */
       '<td colspan="2" class="' + (T ? incGoal(dp <= T.budtender.discountMaxPct) : '') + '">' +
-        esc(pct1(dp)) + '</td>' +
+        esc(pct2(dp)) + '</td>' +
       incTd(6, esc(m2(b.aov)), T ? incGoal(b.aov >= T.budtender.aovTarget) : '') +
       incTd(7, isImported ? '<span class="crew-inc-zero">—</span>'
                           : '<input type="checkbox" class="crew-inc-att" data-k="' +

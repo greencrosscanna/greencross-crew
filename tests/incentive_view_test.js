@@ -74,8 +74,14 @@ M.inc.data = { inputs: {} };
 const liveHtml = M.incBudTable([liveRow], b => M.calcBud(b, T, {}), false, true, T);
 const impHtml  = M.incBudTable([impRow], b => ({ bonus: b.bonus, payroll: b.payroll, spiff: b.spiff,
                                                  hr: b.per_hour, qual: null }), true, false, T);
+/* TWO decimals since 2026-09-01, and the second one is load-bearing. The manager tiers cut at
+   two-thirds of the budtender goal (0.67% against a 1.0% goal), so at one decimal a store on 0.70%
+   and one on 0.65% both printed as comfortably inside the 1% bar while one of them had taken $50
+   less. Attainment stays at one decimal — nobody is scored on the second decimal of 96.6%. */
 ok('both eras print the same discount for the same rate',
-   liveHtml.includes('1.9%') && impHtml.includes('1.9%'));
+   liveHtml.includes('1.85%') && impHtml.includes('1.85%'));
+ok('and the discount column carries the second decimal a tier boundary can turn on',
+   !liveHtml.includes('>1.9%<'));
 
 /* ── ONE identity key: employee_id ──
    Leaderboard sends nameKey ('chris_carney'); GX Core, and therefore every input Crew saves, uses
@@ -334,7 +340,7 @@ const calcHist = b => ({ bonus: b.bonus, payroll: b.payroll, spiff: b.spiff, hr:
 const noScheme = M.incBudTable([histRow], calcHist, true, false, null);
 ok('with no frozen scheme, nothing is marked as having hit a target',
    !noScheme.includes('crew-inc-hit'));
-ok('but the figures are still all there', /1\.2%/.test(noScheme) && /\$35\.00/.test(noScheme));
+ok('but the figures are still all there', /1\.20%/.test(noScheme) && /\$35\.00/.test(noScheme));
 
 /* Same row, scored under a scheme that was actually frozen with it — now the marks mean something. */
 const withScheme = M.incBudTable([histRow], calcHist, true, false, T);
