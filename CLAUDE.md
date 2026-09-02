@@ -478,9 +478,36 @@ draft ──send──► pending ──approve──► approved (immutable, in
 ```
 
 Sending **locks the inputs** server-side for everyone, approver included. Approval is the only thing
-that writes, which is why sending back needs no undo. **`incentive_unapprove` is the break glass:**
-deploy-secret only, never a button, and it **voids rather than deletes** — rows are copied to
-`crew_incentive_voided` with who and why.
+that writes, which is why sending back needs no undo. **`incentive_unapprove` is the break glass**,
+and it **voids rather than deletes** — rows are copied to `crew_incentive_voided` with who and why.
+
+***It is a BUTTON now, approver-only — changed 2026-09-02.*** This section said "deploy-secret only,
+never a button", which was right about the risk and wrong about who carries it: the only person who
+could reopen a period was whoever had the secret and a shell, so **Sky could not correct his own
+approval without someone else running a curl for him** ("need a way to break glass and edit past
+pp's, only me"). What actually keeps it safe is who the button is for and what it costs to press —
+the same `cfg.crewApprover` gate as Approve (Mike prepares, he cannot un-pay), a typed **reason of
+at least a sentence**, refused on both sides, and an explicit confirm naming the period. A mis-click
+cannot write a sentence. The deploy-secret path still works for tooling.
+
+**`incentive_voided` reads the trail back, and until 2026-09-02 nothing could.** Every void copied
+its rows for audit and no route ever returned them, so the record of what was actually paid existed
+and could not be seen through the app. It cost a real question within hours of the first reopen —
+*"the total moved $25, who?"* — which could only be answered by opening the spreadsheet by hand. The
+panel now diffs frozen against live (as approved / as it computes now / who moved), which is the
+form the question always takes.
+
+***And the rows were unreadable for a subtler reason worth remembering:*** the void sheet stored
+`pp_start` as a **Date**, so it read back as `Mon Aug 17 2026 00:00:00 GMT-0700` and never equalled
+`2026-08-17`. The route found nothing and answered **"never reopened"** — indistinguishable from the
+truth, which is the worst thing an audit route can say. Same rule as everywhere else here: a
+calendar day is TEXT. Normalized on write (columns pinned to `@`) *and* on read, so the rows already
+written stay readable.
+
+**A reopened period is not a sent-back one.** Both sit in `draft` with a note, but one was never
+approved and the other was approved, paid, then deliberately un-paid — and the more serious of the
+two was rendering as the milder. `workflow.voided` is derived server-side from the `VOIDED:` prefix
+so the browser is not parsing prose.
 
 **Who approves is NOT a role check.** GX Core's vocabulary is `viewer/editor/admin/director` —
 there is no `owner`, and Crew is admin-only so Sky and Mike hold the same grant. The approver is
