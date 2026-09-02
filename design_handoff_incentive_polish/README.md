@@ -185,7 +185,7 @@ width:46px; text-align:right; padding:4px 2px; 12.5px; tabular-nums`. Behavior u
 now need to strip the `$` shell too, since paper shows the value with its own `$`.
 
 **Attendance** — unchanged 15×15 checkbox, `accent-color: var(--gx-green)`, but the column
-centres (`text-align:center`) instead of right-aligning.
+centers (`text-align:center`) instead of right-aligning.
 
 **Budtenders grouped by store** — a pill toggle at the right end of the section head:
 `--gx-surface-2`, 1px `--gx-border-strong`, radius pill, `padding:5px 12px`, 11.5px/600,

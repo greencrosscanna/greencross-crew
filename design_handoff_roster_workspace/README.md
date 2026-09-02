@@ -125,7 +125,7 @@ render at `opacity:.6`. Groups with no matches are omitted entirely.
    `--gx-text-dim`), and the action pair (`margin-left:auto`, nowrap): a primary green button
    whose label depends on the kind — "Merge them" / "Apply METRC spelling" / "Apply Leaderboard
    role" / "Open record" — and a secondary "Not a problem".
-   Empty state: a bordered card, centred, `✓ Every source agrees. Nothing to review.` in
+   Empty state: a bordered card, centered, `✓ Every source agrees. Nothing to review.` in
    `--gx-green`.
 4. **Employee of the Month** — one card, `--gx-surface`, `rgba(212,168,71,.45)` border, radius
    10px, padding `16px 18px`: 48px avatar with a `--gx-gold` ring, name 15px/700, sub-line
@@ -176,7 +176,7 @@ the right, above a `--gx-border` rule.
 ## Interactions & behavior
 
 - **No Edit mode.** Every control is live. A field commits on change and a toast confirms:
-  pill at the bottom centre, `--gx-surface-2`, 1px `--gx-green-dim`, radius pill, `8px 18px`,
+  pill at the bottom center, `--gx-surface-2`, 1px `--gx-green-dim`, radius pill, `8px 18px`,
   12.5px `--gx-green`, auto-dismiss at 1.6s. Recommended production behavior: debounce text
   fields ~600ms, commit selects and dates immediately, and offer an undo inside the toast.
 - **One field per write.** Today `roster_save` posts five fields at once. Field-level saves must

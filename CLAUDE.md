@@ -215,11 +215,11 @@ When production credentials land, METRC becomes the authority for:
 
 ***`hire_date` is NOT on that list, corrected 2026-08-25.*** This line used to claim it was, and
 six real METRC employee exports disprove it: the **Hired** column is *the date that person was
-added to that licence*, not their company start date. In 72 rows across six licences, **30 land
+added to that license*, not their company start date. In 72 rows across six licenses, **30 land
 on 2025-04-29 and 11 more on 2025-04-30** — facility-setup days, not thirty people starting work
 together — and Michael Kettler reads `2025-04-29` in five exports and `2025-07-23` in the sixth.
 Writing it into `hire_date` would have reported ~1yr of tenure for people who have been here
-seven. It is only plausible for somebody on **one** licence with a non-bulk date, which is a
+seven. It is only plausible for somebody on **one** license with a non-bulk date, which is a
 new hire whose facility-add really is close to their start; even then it is a proposal for a
 human, not a value to write. A METRC sync must leave `hire_date` alone.
 
@@ -234,7 +234,7 @@ Two more things the real exports show that the connector's field list does not:
 **Reconciled once by hand, 2026-08-25.** Six exports → 42 unique people → `hr_import` fill-only.
 Permit fields for all 42 (41 matched existing records; **Andrew Roberts was created** — permit
 `R106Y7`, Portland Rd, employee **#117**, Budtender). Then `hire_date` for exactly **three**
-people whose METRC date passed the single-licence, non-bulk test: Andrew Roberts 2026-08-22,
+people whose METRC date passed the single-license, non-bulk test: Andrew Roberts 2026-08-22,
 Nathaniel Schneider 2026-03-07, Sierra Martin 2026-08-11. The other 39 were left alone.
 
 Fill-only is the right mode for this even though the paragraph above warns against routing METRC
@@ -242,12 +242,12 @@ through `hr_import` — that warning is about **`full_name`**, which is guarded 
 populated, so a spelling correction is silently skipped. Permit columns are usually *empty*,
 which is exactly what fill-only exists to complete.
 
-**The export files do not name a store, and the registry has no licence column.** `getStores()`
+**The export files do not name a store, and the registry has no license column.** `getStores()`
 returns `store_id, display_name, dutchie_name, short_code, color, region, sort_order, timezone,
 is_dc, aliases` — nothing to join an OLCC licence on. Known so far: **050-16892 → `portland-rd`**
 (Sky, 2026-08-25). The other five (050-12997 / 13000 / 13003 / 13006 / 13009 — a consecutive block
 registered together, with 16892 added later) are unmapped. To identify one, take the people who
-appear on **that licence only**: six staff have company-wide access and sit on all six exports
+appear on **that license only**: six staff have company-wide access and sit on all six exports
 (Samantha Bryson, Michael Kettler, Andrew Phillips, Skyler Pinnick, Shawn Todd, Tawny Vierra), so
 whoever remains is that store's own crew and names it on sight.
 
@@ -305,7 +305,7 @@ Same content as the roster's overview minus Employee of the Month.
 **Who receives it is a per-person setting, not a list in the source** — `digest_opt_in`, ticked on
 their own record under *Links & visibility*. It needs a **GX account** too, because `user_id` is
 where the address comes from; with no account the control says so rather than storing a preference
-that could never be honoured. **`user_id` is the MAILBOX NAME, not an address** — `createAccounts_`
+that could never be honored. **`user_id` is the MAILBOX NAME, not an address** — `createAccounts_`
 derives it as `email.split('@')[0]`, so Sky's account is `sky`. The address is reassembled as
 `user_id@greencrosscanna.com` (`ACCOUNT_DOMAIN`); GX Core holds the real one in its `users` tab but
 the library exposes no reader for it. There is deliberately **no fallback list**: "if nobody opted in, send
@@ -527,7 +527,7 @@ keeps the value the screen was already showing, an override for a discount no lo
 survives, and a rule somebody else edited while the tray sat open is not silently reverted. A failed
 Core read **refuses** the write rather than merging onto `{}` — `set_config` replaces the whole value,
 so that would switch every rule back on. The retired `save=<every counted name>` format is rejected
-with "hard-reload", not half-honoured.
+with "hard-reload", not half-honored.
 
 ***The separator was broken for the route's entire life.*** `crew.js` sent `join('\\n')` — a literal
 backslash-n — while the engine split on a real newline, so nothing split, the whole list arrived as
@@ -758,7 +758,7 @@ computed arithmetically so it still answers for 2025 dates the picker no longer 
 31st** — with no reference to status, so it holds even when nobody has closed the first one yet.
 That was the case Sky asked this for.
 
-Majority survives because Sky's older rule still applies to the back catalogue — *"a historical date
+Majority survives because Sky's older rule still applies to the back catalog — *"a historical date
 that does not line up is a typo"* — so those still pay, at more than half the window, and are named
 in `live.spiff.loose_dates` while they do. That list empties itself as the dates are corrected,
 rather than becoming a permanent warning nobody reads. `live.spiff.matched_by` counts the rungs; a
