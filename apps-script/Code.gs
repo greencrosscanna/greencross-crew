@@ -2769,13 +2769,13 @@ function digestHtml_(d) {
   var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>]/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); };
 
-  function tile(n, label, colour) {
+  function tile(n, label, color) {
     /* min-height so a label that wraps ("permits inside 90 days") does not leave one tile taller
        than the other three. Outlook ignores it and falls back to ragged, which is survivable. */
     return '<td style="padding:0 6px 0 0;width:25%" valign="top">' +
       '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-radius:10px;' +
       'padding:14px 16px;min-height:62px">' +
-      '<div style="font:700 23px/1.1 Helvetica,Arial,sans-serif;color:' + colour + '">' + n + '</div>' +
+      '<div style="font:700 23px/1.1 Helvetica,Arial,sans-serif;color:' + color + '">' + n + '</div>' +
       '<div style="font:400 11px/1.4 Helvetica,Arial,sans-serif;color:' + MUTE + ';padding-top:4px">' +
       esc(label) + '</div></div></td>';
   }
@@ -2785,11 +2785,11 @@ function digestHtml_(d) {
       (note ? '<span style="font-weight:400;letter-spacing:0;text-transform:none;color:' + MUTE +
               ';padding-left:10px">' + esc(note) + '</span>' : '') + '</div>';
   }
-  function card(edge, kicker, kickerColour, name, detail) {
+  function card(edge, kicker, kickerColor, name, detail) {
     return '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-left:3px solid ' +
       edge + ';border-radius:9px;padding:12px 14px;margin:0 0 8px">' +
       '<div style="font:700 9.5px/1.4 Helvetica,Arial,sans-serif;letter-spacing:.9px;' +
-      'text-transform:uppercase;color:' + kickerColour + '">' + esc(kicker) + '</div>' +
+      'text-transform:uppercase;color:' + kickerColor + '">' + esc(kicker) + '</div>' +
       '<div style="font:600 14px/1.4 Helvetica,Arial,sans-serif;color:' + TXT + ';padding:2px 0 4px">' +
       esc(name) + '</div>' +
       '<div style="font:400 12.5px/1.5 Helvetica,Arial,sans-serif;color:' + DIM + '">' +
@@ -2837,7 +2837,7 @@ function digestHtml_(d) {
       var missing = SETUP_FLAGS.filter(function (f) { return (r.flags || []).indexOf(f) >= 0; })
                                .map(function (f) { return FLAG_LABEL_[f] || f; });
       /* FIVE arguments. The first cut passed four, so the person's NAME slid into the
-         kickerColour slot — every card rendered its kicker in an invalid colour (black on black)
+         kickerColor slot — every card rendered its kicker in an invalid color (black on black)
          and printed "Still needs wage." where the name belonged. Six cards, not one of them
          naming the person they were about. */
       h += card(GREEN,

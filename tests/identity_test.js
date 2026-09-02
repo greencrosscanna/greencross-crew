@@ -221,7 +221,7 @@ console.log('\n2e. digestRecipients_ — a setting, not a list');
 /*
  * WHY THIS IS TESTED AT ALL, given it is "just an email". The first version shipped with the
  * newcomer card called with FOUR arguments instead of five, so every value slid one place left:
- * the person's name landed in the kickerColour slot and rendered as an invalid CSS color (black
+ * the person's name landed in the kickercolor slot and rendered as an invalid CSS color (black
  * on a black card), and the line where the name belonged printed "Still needs wage." Six cards
  * went out, not one of them naming the person it was about, and nothing failed — a wrong-arity
  * call in JavaScript is a silent success.
@@ -279,10 +279,10 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
 
   /* THE GENERAL GUARD. Every CSS color in this document is a hex literal; anything else means a
      value landed in a slot meant for a color, which is precisely how the name went invisible. */
-  const colours = html.match(/[^-a-z]color:\s*[^;"']+/g) || [];
-  const bad = colours.filter((c) => !/color:\s*#[0-9a-fA-F]{3,8}$/.test(c.trim()));
+  const colors = html.match(/[^-a-z]color:\s*[^;"']+/g) || [];
+  const bad = colors.filter((c) => !/color:\s*#[0-9a-fA-F]{3,8}$/.test(c.trim()));
   eq(bad.length, 0, 'every CSS color is a hex literal' + (bad.length ? ' — GOT: ' + bad.join(' | ') : ''));
-  eq(colours.length > 10, true, 'and there are colours to check, so the regex is not vacuous');
+  eq(colors.length > 10, true, 'and there are colors to check, so the regex is not vacuous');
 }
 
 // ── normBirthday_ ────────────────────────────────────────────────────────────
