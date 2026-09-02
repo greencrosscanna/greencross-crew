@@ -3638,8 +3638,15 @@ function incentiveCompare_(p) {
        thresholds  overlaid from GX Core kv `incentiveThresholds` in the view; confirmed complete
                    (budtender, manager, admin) on 2026-09-01.
        saved       nothing reads it on the incentive path. crew.js's only `.saved` is the roster_save
-                   response, an unrelated route. Crew builds its own via inputsFor_(). */
-  var CREW_SUPPLIES = ['periods', 'thresholds', 'saved'];
+                   response, an unrelated route. Crew builds its own via inputsFor_().
+       thresholds_source
+                   Leaderboard's own bookkeeping, added there 2026-09-02: 'live' / 'frozen' /
+                   'unrecorded', saying whether a closed period's scheme was the one it was scored
+                   against. GX Core has no counterpart because it computes no thresholds at all —
+                   Crew reads them from Core kv — so its absence is correct, not a gap. Listed here
+                   for the reason the guard exists: a check that reports an expected difference is
+                   one people learn to click past. */
+  var CREW_SUPPLIES = ['periods', 'thresholds', 'thresholds_source', 'saved'];
 
   var lbFields = fieldsOf(lb), gxFields = fieldsOf(gx);
   var missingInGx = lbFields.filter(function (k) {
