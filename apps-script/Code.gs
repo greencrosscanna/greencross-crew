@@ -4039,7 +4039,45 @@ function incentiveProbe_(p) {
  * App-to-app again, and temporary for the same reason as the Leaderboard hop: it goes when GX Core
  * carries the slice. `spiffProgress` in GX Core kv holds the URL so a redeploy is a config change.
  */
-function spiffProgressFor_(ppStart) {
+/* ── The screen's copy of SPIFF's answer ────────────────────────────────────────────────────────
+ *
+ * This read is a whole extra Apps Script web-app round trip — ~4 seconds, measured — on top of the
+ * one to GX Core, and it ran on EVERY load of the incentive screen. SPIFF is itself serving from a
+ * cache it only refills when somebody runs a sweep, so we were paying four seconds to re-fetch
+ * numbers that had not moved.
+ *
+ * CACHING IS OPT-IN, AND THAT DIRECTION IS THE WHOLE DESIGN. Only the screen asks for it. Approval
+ * (incentiveApprove_) and the send preview (incentiveSend_) read FRESH, because they freeze vendor
+ * money into crew_incentive_history where it can never be recomputed, and a figure that is five
+ * minutes stale is not a figure worth freezing. A call site added later gets correctness by
+ * default and has to ask for speed — the opposite default would make the next reader's omission a
+ * pay bug rather than a slow page.
+ *
+ * `refreshed_at` rides through untouched, so the screen still shows when SPIFF last measured —
+ * which is the staleness that actually matters, and is usually hours or days old either way. */
+var SPIFF_PROGRESS_CACHE_S = 300;      // 5 min
+/* No pay period in the key ON PURPOSE: the fetch below sends no period filter (see the note in
+   it), so one payload answers for every period and a per-period key would just miss six ways. */
+var SPIFF_PROGRESS_CACHE_KEY = 'crew_spiff_progress_v1';
+
+/* Called after a refresh actually changes SPIFF's numbers. Without this, a manager clicks
+   "refresh SPIFF", watches it re-measure, and the screen shows the OLD figures for five minutes —
+   which reads as the refresh having done nothing. */
+function spiffProgressCacheClear_() {
+  try { CacheService.getScriptCache().remove(SPIFF_PROGRESS_CACHE_KEY); } catch (e) {}
+}
+
+function spiffProgressFor_(ppStart, useCache) {
+  var cache = null;
+  if (useCache) {
+    try {
+      cache = CacheService.getScriptCache();
+      var hit = cache.get(SPIFF_PROGRESS_CACHE_KEY);
+      /* An unreadable cache entry is not an answer — fall through and fetch, the same rule GX
+         Core's own incentive cache follows. */
+      if (hit) { var c = JSON.parse(hit); c.from_cache = true; return c; }
+    } catch (e) { cache = null; }
+  }
   var base = '';
   try { base = String(GXCore.getKv('spiffProgress') || ''); } catch (e) {}
   if (!base) return { ok: false, error: 'no SPIFF engine URL in GX Core kv (key spiffProgress)' };
@@ -4056,6 +4094,18 @@ function spiffProgressFor_(ppStart) {
     if (res.getResponseCode() !== 200) return { ok: false, error: 'SPIFF returned HTTP ' + res.getResponseCode() };
     var d = JSON.parse(res.getContentText());
     if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'SPIFF refused' };
+    /* ONLY A GOOD ANSWER IS KEPT. Caching a failure would turn one unreachable moment into five
+       minutes of "$0 vendor money" for everybody who loaded the screen after it — and a cached $0
+       is indistinguishable from a fortnight in which nobody earned. Same rule as the refusal in
+       applySpiffEarnings_, applied to the store rather than the read. */
+    if (cache) {
+      try {
+        var body = JSON.stringify(d);
+        // Past the CacheService ceiling, skip rather than truncate: half a payload is worse than none.
+        if (body.length < 95000) cache.put(SPIFF_PROGRESS_CACHE_KEY, body, SPIFF_PROGRESS_CACHE_S);
+      } catch (e) {}
+    }
+    d.from_cache = false;
     return d;
   } catch (e) {
     return { ok: false, error: 'could not reach SPIFF: ' + String((e && e.message) || e) };
@@ -4112,6 +4162,11 @@ function incentiveSpiffRefresh_(p) {
     if (!r || r.ok === false) failed.push({ store: todo[i].store, error: (r && r.error) || 'failed' });
     else done.push(todo[i].store + ' (' + (r.rows || 0) + ')');
   }
+  /* SPIFF's numbers just moved, so the screen's copy is wrong. Clearing unconditionally — even
+     when every store failed — because a partial run still changed some of them, and the cost of a
+     needless clear is one 4s fetch while the cost of skipping it is a manager watching a refresh
+     do visibly nothing. */
+  spiffProgressCacheClear_();
   return { ok: true, refreshed: done.length, stores: done, failed: failed,
            remaining: Math.max(0, todo.length - max), total: todo.length };
 }
@@ -4297,8 +4352,9 @@ function spiffShare_(progStart, progEnd, ppStart, ppEnd) {
   return { bad: false, share: days(from, to) / days(progStart, progEnd) };
 }
 
-function applySpiffEarnings_(live, ppStart) {
-  var sp = spiffProgressFor_(ppStart);
+/* `useCache` is passed ONLY by the screen. See spiffProgressFor_ for why the default is fresh. */
+function applySpiffEarnings_(live, ppStart, useCache) {
+  var sp = spiffProgressFor_(ppStart, useCache);
   if (sp.ok === false) { live.spiff = { ok: false, error: sp.error }; return; }
 
   var d10 = function (v) { return String(v || '').slice(0, 10); };
@@ -4431,7 +4487,8 @@ function applySpiffEarnings_(live, ppStart) {
        the thing this whole column exists to stop being missed. */
     if (!onBoard && (Number(e.earned) || 0) > 0) unmatched.push(e.name + ' ($' + e.earned + ')');
   });
-  live.spiff = { ok: true, refreshed_at: sp.refreshed_at || '', matched: matched,
+  live.spiff = { ok: true, refreshed_at: sp.refreshed_at || '', from_cache: !!sp.from_cache,
+                 matched: matched,
                  unmatched: unmatched, people: (sp.by_employee || []).length,
                  rows_in_window: rows.length, rows_in_cache: (sp.rows || []).length,
                  /* Programs whose window no single pay period holds a majority of. Their money is
@@ -4500,7 +4557,10 @@ function getIncentive_(p) {
   live.thresholds = coreT.thresholds;
   stampEmployeeIds_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
-  applySpiffEarnings_(live, live.payPeriod.start);
+  /* THE ONLY CACHED SPIFF READ IN THE ENGINE. This route paints a screen; it writes nothing, and
+     the round trip it saves is ~4s of a load that was taking 20-30. Approval and the send preview
+     deliberately do NOT pass this. */
+  applySpiffEarnings_(live, live.payPeriod.start, true);
   var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
   live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
                     decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',
