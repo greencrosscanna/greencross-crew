@@ -200,5 +200,36 @@ console.log('\nOne person, one section');
   ok('rows with no employee_id are not paired with each other', blanks.dual_role === undefined);
 }
 
+/* ── BOTH PATHS MUST FOLD, and one of them did not ───────────────────────────────────────────────
+   getIncentive_ (the screen) folded; incentiveApprove_ (the permanent record) did not. Drew Phillips
+   therefore rendered as ONE Corporate row and froze into crew_incentive_history as TWO, under
+   Portland and River — exactly what the floater work existed to stop. No money moved, because both
+   his rows compute $0; what broke is that the record disagreed with the screen that authorised it.
+   Asserted against the SOURCE rather than by running the path, because the approval path needs a
+   live Leaderboard fetch and a session. A source check is what a push gate can hold. */
+console.log('\nBoth paths fold');
+{
+  const gs = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+  function body(name) {
+    const i = gs.indexOf('function ' + name + '(');
+    if (i < 0) throw new Error('missing ' + name);
+    let d = 0;
+    for (let k = gs.indexOf('{', i); k < gs.length; k++) {
+      if (gs[k] === '{') d++; else if (gs[k] === '}') { d--; if (!d) return gs.slice(i, k + 1); }
+    }
+    throw new Error('unterminated ' + name);
+  }
+  const screen = body('getIncentive_'), approve = body('incentiveApprove_');
+  ok('the screen folds floaters', /foldFloaters_\s*\(/.test(screen));
+  ok('and so does approval — the record and the screen must agree',
+     /foldFloaters_\s*\(/.test(approve));
+  /* Order matters as much as presence: fold BEFORE the inputs and SPIFF are attached, or an
+     attendance tick and the vendor money land on whichever of two rows is about to disappear. */
+  ok('the screen folds before it reads the inputs',
+     screen.indexOf('foldFloaters_') < screen.indexOf('inputsFor_'));
+  ok('approval folds before it computes anybody',
+     approve.indexOf('foldFloaters_') < approve.indexOf('incCalcBud_'));
+}
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nfloater fold: all passed');
 process.exit(fail ? 1 : 0);

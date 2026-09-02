@@ -5144,6 +5144,15 @@ function incentiveApprove_(p) {
   var live = fetchLivePerf_(pp);
   if (live.ok === false) return live;
   stampEmployeeIds_(live);
+  /* THE SAME FOLD THE SCREEN DOES, and it was missing here — which is the exact divergence this
+     file keeps warning about. getIncentive_ folded a floater's per-store rows into one Corporate
+     row; approval did not, so the screen showed Drew Phillips once and the frozen record kept him
+     twice, under Portland and River, which is precisely what the floater work existed to stop.
+     No money moved (both his rows compute $0), but the permanent record disagreed with the screen
+     that authorised it — and a record that cannot be reconciled with what the approver saw is the
+     thing approval exists to produce.
+     Anything that shapes the ROWS has to run on both paths or the two answers drift. */
+  foldFloaters_(live);
   var _open = incentiveBlockers_(live, false, false);
   if (_open.length) return { ok: false, error: _open[0].message };
 
