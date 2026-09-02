@@ -456,8 +456,11 @@ function route_(e) {
       // The approval loop: prepare -> send -> approve, or send back with a reason.
       case 'incentive_send':    return json_(incentiveSend_(p), p.callback);
       case 'incentive_return':  return json_(incentiveReturn_(p), p.callback);
-      // Break glass. Deploy-secret only, never a button — see the header on incentiveUnapprove_.
+      // Break glass: reopen an approved period. The APPROVER (or the deploy secret) — not any
+      // editor — and it voids rather than deletes. See the header on incentiveUnapprove_.
       case 'incentive_unapprove': return json_(incentiveUnapprove_(p), p.callback);
+      // ...and what a reopen took away. Approver-only, because these are frozen pay figures.
+      case 'incentive_voided':    return json_(incentiveVoided_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'export':       return json_(buildCapstoneExport_(p), p.callback);// payroll export (CSV/PDF)
@@ -4542,6 +4545,10 @@ function getIncentive_(p) {
     var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
     h.periods = periodList_(imported, null);
     h.can_edit = false;
+    /* The APPROVER is told who they are even on a read-only period, because the one action still
+       available here is the break glass — reopening it. Without this the button can never render on
+       the very screen it exists for. */
+    h.can_approve = canApprove_(auth);
     h.why_read_only = 'Imported from the payout report for this period — the figures as paid.';
     return h;
   }
@@ -4571,7 +4578,12 @@ function getIncentive_(p) {
   var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
   live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
                     decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',
-                    note: wf.note || '' };
+                    note: wf.note || '',
+                    /* A period that is live BECAUSE it was reopened is not the same as one that was
+                       never approved, and the screen has to be able to tell them apart — the first
+                       has figures somebody was already paid. wfSet_ writes this prefix on every
+                       void; the flag is derived here so the browser is not parsing prose. */
+                    voided: /^VOIDED:/.test(String(wf.note || '')) };
   live.can_approve = canApprove_(auth);
   /* Locked while pending — for everyone, including the approver. Sky editing a figure he is about
      to approve is the same problem as Mike editing one he already sent. */
@@ -5001,11 +5013,24 @@ function incentiveApprove_(p) {
  * that writes. The reason and both timestamps stay on the period, so one that bounced twice shows
  * that it did.
  *
- * APPROVAL IS THE IRREVERSIBLE ONE, and `incentive_unapprove` is the break-glass Sky asked for. It
- * is DEPLOY-SECRET ONLY — not a button anywhere, because a screen that can un-pay people is a
- * screen where that happens by accident — and it VOIDS rather than deletes: every row it removes is
- * copied to crew_incentive_voided first, with who did it and why. Break glass, and there is glass
- * on the floor afterwards. */
+ * APPROVAL IS THE IRREVERSIBLE ONE, and `incentive_unapprove` is the break-glass. It VOIDS rather
+ * than deletes: every row it removes is copied to crew_incentive_voided first, with who did it and
+ * why. Break glass, and there is glass on the floor afterwards.
+ *
+ * IT IS A BUTTON NOW, AND IT WAS NOT — this comment used to say "DEPLOY-SECRET ONLY, not a button
+ * anywhere, because a screen that can un-pay people is a screen where that happens by accident."
+ * That reasoning was sound about the RISK and wrong about who carries it. The only person who could
+ * reopen a period was whoever had the deploy secret and a shell, which is not Sky — so correcting
+ * his own approval required someone else to run a curl for him (Sky, 2026-09-02:
+ * "need a way to break glass and edit past pp's, only me").
+ *
+ * What actually keeps it safe is not the absence of a button, it is WHO the button is for and what
+ * it costs to press: APPROVER-ONLY (the same cfg.crewApprover gate as Approve — Mike prepares, he
+ * cannot un-pay), a typed reason that is refused if empty, an explicit confirm, and every voided
+ * row kept and readable through `incentive_voided`. The deploy-secret path still works for tooling.
+ *
+ * The accident this guards against is a mis-click, and a mis-click cannot produce a sentence
+ * explaining why the period is being reopened. */
 var WF_TAB = 'crew_incentive_workflow';
 var WF_HEADERS = ['pp_start', 'status', 'sent_by', 'sent_at', 'decided_by', 'decided_at',
                   'note', 'token', 'token_expires', 'sent_total'];
@@ -5354,11 +5379,30 @@ function incentiveReturn_(p) {
  * removed leaves a trace rather than a gap. A `reason` is required for the same purpose.
  */
 function incentiveUnapprove_(p) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  /* TWO DOORS, ONE LOCK. Tooling still presents the deploy secret; a person presents a session and
+     has to be the APPROVER — the same gate as Approve, so the person who can un-pay is exactly the
+     person who could pay in the first place. Mike prepares a period and cannot reopen one.
+     Checked in this order because deploySecretOk_ needs no session, and a cron has none. */
+  var by = 'tooling';
+  if (!deploySecretOk_(p)) {
+    var auth = requireCrew_(p);
+    if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+    if (!canApprove_(auth)) {
+      return { ok: false, error: 'Only the approver can reopen a closed period. ' +
+               'Preparing a period and un-paying one are different jobs.' };
+    }
+    by = String(auth.user || '');
+  }
   var pp = String(p.pp_start || '').trim();
   var reason = String(p.reason || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
   if (!reason) return { ok: false, error: 'reason required — voiding a paid period must say why' };
+  /* A mis-click cannot write a sentence. This is the actual guard now that there is a button, so it
+     asks for enough to be a sentence rather than enough to be non-empty. */
+  if (reason.length < 12) {
+    return { ok: false, error: 'reason is too short — say what is being corrected and why, ' +
+             'it is the only record of this afterwards' };
+  }
 
   var sh = historySheet_();
   var all = sh.getDataRange().getValues();
@@ -5376,18 +5420,101 @@ function incentiveUnapprove_(p) {
   var now = new Date().toISOString();
   var vh = VOID_HEADERS();
   var vsh = sheetOf_(VOID_TAB, vh);
-  var copies = hit.map(function (i) { return all[i].concat([now, reason]); });
-  vsh.getRange(vsh.getLastRow() + 1, 1, copies.length, vh.length).setValues(copies);
+  /* WHO is folded into the stored reason rather than added as a column: VOID_HEADERS is
+     HISTORY_HEADERS + two, and widening it would silently shift every existing voided row one
+     column left the next time sheetOf_ reconciles the header. The rows already carry the approver
+     in `source_file` ("approved by sky"); this records who UNDID it. */
+  var stamped = reason + ' — reopened by ' + (by || 'tooling');
+  /* DATES BACK TO TEXT BEFORE THEY LAND. The rows come out of the history sheet as whatever Sheets
+     hands back, and writing them into a fresh tab with no '@' on the date columns lets Sheets parse
+     them into Date objects — after which pp_start reads back as
+     "Mon Aug 17 2026 00:00:00 GMT-0700" and never again equals '2026-08-17'. That is not cosmetic:
+     it made the first 39 voided rows invisible to the route written to read them, so the audit
+     trail existed and could not be queried. Same rule as everywhere else in this file — a calendar
+     day is TEXT. */
+  var ppsCol = vh.indexOf('pp_start'), ppeCol = vh.indexOf('pp_end');
+  var copies = hit.map(function (i) {
+    var row = all[i].concat([now, stamped]);
+    if (ppsCol >= 0) row[ppsCol] = normDate_(row[ppsCol]) || String(row[ppsCol] || '');
+    if (ppeCol >= 0) row[ppeCol] = normDate_(row[ppeCol]) || String(row[ppeCol] || '');
+    return row;
+  });
+  var firstRow = vsh.getLastRow() + 1;
+  vsh.getRange(firstRow, 1, copies.length, vh.length).setValues(copies);
+  /* Pin the columns too, so the NEXT write cannot re-introduce it. */
+  if (ppsCol >= 0) vsh.getRange(2, ppsCol + 1, Math.max(1, vsh.getLastRow() - 1), 1).setNumberFormat('@');
+  if (ppeCol >= 0) vsh.getRange(2, ppeCol + 1, Math.max(1, vsh.getLastRow() - 1), 1).setNumberFormat('@');
   /* Bottom-up: deleting top-down shifts every row beneath and walks off its own indices. */
   for (var j = hit.length - 1; j >= 0; j--) sh.deleteRow(hit[j] + 1);
 
-  wfSet_(pp, { status: 'draft', decided_by: '', decided_at: '', note: 'VOIDED: ' + reason,
+  wfSet_(pp, { status: 'draft', decided_by: '', decided_at: '', note: 'VOIDED: ' + stamped,
                token: '', token_expires: '' });
-  return { ok: true, pp_start: pp, voided: copies.length,
-           payroll_total: Math.round(total * 100) / 100, reason: reason,
+  return { ok: true, pp_start: pp, voided: copies.length, by: by,
+           payroll_total: Math.round(total * 100) / 100, reason: stamped,
            note: 'copied to ' + VOID_TAB + ' — the period is editable again' };
 }
 function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reason']); }
+
+/**
+ * ?action=incentive_voided[&pp_start=YYYY-MM-DD]  — what a reopen took away.
+ *
+ * WRITTEN SINCE THE BREAK-GLASS EXISTED, READABLE BY NOTHING UNTIL NOW. Every void copied its rows
+ * to crew_incentive_voided for audit and no route ever read them back, so the record of what was
+ * actually paid existed and could not be looked at through the app. That is not an audit trail, it
+ * is a drawer nobody has the key to — and it cost a real question: after the first reopen, "which
+ * person accounts for the $25 the total moved by?" could only be answered by opening the
+ * spreadsheet by hand.
+ *
+ * APPROVER-ONLY, like the reopen it documents. These are frozen pay figures for named people, and
+ * the same person who can void them is the one who needs to see what they voided.
+ *
+ * With no pp_start it lists the periods that have ever been reopened, newest first, so the screen
+ * can say "this period was reopened" without fetching every row it took.
+ */
+function incentiveVoided_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canApprove_(auth)) return { ok: false, error: 'Only the approver can read voided figures' };
+
+  var vh = VOID_HEADERS();
+  var rows;
+  try { rows = readTab_(VOID_TAB, vh); }
+  catch (e) { return { ok: true, periods: [], rows: [], note: 'nothing has ever been voided' }; }
+
+  /* COMPARED THROUGH normDate_, not as raw strings. Rows written before the fix above hold a real
+     Date in pp_start, so an exact match finds nothing and the period reads as never reopened —
+     which is the worst possible answer from an audit route, because it is indistinguishable from
+     the truth. normDate_ has always tolerated a Date; this just asks it to. */
+  function ppKey(v) { return normDate_(v) || String(v == null ? '' : v).trim(); }
+  var want = ppKey(p.pp_start);
+  if (!want) {
+    /* One entry per (period, void) — a period reopened twice has two, and collapsing them would
+       hide the second. Keyed on the timestamp, which is identical across every row of one void. */
+    var seen = Object.create(null), out = [];
+    rows.forEach(function (r) {
+      var k = ppKey(r.pp_start) + '|' + r.voided_at;
+      if (!seen[k]) {
+        seen[k] = { pp_start: ppKey(r.pp_start), pp_end: ppKey(r.pp_end), voided_at: r.voided_at,
+                    reason: r.void_reason, rows: 0, payroll_total: 0 };
+        out.push(seen[k]);
+      }
+      seen[k].rows++;
+      seen[k].payroll_total += Number(r.payroll) || 0;
+    });
+    out.forEach(function (o) { o.payroll_total = Math.round(o.payroll_total * 100) / 100; });
+    out.sort(function (a, b) { return a.voided_at < b.voided_at ? 1 : a.voided_at > b.voided_at ? -1 : 0; });
+    return { ok: true, periods: out };
+  }
+
+  var mine = rows.filter(function (r) { return ppKey(r.pp_start) === want; });
+  if (!mine.length) return { ok: true, pp_start: want, rows: [], periods: [], note: 'never reopened' };
+  /* Newest void first, so a period reopened more than once leads with what it looked like most
+     recently rather than with the oldest version of it. */
+  mine.sort(function (a, b) { return a.voided_at < b.voided_at ? 1 : a.voided_at > b.voided_at ? -1 : 0; });
+  var total = mine.reduce(function (a, r) { return a + (Number(r.payroll) || 0); }, 0);
+  return { ok: true, pp_start: want, rows: mine, voided_at: mine[0].voided_at,
+           reason: mine[0].void_reason, payroll_total: Math.round(total * 100) / 100 };
+}
 
 /* ══ Thresholds — GX Core holds them, Crew edits them ════════════════════════════════════════════
  *

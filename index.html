@@ -68,9 +68,21 @@
   // Dev guard: non-mutating actions. Anything NOT listed is blocked when this page is served
   // from localhost, until writes are armed (banner button / ?arm=1 / GXDev.arm()). Inert in
   // production. Add new READS here; leave writes off the list.
-  // Guarded writes: review_resolve, roster_identity, roster_merge, roster_retire, roster_save
+  //
+  // THE INCENTIVE TAB COULD NOT BE OPENED IN LOCAL DEV AT ALL until 2026-09-02: this list predates
+  // the transplant and never grew, so `incentive` was blocked and the screen rendered a guard
+  // warning instead of a pay period. The failure mode is the reason to keep this current — a
+  // blocked READ looks like a broken feature, so the pressure is to arm writes just to look at
+  // something, which is exactly what arming is meant to make deliberate.
+  //
+  // Guarded WRITES, deliberately absent: incentive_save, incentive_approve, incentive_send,
+  // incentive_return, incentive_spiff_refresh (re-measures and caches), set_eom, review_resolve,
+  // roster_save, roster_identity, roster_merge, roster_retire.
+  // Also absent on purpose: incentive_thresholds and incentive_discounts, which READ or WRITE
+  // depending on their parameters. A route that can do either does not belong on a read allowlist.
   window.GX_DEV_READS = [
-    'config', 'login', 'review', 'roster', 'stores'
+    'config', 'login', 'review', 'roster', 'stores',
+    'incentive', 'eom_history', 'version_history'
   ];
 </script>
   <style>
@@ -924,6 +936,28 @@
 .crew-imp-warn b { color: var(--gx-text); }
 .crew-imp-warn.bad { border-left-color: var(--gx-red, #ef4444); background: rgba(239,68,68,.08); }
 .crew-imp-prog { font-size: 12px; color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
+.crew-imp-t td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.crew-imp-t td.n b.up { color: var(--gx-green); }
+.crew-imp-t td.n b.down { color: var(--gx-red, #ef4444); }
+
+    /* ── Break glass ──────────────────────────────────────────────────────────────
+       Reopening an approved period is not part of the fortnightly rhythm, so it does not get to
+       look like the buttons that are. A quiet outline that only commits to a colour on hover:
+       findable when you are looking for it, and never the thing your eye lands on first. */
+.crew-inc-glass { background: none; border: 1px solid var(--gx-border); color: var(--gx-text-mute);
+  border-radius: var(--gx-radius, 6px); padding: 7px 13px; font-size: 12.5px; cursor: pointer;
+  font-family: inherit; }
+.crew-inc-glass:hover { color: var(--gx-red, #ef4444); border-color: rgba(239,68,68,.5);
+  background: rgba(239,68,68,.06); }
+.crew-inc-glass:focus-visible { outline: 2px solid var(--gx-red, #ef4444); outline-offset: 2px; }
+    /* A reopened period is a louder state than a sent-back one — it was approved and paid, then
+       un-paid — so it borrows the gold the rest of the suite uses for "a person needs to see this". */
+.crew-inc-glassnote { border-left: 2px solid var(--gx-gold, #d4a847) !important;
+  background: rgba(212,168,71,.08) !important; }
+.crew-inc-glasslink { background: none; border: none; padding: 0; margin-left: 6px;
+  color: var(--gx-gold, #d4a847); font-size: inherit; font-family: inherit; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px; }
+.crew-inc-glasslink:hover { color: var(--gx-text); }
 
 @media print {
   body * { visibility: hidden; }
@@ -1022,6 +1056,6 @@
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.353"></script>
+  <script src="crew.js?v=1.354"></script>
 </body>
 </html>

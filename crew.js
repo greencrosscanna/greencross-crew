@@ -2687,12 +2687,32 @@
              'title="Incentive settings — targets, tiers and bonus amounts" ' +
              'aria-label="Incentive settings">⚙</button>');
     }
+    /* BREAK GLASS — reopen a period that has already been approved.
+       Approver-only, and last in the row on purpose: it is not part of the ordinary flow, it is the
+       thing you reach for when the ordinary flow has already finished and was wrong. Styled as a
+       quiet link rather than a button, because everything that looks like a button on this screen
+       is something you press every fortnight and this is not. */
+    if (isImported && d.can_approve) {
+      h.push('<button type="button" class="crew-inc-glass" id="incReopen" ' +
+             'title="Reopen this period so its figures can be corrected">Reopen…</button>');
+    }
     h.push('</div>');
 
     /* A returned period carries the reason it came back. It sits with the buttons rather than in a
        toast, because the person who has to act on it is not the person who was looking when it
        arrived. */
-    if (wf.status === 'draft' && wf.note) {
+    /* A REOPENED period is not a SENT-BACK one, and the banner used to call it that. Both sit in
+       `draft` with a note, but one was never approved and the other was approved, paid, and then
+       deliberately un-paid — which is the more serious of the two and was reading as the milder.
+       The offer to see what was voided sits inside it, because the figures somebody was already
+       paid are the context for every number now on the screen. */
+    if (wf.status === 'draft' && wf.voided) {
+      h.push('<div class="crew-inc-returned crew-inc-glassnote"><strong>Reopened:</strong> ' +
+             esc(String(wf.note).replace(/^VOIDED:\s*/, '')) +
+             (d.can_approve ? ' <button type="button" class="crew-inc-glasslink" id="incVoided">' +
+                              'See what was voided</button>' : '') +
+             '</div>');
+    } else if (wf.status === 'draft' && wf.note) {
       h.push('<div class="crew-inc-returned"><strong>Sent back' +
              (wf.decided_by ? ' by ' + esc(wf.decided_by) : '') + ':</strong> ' + esc(wf.note) + '</div>');
     }
@@ -3008,6 +3028,10 @@
     if (gr) gr.addEventListener('click', function () { incTray(d); });
     var ai = host.querySelector('#incAtt');
     if (ai) ai.addEventListener('click', function () { attImport(d); });
+    var rp = host.querySelector('#incReopen');
+    if (rp) rp.addEventListener('click', function () { incReopen(d); });
+    var vd = host.querySelector('#incVoided');
+    if (vd) vd.addEventListener('click', function () { incVoidedPanel(d); });
     var rf = host.querySelector('#incSpiffRefresh');
     if (rf) rf.addEventListener('click', function () { incSpiffRefresh(rf); });
     if (!editable) return;
@@ -3623,6 +3647,141 @@
     } catch (e) {
       toast('Could not re-measure: ' + ((e && e.message) || 'unknown'), true);
     } finally { btn.disabled = false; btn.textContent = label; }
+  }
+
+  /* ══ Break glass — reopen an approved period ════════════════════════════════════════════════════
+   *
+   * Approving is the one irreversible thing on this screen, so for a long time the only way back was
+   * a deploy-secret curl — which meant the owner could not correct his own approval without someone
+   * else running a shell command for him. This is that door, and it is the APPROVER'S door only:
+   * Mike prepares a period and cannot un-pay one.
+   *
+   * IT VOIDS RATHER THAN DELETES. Every frozen row is copied to crew_incentive_voided first, so
+   * "what was this before I touched it" stays answerable — which is the whole point, and is why
+   * `incentive_voided` exists alongside it. Break glass, and there is glass on the floor afterwards.
+   */
+  async function incReopen(d) {
+    var pp = d.pp_start || (d.payPeriod && d.payPeriod.start) || '';
+    var label = incPeriodLabel(pp, d.pp_end || (d.payPeriod && d.payPeriod.end));
+    /* A TYPED SENTENCE IS THE GUARD. There is no undo for this and no second approver to catch it,
+       so what stands between a mis-click and an un-paid fortnight is having to explain yourself —
+       something a mis-click cannot do. The engine refuses anything under 12 characters; asking here
+       too means the refusal is instant rather than a round trip. */
+    var reason = window.prompt(
+      'Reopen ' + label + '?\n\n' +
+      'These figures were approved and paid. Reopening voids them — they are kept in full and can ' +
+      'be read back, but the period goes editable and will recompute against TODAY\'s thresholds, ' +
+      'so the totals may not match what was paid.\n\n' +
+      'Say what is being corrected and why. This is the only record of it afterwards:', '');
+    if (reason == null) return;
+    reason = String(reason).trim();
+    if (reason.length < 12) {
+      toast('Reopening needs a reason — a sentence, not a word. Nothing was changed.', true);
+      return;
+    }
+    if (!window.confirm('Last check.\n\n' + label + ' will be reopened and its approved figures ' +
+                        'voided.\n\nReason: ' + reason)) return;
+    try {
+      var r = await Engine.jsonp('incentive_unapprove',
+                { token: token(), pp_start: pp, reason: reason, confirm: 'yes' },
+                { timeoutMs: 45000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not reopen');
+      toast('Reopened — ' + r.voided + ' rows voided (' + m0(r.payroll_total) + ' kept on record)');
+      await loadIncentive(pp);
+    } catch (e) {
+      toast('Could not reopen: ' + ((e && e.message) || 'unknown'), true);
+    }
+  }
+
+  /* WHAT THE REOPEN TOOK, beside what the screen shows now.
+   *
+   * The list on its own is an audit record; the DIFF is the thing anybody actually wants. The first
+   * question after the first ever reopen was "the total moved $25 — who?", and answering it meant
+   * opening the spreadsheet by hand. A frozen figure next to the live one, with the movers marked,
+   * answers it in the place the question gets asked. */
+  async function incVoidedPanel(d) {
+    if (document.getElementById('crewImpBack')) return;
+    var pp = d.pp_start || (d.payPeriod && d.payPeriod.start) || '';
+    var back = el('div', 'crew-imp-back'); back.id = 'crewImpBack';
+    var box  = el('div', 'crew-imp');
+    back.appendChild(box);
+    function close() { document.removeEventListener('keydown', onKey); back.remove(); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    back.addEventListener('mousedown', function (e) { if (e.target === back) close(); });
+    document.addEventListener('keydown', onKey);
+
+    function shell(inner, foot) {
+      box.innerHTML = '<div class="crew-imp-head"><span>Voided figures · ' +
+        esc(incPeriodLabel(pp, d.pp_end || (d.payPeriod && d.payPeriod.end))) + '</span>' +
+        '<button class="inc-tray-x" id="vdX" title="Close">✕</button></div>' +
+        '<div class="crew-imp-body">' + inner + '</div>' +
+        '<div class="crew-imp-foot"><span class="crew-imp-spacer"></span>' + (foot || '') +
+        '<button type="button" class="gx-btn" id="vdClose">Close</button></div>';
+      var x = box.querySelector('#vdX'); if (x) x.addEventListener('click', close);
+      var c = box.querySelector('#vdClose'); if (c) c.addEventListener('click', close);
+    }
+    shell('<p class="crew-imp-lede">Reading the voided rows…</p>');
+    document.body.appendChild(back);
+
+    var r;
+    try {
+      r = await Engine.jsonp('incentive_voided', { token: token(), pp_start: pp },
+                             { timeoutMs: 30000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not read');
+    } catch (e) {
+      shell('<div class="crew-imp-warn bad">Could not read the voided figures: ' +
+            esc((e && e.message) || 'unknown') + '</div>');
+      return;
+    }
+    if (!r.rows || !r.rows.length) {
+      shell('<p class="crew-imp-lede">Nothing was voided for this period.</p>');
+      return;
+    }
+
+    /* What each person computes to RIGHT NOW, keyed the same way the frozen rows are. */
+    var T = d.thresholds || {}, buds = d.budtenders || [], inputs = incInputs();
+    var now = Object.create(null);
+    buds.forEach(function (b) {
+      if (b.employee_id) now[b.employee_id] = calcBud(b, T, inputs).payroll;
+    });
+    (d.managers || []).forEach(function (m) {
+      if (m.employee_id) now[m.employee_id] = calcMgr(m, T, inputs, buds).payroll;
+    });
+    if (d.admin && d.admin.employee_id) now[d.admin.employee_id] = calcAdmin(d.admin, T).bonus;
+
+    var moved = 0, deltaTotal = 0, live = 0;
+    var body = r.rows.map(function (row) {
+      var was = Number(row.payroll) || 0;
+      var isNow = now[row.employee_id];
+      var known = isNow != null;
+      if (known) { live += isNow; if (isNow !== was) { moved++; deltaTotal += isNow - was; } }
+      var d2 = known ? isNow - was : null;
+      return '<tr class="' + (d2 ? 'chg' : 'dimrow') + '">' +
+        '<td>' + esc(row.pdf_name || row.employee_id) + '</td>' +
+        '<td class="dim">' + esc(row.store_label || '') + '</td>' +
+        '<td class="n">' + esc(m0(was)) + '</td>' +
+        '<td class="n">' + (known ? esc(m0(isNow)) : '<span class="dim">not on the period now</span>') + '</td>' +
+        '<td class="n">' + (d2 ? '<b class="' + (d2 > 0 ? 'up' : 'down') + '">' +
+                                 (d2 > 0 ? '+' : '') + esc(m0(d2)) + '</b>' : '') + '</td></tr>';
+    }).join('');
+
+    shell(
+      '<p class="crew-imp-lede">Voided <b>' + esc(String(r.voided_at || '').slice(0, 10)) +
+      '</b> · <b>' + r.rows.length + '</b> rows · <b>' + esc(m0(r.payroll_total)) +
+      '</b> as approved.<br>' + esc(String(r.reason || '')) + '</p>' +
+      '<div class="crew-imp-sum">' +
+        '<div class="crew-imp-stat"><b>' + esc(m0(r.payroll_total)) + '</b><span>as approved</span></div>' +
+        '<div class="crew-imp-stat"><b>' + esc(m0(live)) + '</b><span>as it computes now</span></div>' +
+        '<div class="crew-imp-stat"><b class="' + (deltaTotal < 0 ? 'down' : deltaTotal > 0 ? 'up' : '') +
+          '">' + (deltaTotal > 0 ? '+' : '') + esc(m0(deltaTotal)) + '</b><span>' + moved +
+          ' ' + (moved === 1 ? 'person' : 'people') + ' moved</span></div>' +
+      '</div>' +
+      (moved ? '' : '<div class="crew-imp-warn">Every figure still computes to what was approved. ' +
+                    'Reopening changed nothing.</div>') +
+      '<div class="crew-imp-tw"><table class="crew-imp-t"><thead><tr>' +
+      '<th>Name</th><th>Store</th><th style="text-align:right">As approved</th>' +
+      '<th style="text-align:right">Now</th><th style="text-align:right">Change</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table></div>');
   }
 
   /* ══ Attendance import — Mike's eligibility list, read in the browser ═══════════════════════════
