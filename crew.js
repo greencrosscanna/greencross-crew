@@ -2498,6 +2498,15 @@
 
   function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
   function m2(n) { return '$' + (Math.round((n || 0) * 100) / 100).toFixed(2); }
+  /* SPIFF IS THE ONE MONEY COLUMN THAT MUST NOT ROUND. Bonuses are whole dollars by construction —
+     the scheme pays $15, $25, $50 — so m0 is right for them and the column stays scannable. SPIFF
+     is per UNIT at rates like $0.75, so rounding it turns $0.75 into "$1" and $2.25 into "$2": the
+     figure on screen then disagrees with SPIFF's own dashboard and with the vendor's report, for
+     no reason a reader can see. Sky, 2026-09-02, on Drew reading $1.
+     Whole amounts still show their cents ($56.00), deliberately: a column that changes shape per
+     row is harder to scan down than one that does not, and these are cents-bearing figures whether
+     or not this particular fortnight landed on a round number. */
+  function mSpiff(n) { return m2(n); }
   function pct1(n) { return (Math.round((n || 0) * 10) / 10).toFixed(1) + '%'; }
   /* DISCOUNT RATES GET TWO DECIMALS, AND ONLY THEY DO.
      The manager tiers cut at two-thirds of the budtender goal — 0.67% against a 1.0% goal — so at
@@ -3078,18 +3087,18 @@
       : '';
     var revert = (overridden && editable)
       ? '<button type="button" class="crew-inc-revert" data-revert="' + esc(key) + '" ' +
-        'title="' + esc('Put back the measured figure (' + m0(earned) + ')') + '" ' +
+        'title="' + esc('Put back the measured figure (' + mSpiff(earned) + ')') + '" ' +
         'aria-label="Restore the measured SPIFF">↺</button>'
       : '';
 
     if (overridden) {
       return '<td class="crew-inc-over' + ruleCls + '" title="' +
-             esc('SPIFF measured ' + m0(earned) + ' — overridden to ' + m0(manual)) + '">' +
-             esc(m0(c.spiff)) + revert + '</td>';
+             esc('SPIFF measured ' + mSpiff(earned) + ' — overridden to ' + mSpiff(manual)) + '">' +
+             esc(mSpiff(c.spiff)) + revert + '</td>';
     }
     if (!c.spiff) return '<td class="crew-inc-zero' + ruleCls + '">—' + edit + '</td>';
     return '<td class="crew-inc-hit' + ruleCls + '" title="Earned on the SPIFF programs running this period">' +
-           esc(m0(c.spiff)) + edit + '</td>';
+           esc(mSpiff(c.spiff)) + edit + '</td>';
   }
 
   function incWire(host, d, isImported, editable) {

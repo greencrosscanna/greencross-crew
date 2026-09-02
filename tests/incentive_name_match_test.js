@@ -105,5 +105,20 @@ if (kept !== DIFFERENT.length) fail++;
 ok('quoted nicknames do not change the key',
    M.nameToKey_('Jennifer "Jayce" Alexander') === M.nameToKey_('Jennifer Jayce Alexander'));
 
+/* ── Dutchie's legal name vs the board's nickname (2026-09-02) ───────────────────────────────────
+   SPIFF attributes from Dutchie, which prints the LEGAL name; the board leads with the nickname.
+   Drew Phillips is the sharpest case on the roster — ratio_('drew','andrew') sits right on the 0.8
+   bar and neither is a prefix of the other, so before `drew` joined NICKNAMES this was FALSE and
+   $2.25 of his SPIFF was reported as "owed but not on this board" while he was on it. */
+ok('Dutchie\'s "Andrew Phillips" is the board\'s "Drew Phillips"',
+   M.samePerson_('Andrew Phillips', 'Drew Phillips'));
+ok('...and the reverse direction holds too',
+   M.samePerson_('Drew Phillips', 'Andrew Phillips'));
+/* The bar has to stay tight enough to keep the two Andrews apart — they share a first name and
+   both work here, so a looser rule would attach one person's vendor money to the other. */
+ok('two different people who share a first name still do not match',
+   !M.samePerson_('Andrew Phillips', 'Andrew Roberts'));
+ok('and an unrelated pair does not match', !M.samePerson_('Drew Phillips', 'Pam Johnson'));
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nincentive name match: all passed');
 process.exit(fail ? 1 : 0);

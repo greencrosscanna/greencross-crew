@@ -532,13 +532,20 @@ const over = M.incBudTable([spRow], b => M.calcBud(b, T, M.inc.data.inputs), fal
    it. Class on the TD, so it out-specifies the base cell rule like every other color here. */
 M.inc.data = { inputs: {} };
 const earnedHtml = M.incBudTable([spRow], b => M.calcBud(b, T, {}), false, true, T);
+/* CENTS, NOT ROUNDED DOLLARS (2026-09-02). Bonuses are whole dollars by construction — the scheme
+   pays $15/$25/$50 — but SPIFF is per UNIT at rates like $0.75, so m0 turned $0.75 into "$1" and
+   $2.25 into "$2". The screen then disagreed with SPIFF's own dashboard and the vendor's report for
+   no reason a reader could see; Sky spotted it on Drew reading $1. */
 ok('an earned SPIFF is bold green on the cell itself',
-   /<td class="crew-inc-hit"[^>]*>\$25</.test(earnedHtml));
+   /<td class="crew-inc-hit"[^>]*>\$25\.00</.test(earnedHtml));
+ok('...and it carries its cents rather than rounding to whole dollars',
+   /\$0\.75/.test(M.incBudTable([Object.assign({}, spRow, { spiff_earned: 0.75 })],
+                                b => M.calcBud(b, T, {}), false, true, T)));
 const noneHtml = M.incBudTable([Object.assign({}, spRow, { spiff_earned: 0 })],
                                b => M.calcBud(b, T, {}), false, true, T);
 ok('nothing earned is a muted dash, not $0', /<td class="crew-inc-zero">—/.test(noneHtml));
 ok('an existing override shows in amber and says what was measured',
-   /crew-inc-over/.test(over) && /SPIFF measured \$25/.test(over));
+   /crew-inc-over/.test(over) && /SPIFF measured \$25\.00/.test(over));
 
 /* ── overriding is a DELIBERATE ACT, not an open field ──
    Sky asked for an edit button with a payroll warning. The difference is the whole design: an

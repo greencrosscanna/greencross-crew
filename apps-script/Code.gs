@@ -3254,7 +3254,14 @@ function installNightlyScanUnsafe_(p) {
 var NICKNAMES = Object.assign(Object.create(null), { mike: 'michael', zach: 'zachary', chris: 'christopher', sam: 'samuel',
                   jon: 'jonathan', nick: 'nicholas', dan: 'daniel', matt: 'matthew',
                   jen: 'jennifer', tanner: 'taner', sky: 'skyler', skylar: 'skyler',
-                  bob: 'robert', rob: 'robert', tom: 'thomas', tj: 'thomas' });
+                  bob: 'robert', rob: 'robert', tom: 'thomas', tj: 'thomas',
+                  drew: 'andrew' });
+/* `drew` added 2026-09-02, for the same reason and by the same measure as `tj` below.
+   ratio_('drew','andrew') is under the 0.8 first-name bar and neither is a prefix of the other, so
+   samePerson_('Andrew Phillips', 'Drew Phillips') was FALSE — and Drew is the one person on the
+   roster whose sources disagree most, because Dutchie prints the legal name while the board leads
+   with the nickname. The visible cost was $2.25 of his SPIFF sitting in `unmatched` as "owed but
+   not on this board" while he was on it the whole time. */
 /* `tj` added 2026-08-27. ratio_('tj','thomas') is 0.25, far under the 0.8 first-name bar, so
    samePerson_('TJ Peterson', 'Thomas Peterson') was false and any source that prints the nickname
    -- which the incentive payout reports do, for all 27 of them -- could not reach the registry
@@ -4633,22 +4640,63 @@ function applySpiffEarnings_(live, ppStart, useCache) {
   });
   sp.by_employee = Object.keys(agg).map(function (k) { return agg[k]; });
   var matched = 0, unmatched = [];
-  function fold(r) {
-    if (!r) return;
-    var e = byId[String(r.employee_id || '')] ||
-            byName[nameToKey_(r.name)] || byName[nameToKey_(displayNameOf_(r))];
-    if (!e) return;
-    r.spiff_earned = Number(e.earned) || 0;
-    r.spiff_programs = e.programs || [];
-    matched++;
+  /* THE SAME IDENTITY LADDER THE REST OF CREW USES, and this path was not using it.
+     SPIFF attributes from Dutchie, which prints the LEGAL name; the board leads with the nickname.
+     Matching only on exact keys of `r.name` and the display name meant Drew Phillips never met
+     SPIFF's "Andrew Phillips" — his $2.25 sat in `unmatched` as "owed but not on this board" while
+     he was on it the whole time. `full_name` is already stamped on every live row for exactly this
+     reason, and samePerson_ is the fuzzy rung the roster, the imports and stampEmployeeIds_ all
+     share. A second opinion about who somebody is, is how the two halves of this app disagree. */
+  /* ENTRY → ROW, not row → entry. One person can hold SEVERAL SPIFF entries (see below), so a
+     lookup that answers "which entry is this row's" can only ever return one of them and silently
+     drops the rest. Asking "whose row is this entry" is the question that scales. */
+  function boardRowFor_(e, board) {
+    var eid = String(e.employee_id || '');
+    var ekey = nameToKey_(e.name);
+    for (var i = 0; i < board.length; i++) {
+      var r = board[i];
+      if (!r) continue;
+      if (eid && String(r.employee_id || '') === eid) return r;
+    }
+    for (var j = 0; j < board.length; j++) {
+      var r2 = board[j];
+      if (!r2) continue;
+      if (nameToKey_(r2.name) === ekey || nameToKey_(displayNameOf_(r2)) === ekey ||
+          nameToKey_(r2.full_name) === ekey) return r2;
+    }
+    /* The fuzzy rung last, and only after every exact one has failed for every row — otherwise a
+       near-match on an early row beats an exact match on a later one. */
+    for (var k = 0; k < board.length; k++) {
+      var r3 = board[k];
+      if (!r3) continue;
+      if (samePerson_(r3.name, e.name) || samePerson_(r3.full_name, e.name)) return r3;
+    }
+    return null;
   }
-  (live.budtenders || []).forEach(fold);
-  (live.managers || []).forEach(fold);
+  /* SUMMED ONTO THE ROW, NOT ASSIGNED TO IT — and this is the SPIFF side of the floater problem.
+     SPIFF aggregates by Dutchie's employee id, and somebody who works several stores can hold more
+     than one Dutchie profile: Drew Phillips came back as TWO entries, Portland $2.25 and River
+     $0.75. Assigning `r.spiff_earned = e.earned` meant whichever entry was visited last won, so he
+     read $0.75 and $2.25 of vendor money simply evaporated — the board total came to $179.25
+     against SPIFF's own $181.50, and nothing was reported because both entries had found a home.
+     Accumulating is also why `matched` counts ENTRIES rather than rows: two entries landing on one
+     person is a match twice, and calling it once would under-report the join. */
+  var board = (live.budtenders || []).concat(live.managers || []);
+  board.forEach(function (r) { if (r) { r.spiff_earned = 0; r.spiff_programs = []; } });
+  var placed = Object.create(null);
+  (sp.by_employee || []).forEach(function (e, idx) {
+    var r = boardRowFor_(e, board);
+    if (!r) return;
+    r.spiff_earned = Math.round((Number(r.spiff_earned || 0) + (Number(e.earned) || 0)) * 100) / 100;
+    r.spiff_programs = (r.spiff_programs || []).concat(e.programs || []);
+    placed[idx] = 1;
+    matched++;
+  });
   (sp.by_employee || []).forEach(function (e) {
-    var onBoard = (live.budtenders || []).concat(live.managers || []).some(function (r) {
-      return String(r.employee_id || '') === String(e.employee_id || '') ||
-             nameToKey_(r.name) === nameToKey_(e.name);
-    });
+    /* THE SAME FUNCTION, not a second opinion. Asking a narrower question here than the fold asked
+       would report somebody as unpaid whose money had in fact just been added to their row, and a
+       wider one would stay silent about money that really did go nowhere. */
+    var onBoard = !!boardRowFor_(e, board);
     /* Somebody SPIFF is paying who is not on this period's performance slice — a leaver, or a
        name the connector could not resolve. Reported rather than dropped: unpaid vendor money is
        the thing this whole column exists to stop being missed. */

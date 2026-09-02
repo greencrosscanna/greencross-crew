@@ -25,7 +25,8 @@ import json, re, sys, unicodedata
 NICKNAMES = {'mike': 'michael', 'zach': 'zachary', 'chris': 'christopher', 'sam': 'samuel',
              'jon': 'jonathan', 'nick': 'nicholas', 'dan': 'daniel', 'matt': 'matthew',
              'jen': 'jennifer', 'tanner': 'taner', 'sky': 'skyler', 'skylar': 'skyler',
-             'bob': 'robert', 'rob': 'robert', 'tom': 'thomas', 'tj': 'thomas'}
+             'bob': 'robert', 'rob': 'robert', 'tom': 'thomas', 'tj': 'thomas',
+             'drew': 'andrew'}
 
 def name_to_key(name):
     s = str(name or '').lower()
