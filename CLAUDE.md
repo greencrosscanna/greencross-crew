@@ -613,7 +613,7 @@ closed period — same rule as the thresholds, for the same reason.
 
 `incCalcAdmin_` takes no `inputs` and is deliberately untouched: the owner does not clock in.
 
-#### The import reads a file. There is no API, and that is not an oversight.
+#### What fills `hours` — nothing yet, and that is not an oversight
 
 `?action=timeCardExport` exists and Apps Script could call it — WorkforceHub signs **HS256**, which
 `Utilities.computeHmacSha256Signature` does natively, and the flow is: self-sign a ≤5-minute JWT
@@ -628,46 +628,65 @@ does** — this repo already ran that experiment: the METRC connector was writte
 sat on the sandbox with unset keys, `metrc_health` reporting "Missing keys", nothing real ever
 through it. Note also that a client secret is **per site**, and we may have six.
 
-So the import is a **CSV the browser reads**, and the CSV path is not throwaway — when credentials
-land, only the parser is replaced; matching, preview and write are the same.
+So `hours` is **writable and consumed but unfilled**: `incentive_save` takes it, `incHours_` divides
+by it, and nothing produces it. A CSV importer for it was built and then **removed the same day**
+(2026-08-30) — Sky's answer to "what file does Mike actually make?" was the attendance list below,
+not a timecard. Keeping an importer for a file nobody produces is the dead-code habit this repo
+already corrected once with the avatar routes. `swipeclock_code` stays on `ATTR_HEADERS` (append-only)
+with its roster card, typed by hand, because it is the join key the day the connector lands — but
+**nothing fills it automatically any more**.
 
-- **The browser parses it because the transport is JSONP**, which is GET — a CSV does not fit in a
-  URL, and a deploy-secret POST route could not be called by a signed-in session anyway. FileReader
-  means the file never leaves the machine.
-- **It writes through `incentive_save`, one person at a time.** That route already refuses an
-  imported period, already refuses one locked pending approval, already checks the role and now
-  validates hours. No second set of guards to keep in agreement with the first. A partial run is
-  safe by construction — whoever was not written keeps the flat figure — so it reports which people
-  failed instead of pretending to be atomic.
-- **The format is INFERRED, and every inference is on screen before anything is written.** Nobody
-  here has seen a real export. It detects the header row past title/date rows, tells wide (a column
-  per category) from long (a row per category), and lists the hour columns as **checkboxes**.
-  **Time off is unticked by default** — `$/hr` means per hour on the floor, and counting a week of
-  vacation into the divisor halves it for somebody who worked a normal week. That default is a
-  guess made visible enough to overrule, not a rule.
-- **Matching is exact-or-nothing:** `swipeclock_code`, then a full sorted-token name match
-  (`"Kettler, Michael"` ≡ `Michael Kettler`; a middle *initial* still matches, a middle *name* does
-  not). There is deliberately no fuzzy score — attaching one person's fortnight to another is far
-  worse than an unmatched row somebody can see. Two file rows resolving to one person are
-  **reported**, never allowed to overwrite each other. Unmatched rows and roster people absent from
-  the file are both listed.
-- **`swipeclock_code` is Crew's, appended to `ATTR_HEADERS`.** Phase 0 sketched a `swipeclock_id`
-  on GX Core's registry; that would need a library cut and a re-pin in five spokes to deliver a
-  field one app reads. It is a rich HR attribute, so it lives here. It is **learned** on a
-  name match, so the column fills itself and the next period matches on a code that survives a
-  legal-name change. It is deliberately **not** flagged as a gap on the roster — every record is
-  blank until a file is imported, and a red mark on 39 finished records to report an unused feature
-  is the mistake the permanent `wage` gap already made on the salaried.
-- Because `saveRosterAttrs_` builds its record from a **hand-written list**, `swipeclock_code` had
-  to be added there explicitly or the next roster edit would blank it. The other three attr writers
-  derive from `attrFields_()` and needed nothing.
+### Attendance import — Mike's eligibility list (2026-08-30)
 
-Pinned by `tests/hours_import_test.js` (parsing, layout detection, the PTO default, the matching
-ladder and every refusal) and the hours section of `tests/incentive_math_test.js`.
+Mike produces `Attendance_Bonus_List_<period>.xlsx` every pay period: `Store, Name,
+Attendance (Yes/No), Notes`, one row per person, ~40 rows, plus a second **Summary** sheet. Ticking
+those by hand on the incentive screen was the real recurring toil. **Import attendance…** in the
+action row reads his file and writes the ticks.
 
-**Still open, and answered with defaults rather than blocked on:** whether our six stores are six
-WorkforceHub sites or one; whether OT should count (it does, by default); whether salaried staff
-should show a real `$/hr` at all. The checkbox row makes the first two a click.
+**THIS ONE MOVES PAY, and that is the difference from hours.** A tick adds `attendanceBonus` to a
+budtender **and** `teamAttendancePerHead` to their store manager, both of which reach `payroll` and
+therefore the Capstone export. Hours could ship without a penny-match because they only reached
+`$/hr`; this cannot hide behind that argument, so the preview leads with **the dollar change in both
+directions** and a `confirm()` names it before anything is written.
+
+- **The money is computed the way the MATH computes it, not by counting heads.** One budtender
+  ticked is worth `attendanceBonus + teamAttendancePerHead` — $40, not $15 — unless their store has
+  no manager on the period, in which case it really is $15. `tests/attendance_import_test.js`
+  reconciles the figure on the button against `calcBud`/`calcMgr` rather than against a second
+  opinion written in the test.
+- **A "No" writes a CLEAR, it does not skip.** The list is a complete determination for the period,
+  so "No" is a claim, and somebody ticked in error has to be untickable by the same file that got it
+  right. That is the money-**removing** direction, which is why it is counted out loud.
+- **A manager's own tick pays nobody.** `incCalcMgr_` reads how many of THEIR budtenders are ticked,
+  never the manager's own `att`. Those rows are still written to match Mike's list, but they are
+  reported in their own bucket — calling them changes would overstate what the import does. Six of
+  the forty rows are exactly this.
+- **Rows are classified by what saving them would DO**: *will change* / *already correct* /
+  *written but changes no bonus* / *not on this pay period* / *could not read*. "Matched" as a single
+  bucket would put a manager whose tick changes nothing beside a budtender about to gain $40.
+- **Anything that is neither Yes nor No is skipped and named.** "Pending" read as No strips a bonus
+  on a word Mike had not decided. A **blank** likewise does not clear an existing tick.
+- **.xlsx is read in the browser with no library.** An xlsx is a ZIP of XML; browsers cannot unzip
+  but `DecompressionStream('deflate-raw')` is native, so `impUnzip` walks the central directory and
+  `impReadXlsx` hands the sheets to `DOMParser`. It handles **both** string storages — inline `<is>`
+  (what Mike's file uses) and pooled `sharedStrings` (what Excel writes on re-save); a reader that
+  handles only one returns a sheet of blanks for the other, which looks like an empty file rather
+  than an unread one. CSV still works.
+- **The sheet is CHOSEN, not assumed to be the first** — the Summary sheet has no Name column, and
+  reading it would import nobody and report a clean run. The one whose header names a person and a
+  yes/no wins; if no header says "attendance", a column whose *values* are all yes/no is used.
+- **Matching is name-only and exact-or-nothing**, against both the display name and the legal one —
+  the file mixes them, saying "Mike Kettler" (the nickname) and "Robert Wydick" (the legal name of
+  the person this roster calls Nate). There is no code column in it at all. Duplicates are reported,
+  never allowed to overwrite.
+- **It writes through `incentive_save`**, one person at a time, so that route's existing refusals
+  (imported period, locked pending approval, role check) are the only guards. A partial run is safe:
+  whoever was written has Mike's answer and the rest keep what they had, so it reports who failed
+  rather than pretending to be atomic.
+
+Verified against the real 2026-08-17 file: 40 rows → 13 changes, 17 already correct, 6 managers,
+4 not on the period, 0 unreadable, 0 missing — and **11 gaining, which is exactly what the file's own
+Summary sheet says** (`Eligible (Yes) = 11`).
 
 ### The Capstone export is THEIR shape, not ours
 

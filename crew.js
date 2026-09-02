@@ -2675,8 +2675,8 @@
        from it rather than re-deciding here is what stops the import offering a write the route
        behind it would refuse. */
     if (d.can_edit) {
-      h.push('<button type="button" class="gx-btn" id="incHours" ' +
-             'title="Import a WorkforceHub timecard export to set $/hr per person">Import hours…</button>');
+      h.push('<button type="button" class="gx-btn" id="incAtt" ' +
+             'title="Import Mike\'s attendance bonus list for this period">Import attendance…</button>');
     }
     /* Last in the row, right of Export. Approver-only: Mike prepares a period, he does not move
        the bar people are measured against. It sits with the actions rather than floating over the
@@ -3006,8 +3006,8 @@
     if (rt) rt.addEventListener('click', function () { incSendBack(d); });
     var gr = host.querySelector('#incGear');
     if (gr) gr.addEventListener('click', function () { incTray(d); });
-    var hi = host.querySelector('#incHours');
-    if (hi) hi.addEventListener('click', function () { incHoursImport(d); });
+    var ai = host.querySelector('#incAtt');
+    if (ai) ai.addEventListener('click', function () { attImport(d); });
     var rf = host.querySelector('#incSpiffRefresh');
     if (rf) rf.addEventListener('click', function () { incSpiffRefresh(rf); });
     if (!editable) return;
@@ -3592,27 +3592,143 @@
     } finally { btn.disabled = false; btn.textContent = label; }
   }
 
-  /* ══ Hours import — a WorkforceHub timecard export, read in the browser ═════════════════════════
+  /* ══ Attendance import — Mike's eligibility list, read in the browser ═══════════════════════════
    *
-   * WHY THE BROWSER PARSES IT, and not a route. Crew's transport to the engine is JSONP, which is
-   * GET — a CSV does not fit in a URL. The alternative was a deploy-secret POST route, which the
-   * signed-in UI cannot call anyway (it holds a session token, not the secret). So the file is read
-   * here with FileReader — no network, the file never leaves the machine — matched against the rows
-   * already on screen, and written one person at a time through `incentive_save`.
+   * Mike produces "Attendance_Bonus_List_<period>.xlsx" every pay period: one row per person, a
+   * Yes/No, and a note saying why. Forty rows. Ticking those by hand on this screen is the actual
+   * recurring toil, and a mis-tick is money — so this reads his file and writes the ticks.
    *
-   * THAT ROUTE IS THE WHOLE SAFETY STORY. It already refuses an imported period, already refuses a
-   * period locked pending approval, already checks the role, and already validates hours. Reusing
-   * it means the import cannot reach a period the screen would not let you type into, and there is
-   * no second set of guards to keep in agreement with the first.
+   * THIS ONE MOVES PAY, AND THAT CHANGES THE POSTURE. Hours only ever reached $/hr, which is why
+   * they could be imported from a source nobody had penny-matched. `att` is different: it adds
+   * `attendanceBonus` to a budtender's bonus AND `teamAttendancePerHead` to their manager's, both
+   * of which reach `payroll` and therefore the Capstone export. So the preview does not just say
+   * who matched — it states the dollar change, in both directions, before anything is written.
    *
-   * NOTHING IS WRITTEN UNTIL THE PREVIEW IS CONFIRMED. The file format is inferred — see
-   * hrsPlan() — and an inference nobody can see is how the wrong column silently becomes payroll's
-   * idea of a fortnight. The preview names the columns it is summing and lets them be changed.
+   * A "No" WRITES A CLEAR, it does not skip. Mike's list is a complete determination for the
+   * period, so "No" is a claim ("not eligible"), not an absence — and somebody ticked in error has
+   * to be untickable by the same file that got it right. That is the money-REMOVING direction,
+   * which is exactly why it is counted out loud on the confirm button.
+   *
+   * WHY THE BROWSER READS IT. Same reason as before: the transport to the engine is JSONP, which is
+   * GET, and a spreadsheet does not fit in a URL. FileReader means the file — which names every
+   * member of staff and why each one missed a bonus — never leaves the machine. Writes go through
+   * `incentive_save`, one person at a time, so that route's existing refusals (imported period,
+   * locked pending approval, role check) are the only guards there are.
    */
 
+  /* ── .xlsx, without a library ───────────────────────────────────────────────────────────────────
+     An xlsx is a ZIP of XML. Browsers cannot unzip, but they CAN inflate: DecompressionStream
+     ('deflate-raw') is native, and every entry Excel writes is either deflated or stored. So this
+     walks the ZIP's end-of-central-directory record, inflates the sheets, and hands the XML to
+     DOMParser — about eighty lines against a dependency this repo does not have and a "save as CSV"
+     step Mike would have to remember every fortnight. */
+  async function impInflate(buf, method) {
+    if (method === 0) return buf;                       // stored
+    var ds = new DecompressionStream('deflate-raw');
+    var stream = new Blob([buf]).stream().pipeThrough(ds);
+    return await new Response(stream).arrayBuffer();
+  }
+
+  async function impUnzip(arrayBuffer) {
+    var dv = new DataView(arrayBuffer), u8 = new Uint8Array(arrayBuffer);
+    /* Find the End Of Central Directory record: signature 0x06054b50, scanning back from the tail
+       because a zip comment may follow it. */
+    var eocd = -1;
+    for (var i = arrayBuffer.byteLength - 22; i >= 0 && i > arrayBuffer.byteLength - 66000; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('not a readable .xlsx (no zip directory)');
+    var count = dv.getUint16(eocd + 10, true), off = dv.getUint32(eocd + 16, true);
+    var out = Object.create(null);
+    for (var n = 0; n < count; n++) {
+      if (dv.getUint32(off, true) !== 0x02014b50) break;
+      var method = dv.getUint16(off + 10, true);
+      var csize  = dv.getUint32(off + 20, true);
+      var nlen   = dv.getUint16(off + 28, true);
+      var elen   = dv.getUint16(off + 30, true);
+      var clen   = dv.getUint16(off + 32, true);
+      var lho    = dv.getUint32(off + 42, true);
+      var name   = new TextDecoder().decode(u8.subarray(off + 46, off + 46 + nlen));
+      /* The local header repeats the name and extra field with its OWN lengths — the central
+         directory's are not reliable for locating the data. */
+      var lnlen = dv.getUint16(lho + 26, true), lelen = dv.getUint16(lho + 28, true);
+      var start = lho + 30 + lnlen + lelen;
+      out[name] = { method: method, bytes: u8.subarray(start, start + csize) };
+      off += 46 + nlen + elen + clen;
+    }
+    return out;
+  }
+
+  function impColOf(ref) { var m = /^([A-Z]+)/.exec(ref || ''); return m ? m[1] : ''; }
+  function impRowOf(ref) { var m = /(\d+)/.exec(ref || ''); return m ? +m[1] : 0; }
+  /* AA -> 27. Needed because a sheet is addressed by letter and we want dense arrays. */
+  function impColIdx(letters) {
+    var n = 0;
+    for (var i = 0; i < letters.length; i++) n = n * 26 + (letters.charCodeAt(i) - 64);
+    return n - 1;
+  }
+
+  /* Every sheet, as rows of trimmed strings — the same shape impParseCsv returns, so everything
+     downstream is blind to which kind of file it came from. */
+  async function impReadXlsx(arrayBuffer) {
+    var files = await impUnzip(arrayBuffer);
+    var dec = new TextDecoder();
+    async function xml(path) {
+      if (!files[path]) return null;
+      var raw = await impInflate(files[path].bytes, files[path].method);
+      return new DOMParser().parseFromString(dec.decode(raw), 'application/xml');
+    }
+    /* Strings live in ONE of two places and Excel picks per save: inline on the cell, or pooled in
+       sharedStrings with the cell holding an index. A reader that handles only the pool returns a
+       sheet of blanks for the other, which looks like an empty file rather than an unread one. */
+    var shared = [];
+    var ss = await xml('xl/sharedStrings.xml');
+    if (ss) {
+      var items = ss.getElementsByTagName('si');
+      for (var s = 0; s < items.length; s++) {
+        var ts = items[s].getElementsByTagName('t'), acc = '';
+        for (var t = 0; t < ts.length; t++) acc += ts[t].textContent || '';
+        shared.push(acc);
+      }
+    }
+    var wb = await xml('xl/workbook.xml');
+    var names = [];
+    if (wb) {
+      var sh = wb.getElementsByTagName('sheet');
+      for (var q = 0; q < sh.length; q++) names.push(sh[q].getAttribute('name') || ('Sheet' + (q + 1)));
+    }
+    var out = [];
+    for (var idx = 1; files['xl/worksheets/sheet' + idx + '.xml']; idx++) {
+      var doc = await xml('xl/worksheets/sheet' + idx + '.xml');
+      var cells = doc.getElementsByTagName('c'), rows = [];
+      for (var c2 = 0; c2 < cells.length; c2++) {
+        var cell = cells[c2], ref = cell.getAttribute('r') || '', ty = cell.getAttribute('t');
+        var val = '';
+        if (ty === 'inlineStr') {
+          var its = cell.getElementsByTagName('t');
+          for (var y = 0; y < its.length; y++) val += its[y].textContent || '';
+        } else {
+          var vs = cell.getElementsByTagName('v');
+          var raw2 = vs.length ? (vs[0].textContent || '') : '';
+          val = (ty === 's') ? (shared[+raw2] || '') : raw2;
+        }
+        val = String(val).trim();
+        if (val === '') continue;
+        var r = impRowOf(ref) - 1, k = impColIdx(impColOf(ref));
+        if (r < 0 || k < 0) continue;
+        while (rows.length <= r) rows.push([]);
+        while (rows[r].length <= k) rows[r].push('');
+        rows[r][k] = val;
+      }
+      out.push({ name: names[idx - 1] || ('Sheet' + idx), rows: rows });
+    }
+    return out;
+  }
+
   /* Quoted fields, escaped quotes, embedded newlines, and Excel's BOM. Hand-rolled because the
-     alternative is a dependency, and this file has none. */
-  function hrsParseCsv(text) {
+     alternative is a dependency, and this file has none. Kept alongside the xlsx reader because a
+     "save as CSV" is a perfectly good way to hand this screen the same list. */
+  function impParseCsv(text) {
     var rows = [], row = [], cur = '', quoted = false;
     var s = String(text == null ? '' : text).replace(/^﻿/, '');
     for (var i = 0; i < s.length; i++) {
@@ -3629,329 +3745,340 @@
       cur += c;
     }
     if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
-    return rows.map(function (r) { return r.map(function (c) { return String(c).trim(); }); });
+    return rows.map(function (r) { return r.map(function (x) { return String(x).trim(); }); });
   }
 
-  /* Exports lead with title and date-range rows, so row 0 is not reliably the header. Take the
-     first row that both names a person-ish column and has real width — a title row has one cell. */
-  function hrsHeaderRow(rows) {
+  /* A workbook leads with a title and a date range, and Mike's second sheet is a summary whose
+     first row is a sentence. Take the first row that both names a person-ish column and has real
+     width — a title row has one cell. */
+  function impHeaderRow(rows) {
     for (var i = 0; i < Math.min(rows.length, 25); i++) {
-      var r = rows[i], filled = r.filter(function (c) { return c !== ''; });
-      if (filled.length < 3) continue;
-      if (r.some(function (c) { return /name|employee|empl?\b/i.test(c); })) return i;
+      var r = rows[i] || [], filled = r.filter(function (c) { return c !== ''; });
+      if (filled.length < 2) continue;
+      if (r.some(function (c) { return /name|employee/i.test(c); })) return i;
     }
-    return 0;
-  }
-
-  var HRS_PTO = /pto|vacation|sick|holiday|bereav|jury|leave|unpaid|absence|personal/i;
-  var HRS_HOURISH = /hour|hrs\b/i;
-
-  /* What the file is, and which numbers to add up. Two shapes exist in the wild and they need
-     opposite handling, so the shape is DETECTED and then STATED in the preview rather than assumed:
-
-       wide  one row per person, a column per punch category   → sum the chosen columns
-       long  one row per person PER category, one hours column → sum the rows whose category is kept
-
-     PTO and its relatives are off by default: $/hr is meant to read "what this bonus was worth per
-     hour on the floor", and counting a week of vacation into the divisor halves it for somebody who
-     worked a normal week. That is a DEFAULT, not a rule — every category is a checkbox, because the
-     right answer is Sky's and this guess must be visible enough to overrule. */
-  function hrsPlan(rows) {
-    var hi = hrsHeaderRow(rows);
-    var headers = rows[hi] || [];
-    var body = rows.slice(hi + 1).filter(function (r) {
-      return r.some(function (c) { return c !== ''; });
-    });
-    function find(re, avoid) {
-      for (var i = 0; i < headers.length; i++) {
-        if (!re.test(headers[i])) continue;
-        if (avoid && avoid.test(headers[i])) continue;
-        return i;
-      }
-      return -1;
-    }
-    var AVOID = /supervisor|manager|department|location|store|company|site|division|job/i;
-    var codeCol  = find(/employee\s*(code|number|id)|^emp\s*(code|no|id)|badge|payroll\s*id/i, AVOID);
-    var nameCol  = find(/employee\s*name|^name$|full\s*name/i, AVOID);
-    var firstCol = find(/first\s*name|^first$/i, AVOID);
-    var lastCol  = find(/last\s*name|^last$|surname/i, AVOID);
-    if (nameCol < 0 && firstCol < 0 && lastCol < 0) nameCol = find(/name/i, AVOID);
-    var catCol   = find(/punch\s*categ|categ|earning|pay\s*(code|type)|^type$|hour\s*type/i, AVOID);
-
-    var hourCols = [];
-    for (var i = 0; i < headers.length; i++) {
-      if (i === codeCol || i === nameCol || i === catCol) continue;
-      if (!HRS_HOURISH.test(headers[i])) continue;
-      hourCols.push(i);
-    }
-    /* LONG only when there is a category column AND exactly one hours column to attribute to it.
-       Two hours columns beside a category is a wide sheet that happens to name a column "type", and
-       reading it as long would collapse every category into one. */
-    var long = catCol >= 0 && hourCols.length === 1;
-    var cats = [];
-    if (long) {
-      var seen = Object.create(null);
-      body.forEach(function (r) {
-        var c = String(r[catCol] || '').trim();
-        if (!c || seen[c]) return;
-        seen[c] = 1;
-        cats.push({ label: c, on: !HRS_PTO.test(c) });
-      });
-    } else {
-      cats = hourCols.map(function (i) {
-        return { label: headers[i], col: i, on: !HRS_PTO.test(headers[i]) };
-      });
-    }
-    return { headers: headers, body: body, codeCol: codeCol, nameCol: nameCol,
-             firstCol: firstCol, lastCol: lastCol, catCol: catCol,
-             hourCol: hourCols.length ? hourCols[0] : -1, hourCols: hourCols,
-             shape: long ? 'long' : 'wide', cats: cats };
-  }
-
-  function hrsNameOf(plan, r) {
-    if (plan.nameCol >= 0 && r[plan.nameCol]) return r[plan.nameCol];
-    var f = plan.firstCol >= 0 ? r[plan.firstCol] : '';
-    var l = plan.lastCol  >= 0 ? r[plan.lastCol]  : '';
-    return (f + ' ' + l).trim();
+    return -1;
   }
 
   /* "Kettler, Michael" and "Michael Kettler" are the same person; METRC alone spells the same name
      three ways. Lowercased, depunctuated, comma-flipped, and finally compared as a SORTED token set
      so word order stops mattering. Deliberately not a fuzzy score — a near-miss that silently
-     attaches one person's fortnight to another is worse than an unmatched row somebody can see. */
-  function hrsKey(name) {
+     hands one person another's bonus is worse than an unmatched row somebody can see. */
+  function impKey(name) {
     var s = String(name || '').toLowerCase().replace(/[^a-z, ]/g, ' ');
     if (s.indexOf(',') >= 0) { var p = s.split(','); s = p[1] + ' ' + p[0]; }
     return s.replace(/\s+/g, ' ').trim();
   }
-  function hrsTokens(name) {
-    return hrsKey(name).split(' ').filter(function (t) { return t.length > 1; }).sort().join(' ');
-  }
-  /* Leading zeros do not survive a spreadsheet — the same coercion that makes Sky employee 0
-     rather than 00 — so codes compare as text AND as numbers. */
-  function hrsSameCode(a, b) {
-    a = String(a == null ? '' : a).trim(); b = String(b == null ? '' : b).trim();
-    if (!a || !b) return false;
-    if (a.toLowerCase() === b.toLowerCase()) return true;
-    return /^\d+$/.test(a) && /^\d+$/.test(b) && parseInt(a, 10) === parseInt(b, 10);
+  function impTokens(name) {
+    return impKey(name).split(' ').filter(function (t) { return t.length > 1; }).sort().join(' ');
   }
 
-  /* Everyone the current period can hold an input for. A row with no employee_id is skipped on
-     purpose: incentive_save keys on it, so hours saved against a blank would go nowhere. Those
-     people are already reported by the engine as `unmatched` and shown on the dashboard. */
-  function hrsRoster(d) {
+  /* Everyone the current period can hold an input for, with the section they sit in — a manager's
+     own tick is not what pays them, so the section decides how a row is reported. A row with no
+     employee_id is skipped: incentive_save keys on it, so a tick saved against a blank goes
+     nowhere. Those people are already reported by the engine as `unmatched`. */
+  function impRoster(d) {
     var out = [];
-    (d.budtenders || []).concat(d.managers || []).forEach(function (r) {
-      if (!r || !r.employee_id) return;
-      out.push({ id: r.employee_id, name: incName(r), legal: r.full_name || '',
-                 code: r.swipeclock_code || '', store: r.storeName || '' });
+    (d.budtenders || []).forEach(function (r) {
+      if (r && r.employee_id) out.push({ id: r.employee_id, name: incName(r), legal: r.full_name || '',
+                                         store: r.storeName || '', slug: r.storeSlug || '', section: 'budtender' });
+    });
+    (d.managers || []).forEach(function (r) {
+      if (r && r.employee_id) out.push({ id: r.employee_id, name: incName(r), legal: r.full_name || '',
+                                         store: r.storeName || '', slug: r.storeSlug || '', section: 'manager' });
     });
     if (d.admin && d.admin.employee_id) {
-      /* The owner is listed so the file's row for him is not reported as unmatched, but hours
-         cannot change his $/hr — calcAdmin takes no inputs. Saving one would be a write that
-         provably does nothing, so he is marked and skipped at commit. */
       out.push({ id: d.admin.employee_id, name: incName(d.admin), legal: d.admin.full_name || '',
-                 code: d.admin.swipeclock_code || '', store: '', admin: true });
+                 store: '', slug: '', section: 'admin' });
     }
     return out;
   }
 
-  function hrsBuild(plan, roster) {
-    var byPerson = Object.create(null), order = [];
-    var on = Object.create(null);
-    plan.cats.forEach(function (c) { if (c.on) on[c.label] = 1; });
+  var ATT_YES = /^(y|yes|true|1|eligible|x|✓)$/i;
+  var ATT_NO  = /^(n|no|false|0|not eligible|ineligible|-|—)$/i;
 
-    plan.body.forEach(function (r) {
-      var name = hrsNameOf(plan, r);
-      var code = plan.codeCol >= 0 ? r[plan.codeCol] : '';
-      if (!name && !code) return;
-      var k = (code ? 'c:' + code : 'n:' + hrsTokens(name));
-      if (!byPerson[k]) { byPerson[k] = { name: name, code: code, hours: 0, saw: 0 }; order.push(k); }
-      var p = byPerson[k];
-      if (name && !p.name) p.name = name;
-      if (plan.shape === 'long') {
-        if (!on[String(r[plan.catCol] || '').trim()]) return;
-        var v = parseFloat(String(r[plan.hourCol] || '').replace(/[^0-9.\-]/g, ''));
-        if (isFinite(v)) { p.hours += v; p.saw++; }
-      } else {
-        plan.cats.forEach(function (c) {
-          if (!c.on) return;
-          var n = parseFloat(String(r[c.col] || '').replace(/[^0-9.\-]/g, ''));
-          if (isFinite(n)) { p.hours += n; p.saw++; }
-        });
+  /* Which sheet, which columns. Mike's workbook has a second "Summary" sheet with no Name column,
+     so the sheet is CHOSEN rather than assumed to be the first: the one whose header names a person
+     and a yes/no. Everything is reported in the preview so a wrong pick is visible, not silent. */
+  function attPlan(sheets) {
+    var best = null;
+    sheets.forEach(function (sh, si) {
+      var hi = impHeaderRow(sh.rows);
+      if (hi < 0) return;
+      var headers = sh.rows[hi] || [];
+      function find(re, avoid) {
+        for (var i = 0; i < headers.length; i++) {
+          if (!re.test(headers[i])) continue;
+          if (avoid && avoid.test(headers[i])) continue;
+          return i;
+        }
+        return -1;
       }
-    });
-
-    var used = Object.create(null), matched = [], unmatched = [];
-    order.forEach(function (k) {
-      var p = byPerson[k];
-      var hit = null, how = '';
-      for (var i = 0; i < roster.length && !hit; i++) {
-        if (hrsSameCode(p.code, roster[i].code)) { hit = roster[i]; how = 'code'; }
-      }
-      if (!hit) {
-        var tk = hrsTokens(p.name);
-        for (var j = 0; j < roster.length && !hit; j++) {
-          if (tk && (hrsTokens(roster[j].name) === tk || hrsTokens(roster[j].legal) === tk)) {
-            hit = roster[j]; how = 'name';
+      var AVOID = /supervisor|manager\b|department|store|location|company/i;
+      var nameCol = find(/employee\s*name|^name$|full\s*name/i, AVOID);
+      if (nameCol < 0) nameCol = find(/name/i, AVOID);
+      var attCol  = find(/attendance|eligib|bonus\s*\(?y/i, null);
+      /* No column named attendance? Fall back to the first column whose VALUES are yes/no — a
+         header can be spelled anything, but the vocabulary in the cells cannot be mistaken. */
+      if (attCol < 0) {
+        for (var k = 0; k < headers.length && attCol < 0; k++) {
+          if (k === nameCol) continue;
+          var seen = 0, yn = 0;
+          for (var r = hi + 1; r < sh.rows.length; r++) {
+            var v = String((sh.rows[r] || [])[k] || '').trim();
+            if (!v) continue;
+            seen++;
+            if (ATT_YES.test(v) || ATT_NO.test(v)) yn++;
           }
+          if (seen >= 3 && yn === seen) attCol = k;
         }
       }
-      /* ONE FILE ROW PER PERSON. Two rows resolving to the same person means the match is wrong (or
-         the file has them twice), and the second would overwrite the first with no trace. Report
-         both rather than pick. */
-      if (hit && used[hit.id]) { unmatched.push({ name: p.name, code: p.code, hours: p.hours,
-                                                  why: 'a second row also matched ' + hit.name }); return; }
-      if (!hit) { unmatched.push({ name: p.name, code: p.code, hours: p.hours,
-                                   why: 'nobody on this period matches' }); return; }
-      used[hit.id] = 1;
-      matched.push({ id: hit.id, who: hit.name, store: hit.store, admin: !!hit.admin,
-                     name: p.name, code: p.code, how: how, hours: Math.round(p.hours * 100) / 100,
-                     /* A name match on somebody with no code on file is the moment to learn it —
-                        next period matches on the code and survives a legal-name change. */
-                     learn: how === 'name' && !hit.code && !!p.code });
+      if (nameCol < 0 || attCol < 0) return;
+      var cand = { sheetIndex: si, sheetName: sh.name, headerRow: hi, headers: headers,
+                   nameCol: nameCol, attCol: attCol,
+                   noteCol: find(/note|reason|comment|detail/i, null),
+                   storeCol: find(/store|location|site/i, null),
+                   body: sh.rows.slice(hi + 1).filter(function (r) {
+                     return (r || []).some(function (c) { return c !== ''; });
+                   }) };
+      if (!best || cand.body.length > best.body.length) best = cand;
     });
-    var missing = roster.filter(function (r) {
-      return !used[r.id] && !r.admin;
-    });
-    return { matched: matched, unmatched: unmatched, missing: missing };
+    return best;
   }
 
-  function incHoursImport(d) {
-    if (document.getElementById('crewHrsBack')) return;
+  /* Match the file against the period and classify every row by what saving it would DO. The
+     categories are the point: "matched" alone would put a manager whose tick changes nothing in the
+     same list as a budtender about to gain $15. */
+  function attBuild(plan, roster, inputs, T) {
+    var used = Object.create(null);
+    var change = [], same = [], noeffect = [], absent = [], unreadable = [];
+
+    (plan.body || []).forEach(function (r) {
+      var name = String(r[plan.nameCol] || '').trim();
+      if (!name) return;
+      var raw  = String(r[plan.attCol] || '').trim();
+      var note = plan.noteCol >= 0 ? String(r[plan.noteCol] || '').trim() : '';
+      var fileStore = plan.storeCol >= 0 ? String(r[plan.storeCol] || '').trim() : '';
+
+      var want = ATT_YES.test(raw) ? true : ATT_NO.test(raw) ? false : null;
+
+      var tk = impTokens(name), hit = null;
+      for (var j = 0; j < roster.length && !hit; j++) {
+        if (tk && (impTokens(roster[j].name) === tk || impTokens(roster[j].legal) === tk)) hit = roster[j];
+      }
+
+      var rec = { name: name, raw: raw, want: want, note: note, fileStore: fileStore,
+                  who: hit ? hit.name : '', id: hit ? hit.id : '', store: hit ? hit.store : '',
+                  section: hit ? hit.section : '', slug: hit ? hit.slug : '' };
+
+      /* An unrecognised value is REPORTED, never guessed. "Pending", "N/A" and a blank all read as
+         "not yes", and treating them as No would silently strip a bonus on a typo. */
+      if (want === null) { unreadable.push(rec); return; }
+      if (!hit) { absent.push(rec); return; }
+      if (used[hit.id]) { rec.dupe = true; unreadable.push(rec); return; }
+      used[hit.id] = 1;
+
+      /* A manager's own att is not read by incCalcMgr_ — what pays them is how many of THEIR
+         budtenders are ticked. Writing it is harmless and honest to Mike's list, but calling it a
+         change would overstate what the import does, so it gets its own bucket. Admin likewise. */
+      if (hit.section !== 'budtender') { noeffect.push(rec); return; }
+
+      var now = !!(inputs && inputs[hit.id] && inputs[hit.id].att);
+      rec.now = now;
+      (now === want ? same : change).push(rec);
+    });
+
+    var missing = roster.filter(function (r) { return !used[r.id] && r.section === 'budtender'; });
+
+    /* The dollar figure, computed the way the math actually computes it rather than by counting
+       heads: a budtender ticked adds their own attendanceBonus AND teamAttendancePerHead to their
+       store's manager. Reporting only the first understates every change by two thirds. */
+    var perHead = (T && T.manager && T.manager.teamAttendancePerHead) || 0;
+    var each    = (T && T.budtender && T.budtender.attendanceBonus) || 0;
+    var mgrSlugs = Object.create(null);
+    roster.forEach(function (r) { if (r.section === 'manager') mgrSlugs[r.slug] = 1; });
+    var gain = 0, lose = 0;
+    change.forEach(function (c) {
+      var amt = each + (mgrSlugs[c.slug] ? perHead : 0);
+      if (c.want) gain += amt; else lose += amt;
+    });
+
+    return { change: change, same: same, noeffect: noeffect, absent: absent,
+             unreadable: unreadable, missing: missing,
+             gaining: change.filter(function (c) { return c.want; }).length,
+             losing:  change.filter(function (c) { return !c.want; }).length,
+             gain: gain, lose: lose, net: gain - lose };
+  }
+
+  function attImport(d) {
+    if (document.getElementById('crewImpBack')) return;
     var pp = (d.payPeriod && d.payPeriod.start) || d.pp_start || '';
     var ppEnd = (d.payPeriod && d.payPeriod.end) || d.pp_end || '';
-    var roster = hrsRoster(d);
-    var plan = null, built = null, busy = false;
+    var T = d.thresholds || {};
+    var roster = impRoster(d);
+    /* THE INPUTS OBJECT IS TAKEN FROM `d`, ONCE, and both the preview and the commit use that same
+       reference. In the running app it IS incInputs() — `d` is inc.data — so mutating it after each
+       save is what lets paintIncentive() repaint without a round trip. Reading the global here
+       instead would make the modal a function of app state rather than of its argument, which is
+       how a preview ends up describing a different period from the one it was opened for. */
+    var inputs = d.inputs || incInputs() || {};
+    var plan = null, built = null, busy = false, fileName = '';
 
-    var back = el('div', 'crew-hrs-back'); back.id = 'crewHrsBack';
-    var box  = el('div', 'crew-hrs');
+    var back = el('div', 'crew-imp-back'); back.id = 'crewImpBack';
+    var box  = el('div', 'crew-imp');
     back.appendChild(box);
     function close() { if (!busy) { document.removeEventListener('keydown', onKey); back.remove(); } }
     function onKey(e) { if (e.key === 'Escape') close(); }
     back.addEventListener('mousedown', function (e) { if (e.target === back) close(); });
     document.addEventListener('keydown', onKey);
 
+    function rowsHtml(list, cls, label) {
+      if (!list.length) return '';
+      return list.map(function (m) {
+        return '<tr class="' + cls + '"><td>' + esc(m.name) +
+          (m.raw ? ' <span class="crew-imp-tag ' + (m.want ? 'yes' : m.want === false ? 'no' : 'huh') + '">' +
+                   esc(m.raw) + '</span>' : '') + '</td>' +
+          '<td>' + esc(m.who || label) + '</td>' +
+          '<td class="dim">' + esc(m.store || m.fileStore) + '</td>' +
+          '<td class="dim note">' + esc(m.note) + '</td></tr>';
+      }).join('');
+    }
+
     function paint() {
-      var h = ['<div class="crew-hrs-head"><span>Import hours · ' +
+      var h = ['<div class="crew-imp-head"><span>Import attendance · ' +
                esc(incPeriodLabel(pp, ppEnd)) + '</span>' +
-               '<button class="inc-tray-x" id="hrsX" title="Close">✕</button></div>',
-               '<div class="crew-hrs-body">'];
+               '<button class="inc-tray-x" id="impX" title="Close">✕</button></div>',
+               '<div class="crew-imp-body">'];
 
       if (!plan) {
-        h.push('<p class="crew-hrs-lede">Drop the <b>WorkforceHub timecard export</b> for this ' +
-               'period, or choose the file. It is read here in the browser — nothing is uploaded, ' +
-               'and nothing is saved until you have seen what it matched.</p>');
-        h.push('<div class="crew-hrs-drop" id="hrsDrop">Drop a .csv here<br>' +
-               '<button type="button" class="gx-btn" id="hrsPick" style="margin-top:10px">Choose file…</button></div>');
-        h.push('<p class="crew-hrs-lede">Hours set <b>$/hr only</b>. They never change a bonus, a ' +
-               'payroll figure, or the Capstone export — so an import cannot alter what anybody ' +
-               'is paid. Anyone the file does not cover keeps the flat ' +
-               esc(String((d.thresholds && d.thresholds.hoursPerPeriod) || 80)) + '-hour figure.</p>');
-      } else {
-        h.push('<p class="crew-hrs-lede">Read <b>' + plan.body.length + '</b> rows · detected a <b>' +
-               esc(plan.shape === 'long' ? 'one row per category' : 'one row per person') +
-               '</b> layout · matching on ' +
-               (plan.codeCol >= 0 ? '<b>' + esc(plan.headers[plan.codeCol]) + '</b> then name'
-                                  : 'name only <b>(no code column found)</b>') + '.</p>');
-        h.push('<div><div class="crew-hrs-sec" style="margin-bottom:7px">Hours counted — ' +
-               'time off is off by default</div><div class="crew-hrs-cols">');
-        plan.cats.forEach(function (c, i) {
-          h.push('<label class="crew-hrs-col' + (c.on ? ' on' : '') + '">' +
-                 '<input type="checkbox" data-cat="' + i + '"' + (c.on ? ' checked' : '') + '>' +
-                 esc(c.label) + '</label>');
-        });
-        if (!plan.cats.length) {
-          h.push('<span class="crew-hrs-lede">No column named like hours — check the file.</span>');
+        h.push('<p class="crew-imp-lede">Drop <b>Mike\'s attendance bonus list</b> for this period — ' +
+               'the <b>.xlsx</b> as he saves it, or a CSV. It is read here in the browser; the file ' +
+               'names every member of staff and why each one missed, and it never leaves this machine.</p>');
+        h.push('<div class="crew-imp-drop" id="impDrop">Drop the file here<br>' +
+               '<button type="button" class="gx-btn" id="impPick" style="margin-top:10px">Choose file…</button></div>');
+        h.push('<p class="crew-imp-lede"><b>This one changes pay.</b> A tick adds $' +
+               esc(String((T.budtender && T.budtender.attendanceBonus) || 0)) +
+               ' to that person and $' + esc(String((T.manager && T.manager.teamAttendancePerHead) || 0)) +
+               ' to their store manager, and both reach the Capstone export. Nothing is written ' +
+               'until you have seen the totals.</p>');
+      } else if (built) {
+        /* Which sheet and which columns it read, before any number — a wrong pick has to be
+           visible here rather than inferred from a total that looks a bit off. */
+        h.push('<p class="crew-imp-lede"><b>' + esc(fileName) + '</b> · sheet <b>' +
+               esc(plan.sheetName) + '</b> · <b>' + plan.body.length + '</b> rows · reading ' +
+               '<b>' + esc(plan.headers[plan.nameCol]) + '</b> and <b>' +
+               esc(plan.headers[plan.attCol]) + '</b>' +
+               (plan.noteCol >= 0 ? ' with <b>' + esc(plan.headers[plan.noteCol]) + '</b>' : '') + '.</p>');
+
+        /* The headline is the money, not the row count. */
+        h.push('<div class="crew-imp-sum">' +
+               '<div class="crew-imp-stat"><b class="up">' + built.gaining + '</b><span>gaining the bonus</span></div>' +
+               '<div class="crew-imp-stat"><b class="down">' + built.losing + '</b><span>losing it</span></div>' +
+               '<div class="crew-imp-stat"><b>' + esc(m0(built.net)) + '</b><span>net change to payroll</span></div>' +
+               '</div>');
+        if (built.lose) {
+          h.push('<div class="crew-imp-warn"><b>' + esc(m0(built.lose)) + ' comes off</b> — ' +
+                 built.losing + ' ' + (built.losing === 1 ? 'person is' : 'people are') +
+                 ' ticked today and this file says they are not eligible. That is the file doing its ' +
+                 'job, but it is the direction worth reading twice.</div>');
         }
-        h.push('</div></div>');
 
-        if (built) {
-          if (!plan.cats.some(function (c) { return c.on; })) {
-            h.push('<div class="crew-hrs-warn bad"><b>Nothing is counted.</b> Every category is ' +
-                   'switched off, so every person would import as zero hours — which this refuses ' +
-                   'to save. Tick at least one.</div>');
-          }
-          h.push('<div class="crew-hrs-tw"><table class="crew-hrs-t"><thead><tr>' +
-                 '<th>In the file</th><th>Matched to</th><th>Store</th><th style="text-align:right">Hours</th>' +
-                 '</tr></thead><tbody>');
-          built.matched.forEach(function (m) {
-            h.push('<tr><td>' + esc(m.name || m.code) +
-                   ' <span class="crew-hrs-tag ' + m.how + '">' + m.how + '</span>' +
-                   (m.learn ? ' <span class="crew-hrs-tag">will save code ' + esc(m.code) + '</span>' : '') +
-                   '</td><td>' + esc(m.who) + (m.admin ? ' <span class="crew-hrs-tag">no timecard — skipped</span>' : '') +
-                   '</td><td class="dim">' + esc(m.store) + '</td>' +
-                   '<td class="n">' + esc(m.hours.toFixed(2)) + '</td></tr>');
-          });
-          built.unmatched.forEach(function (u) {
-            h.push('<tr class="miss"><td>' + esc(u.name || u.code) +
-                   ' <span class="crew-hrs-tag no">no match</span></td>' +
-                   '<td colspan="2" class="dim">' + esc(u.why) + '</td>' +
-                   '<td class="n">' + esc(Number(u.hours || 0).toFixed(2)) + '</td></tr>');
-          });
-          h.push('</tbody></table></div>');
+        h.push('<div class="crew-imp-tw"><table class="crew-imp-t"><thead><tr>' +
+               '<th>In the file</th><th>On this period</th><th>Store</th><th>Mike\'s note</th>' +
+               '</tr></thead><tbody>');
+        if (built.change.length) {
+          h.push('<tr class="grp"><td colspan="4">Will change — ' + built.change.length + '</td></tr>');
+          h.push(rowsHtml(built.change, 'chg', ''));
+        }
+        if (built.same.length) {
+          h.push('<tr class="grp"><td colspan="4">Already correct — ' + built.same.length + '</td></tr>');
+          h.push(rowsHtml(built.same, 'dimrow', ''));
+        }
+        if (built.noeffect.length) {
+          h.push('<tr class="grp"><td colspan="4">Written, but changes no bonus — ' +
+                 built.noeffect.length + '</td></tr>');
+          h.push(rowsHtml(built.noeffect, 'dimrow', ''));
+        }
+        if (built.absent.length) {
+          h.push('<tr class="grp"><td colspan="4">Not on this pay period — ' + built.absent.length + '</td></tr>');
+          h.push(rowsHtml(built.absent, 'dimrow', 'nobody on this period'));
+        }
+        if (built.unreadable.length) {
+          h.push('<tr class="grp bad"><td colspan="4">Could not read — ' + built.unreadable.length + '</td></tr>');
+          h.push(rowsHtml(built.unreadable, 'miss', 'skipped'));
+        }
+        h.push('</tbody></table></div>');
 
-          if (built.unmatched.length) {
-            h.push('<div class="crew-hrs-warn"><b>' + built.unmatched.length +
-                   ' row(s) matched nobody</b> and will be skipped. Fix it by putting the ' +
-                   'WorkforceHub code on their roster record, or correct the legal name — ' +
-                   'guessing a near-match here would attach one person\'s fortnight to another.</div>');
-          }
-          if (built.missing.length) {
-            h.push('<div class="crew-hrs-warn"><b>' + built.missing.length +
-                   ' person(s) on this period are not in the file</b> — ' +
-                   esc(built.missing.slice(0, 8).map(function (m) { return m.name; }).join(', ')) +
-                   (built.missing.length > 8 ? ' and ' + (built.missing.length - 8) + ' more' : '') +
-                   '. They keep the flat figure, which is exactly what a blank means.</div>');
-          }
+        if (built.noeffect.length) {
+          h.push('<div class="crew-imp-warn"><b>A manager\'s own tick does not pay them.</b> What ' +
+                 'pays a store manager is how many of their budtenders are ticked, so those rows ' +
+                 'are saved to match Mike\'s list and change no figure.</div>');
+        }
+        if (built.missing.length) {
+          h.push('<div class="crew-imp-warn"><b>' + built.missing.length +
+                 ' budtender(s) on this period are not in the file</b> — ' +
+                 esc(built.missing.slice(0, 8).map(function (m) { return m.name; }).join(', ')) +
+                 (built.missing.length > 8 ? ' and ' + (built.missing.length - 8) + ' more' : '') +
+                 '. They keep whatever they are set to now; this import will not touch them.</div>');
+        }
+        if (built.unreadable.length) {
+          h.push('<div class="crew-imp-warn bad"><b>' + built.unreadable.length +
+                 ' row(s) were skipped</b> — a Yes/No that is neither, or a second row for somebody ' +
+                 'already read. Guessing either one would move money on an assumption.</div>');
         }
       }
-      h.push('</div><div class="crew-hrs-foot">');
+
+      h.push('</div><div class="crew-imp-foot">');
       if (plan && built) {
-        var n = built.matched.filter(function (m) { return !m.admin && m.hours > 0; }).length;
-        h.push('<button type="button" class="gx-btn gx-btn-green" id="hrsGo"' +
-               (n ? '' : ' disabled') + '>Save hours for ' + n + ' ' +
-               (n === 1 ? 'person' : 'people') + '</button>');
-        h.push('<button type="button" class="gx-btn" id="hrsRedo">Choose a different file</button>');
+        var n = built.change.length + built.noeffect.length;
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="impGo"' + (n ? '' : ' disabled') +
+               '>' + (built.change.length
+                 ? 'Save ' + built.change.length + ' change' + (built.change.length === 1 ? '' : 's') +
+                   ' · ' + esc(m0(built.net)) + ' net'
+                 : 'Nothing to change') + '</button>');
+        h.push('<button type="button" class="gx-btn" id="impRedo">Choose a different file</button>');
       }
-      h.push('<span class="crew-hrs-spacer"></span><span class="crew-hrs-prog" id="hrsProg"></span>' +
-             '<button type="button" class="gx-btn" id="hrsCancel">Close</button></div>');
+      h.push('<span class="crew-imp-spacer"></span><span class="crew-imp-prog" id="impProg"></span>' +
+             '<button type="button" class="gx-btn" id="impCancel">Close</button></div>');
       box.innerHTML = h.join('');
       wire();
     }
 
-    function rebuild() { built = hrsBuild(plan, roster); }
+    function rebuild() { built = attBuild(plan, roster, inputs, T); }
 
-    function load(file) {
+    async function load(file) {
       if (!file) return;
-      var fr = new FileReader();
-      fr.onload = function () {
-        var rows = hrsParseCsv(fr.result);
-        if (!rows.length) { toast('That file has no rows in it', true); return; }
-        plan = hrsPlan(rows);
-        if (plan.nameCol < 0 && plan.firstCol < 0 && plan.codeCol < 0) {
-          plan = null;
-          toast('No employee name or code column found — is this the timecard export?', true);
+      fileName = file.name || 'the file';
+      try {
+        var sheets;
+        if (/\.xlsx?$/i.test(fileName) || /sheet|excel/i.test(file.type || '')) {
+          sheets = await impReadXlsx(await file.arrayBuffer());
+        } else {
+          sheets = [{ name: fileName, rows: impParseCsv(await file.text()) }];
+        }
+        var p = attPlan(sheets);
+        if (!p) {
+          toast('No name and Yes/No columns found — is this the attendance bonus list?', true);
           return;
         }
-        rebuild(); paint();
-      };
-      fr.onerror = function () { toast('Could not read that file', true); };
-      fr.readAsText(file);
+        plan = p; rebuild(); paint();
+      } catch (e) {
+        toast('Could not read that file: ' + ((e && e.message) || 'unknown'), true);
+      }
     }
 
     function wire() {
-      var x = box.querySelector('#hrsX'); if (x) x.addEventListener('click', close);
-      var c = box.querySelector('#hrsCancel'); if (c) c.addEventListener('click', close);
-      var redo = box.querySelector('#hrsRedo');
+      var x = box.querySelector('#impX'); if (x) x.addEventListener('click', close);
+      var c = box.querySelector('#impCancel'); if (c) c.addEventListener('click', close);
+      var redo = box.querySelector('#impRedo');
       if (redo) redo.addEventListener('click', function () { plan = null; built = null; paint(); });
 
-      var drop = box.querySelector('#hrsDrop');
+      var drop = box.querySelector('#impDrop');
       if (drop) {
-        var pick = box.querySelector('#hrsPick');
+        var pick = box.querySelector('#impPick');
         if (pick) pick.addEventListener('click', function () {
           var inp = document.createElement('input');
-          inp.type = 'file'; inp.accept = '.csv,text/csv,text/plain';
+          inp.type = 'file'; inp.accept = '.xlsx,.xls,.csv,text/csv';
           inp.addEventListener('change', function () { load(inp.files && inp.files[0]); });
           inp.click();
         });
@@ -3963,51 +4090,36 @@
           load(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
         });
       }
-
-      Array.prototype.forEach.call(box.querySelectorAll('input[data-cat]'), function (cb) {
-        cb.addEventListener('change', function () {
-          plan.cats[+cb.getAttribute('data-cat')].on = cb.checked;
-          rebuild(); paint();
-        });
-      });
-
-      var go = box.querySelector('#hrsGo');
+      var go = box.querySelector('#impGo');
       if (go) go.addEventListener('click', commit);
     }
 
-    /* ONE CALL PER PERSON, sequential, through the same route the screen's own edits use.
-       A partial run is SAFE by construction — the people who got written have their hours and the
-       rest keep the flat figure, which is the same state as never having run — so this reports
-       exactly who failed rather than pretending to be atomic. */
+    /* ONE CALL PER PERSON, sequential, through the same route the screen's own ticks use. A partial
+       run is safe by construction — whoever was written has Mike's answer and the rest keep what
+       they had — so this reports exactly who failed rather than pretending to be atomic. */
     async function commit() {
-      var rows = built.matched.filter(function (m) { return !m.admin && m.hours > 0; });
+      var rows = built.change.concat(built.noeffect);
       if (!rows.length) return;
+      if (built.lose && !window.confirm(
+            'This takes ' + m0(built.lose) + ' off ' + built.losing + ' ' +
+            (built.losing === 1 ? 'person' : 'people') + ' and adds ' + m0(built.gain) + ' to ' +
+            built.gaining + '.\n\nNet change to payroll for this period: ' + m0(built.net) +
+            '.\n\nSave Mike\'s list?')) return;
       busy = true;
-      var go = box.querySelector('#hrsGo'), prog = box.querySelector('#hrsProg');
+      var go = box.querySelector('#impGo'), prog = box.querySelector('#impProg');
       if (go) go.disabled = true;
-      var done = 0, failed = [], learned = 0;
+      var done = 0, failed = [];
       for (var i = 0; i < rows.length; i++) {
         var m = rows[i];
         if (prog) prog.textContent = 'Saving ' + (i + 1) + ' of ' + rows.length + '…';
         try {
           var r = await Engine.jsonp('incentive_save',
-                    { token: token(), pp_start: pp, employee_id: m.id, hours: String(m.hours) },
+                    { token: token(), pp_start: pp, employee_id: m.id, att: m.want ? '1' : '' },
                     { timeoutMs: 20000, retries: 1 });
           if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
-          var cur = incInputs();
-          cur[m.id] = cur[m.id] || {};
-          cur[m.id].hours = m.hours;
+          inputs[m.id] = inputs[m.id] || {};
+          inputs[m.id].att = !!m.want;
           done++;
-          /* Learning the code is a convenience, not part of the import: a failure here must not
-             count as a failed hours save, because the hours DID land. */
-          if (m.learn) {
-            try {
-              var s = await Engine.jsonp('roster_save',
-                        { token: token(), employee_id: m.id, swipeclock_code: m.code },
-                        { timeoutMs: 20000, retries: 1 });
-              if (s && s.ok !== false) learned++;
-            } catch (e2) { /* reported in the summary below as simply not learned */ }
-          }
         } catch (e) {
           failed.push(m.who + ' (' + ((e && e.message) || 'unknown') + ')');
         }
@@ -4018,9 +4130,9 @@
       if (failed.length) {
         toast('Saved ' + done + ' of ' + rows.length + ' — failed: ' + failed.slice(0, 3).join('; ') +
               (failed.length > 3 ? ' and ' + (failed.length - 3) + ' more' : ''), true);
+        rebuild(); paint();
       } else {
-        toast('Hours saved for ' + done + ' ' + (done === 1 ? 'person' : 'people') +
-              (learned ? ' · learned ' + learned + ' WorkforceHub code' + (learned === 1 ? '' : 's') : ''));
+        toast('Attendance saved for ' + done + ' ' + (done === 1 ? 'person' : 'people'));
         close();
       }
     }
