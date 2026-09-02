@@ -3082,7 +3082,8 @@
   /* Payroll only — SPIFF is vendor-funded and must never reach Capstone. Same four columns the
      Leaderboard export produced, so the file that lands in payroll does not change shape. */
   function incExportCsv(d, isImported) {
-    var csv = incCsvRows(d, isImported).map(function (r) {
+    var rows = incCsvRows(d, isImported);
+    var csv = rows.map(function (r) {
       return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
     }).join('\n');
     var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
@@ -3090,6 +3091,15 @@
     a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
     a.download = 'incentive-payroll-' + pp + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    /* WHO WAS LEFT OUT IS SAID OUT LOUD, and deliberately NOT in the file — Capstone parses it, so
+       a footer row would be a row they try to import. The count belongs to the person pressing the
+       button: "11 staff" on a fortnight of forty is right, and it is also exactly what a broken
+       filter would look like, so the omission is stated rather than inferred from a short file. */
+    var n = rows.length - 1;
+    toast(n
+      ? 'Exported ' + n + ' ' + (n === 1 ? 'person' : 'staff') +
+        (rows.omitted ? ' · ' + rows.omitted + ' with no bonus left out' : '')
+      : 'Nobody earned a bonus this period — the file has only its header', !n);
   }
 
   /* Split out from the download so the file that reaches payroll can be asserted in a test rather
@@ -3137,8 +3147,14 @@
   function incCsvRows(d, isImported) {
     /* Header says BONUS. Capstone's column is what the company pays, which is the payroll figure —
        their sheet just calls it that, and the file has to speak their language, not ours. */
-    var rows = [['Section', 'Name', 'Store', 'Bonus']];
+    /* NO SECTION COLUMN. It held sec.label and so did Store — the same string, twice, on every row.
+       Removed 2026-09-02 (Sky: "the rest is noise"). The one place the two ever DIFFERED was an
+       unresolvable store, where Section said UNASSIGNED and Store held whatever label the row
+       arrived with; that flag now lives in the Store column itself, so the warning survives the
+       column that used to carry it. */
+    var rows = [['Name', 'Store', 'Bonus']];
     var T = d.thresholds || null, buds = d.budtenders || [];
+    var omitted = 0;
     function pay(r, kind) {
       if (isImported) return r.payroll;
       return kind === 'bud' ? calcBud(r, T, incInputs()).payroll
@@ -3160,9 +3176,16 @@
         return an < bn ? -1 : an > bn ? 1 : 0;
       });
       inSec.forEach(function (x) {
-        /* A row whose payroll the source never recorded is exported EMPTY, not 0.00 — a zero here
-           tells payroll to pay nothing, which is a different claim from "not recorded". */
-        rows.push([sec.label, legalSortName(x.row), sec.label, money(pay(x.row, x.kind))]);
+        var v = pay(x.row, x.kind);
+        /* NOBODY WHO EARNED NOTHING. Most of a fortnight's roster clears no bonus, and thirty
+           rows of 0.00 are thirty rows payroll has to read past to find the eleven that matter
+           (Sky, 2026-09-02: "just show non zero staff, the rest is noise").
+           `null` IS NOT ZERO AND IS KEPT. A row whose payroll the source never recorded exports
+           EMPTY — a different claim from "earned nothing" — and it is exactly the oldest imported
+           reports, which have no payroll column at all. Dropping those as if they were zeros would
+           silently export an empty file for every period before that column existed. */
+        if (v === 0) { omitted++; return; }
+        rows.push([legalSortName(x.row), sec.label, money(v)]);
       });
     });
 
@@ -3172,9 +3195,19 @@
     var placed = {};
     CAPSTONE_SECTIONS.forEach(function (sec) { placed[sec.id] = 1; });
     people.filter(function (x) { return !placed[x.store]; }).forEach(function (x) {
-      rows.push(['UNASSIGNED', legalSortName(x.row), String(x.row.store_label || x.row.storeName || ''),
-                 money(pay(x.row, x.kind))]);
+      var v = pay(x.row, x.kind);
+      if (v === 0) { omitted++; return; }
+      /* The flag goes in the STORE cell now that there is no Section column to carry it, with the
+         label they arrived with kept in brackets so whoever fixes the store knows which one was
+         meant. Somebody owed money whose store did not resolve must never look like a normal row —
+         a silent omission on a payroll export is the worst way for this to fail, and a silent
+         MISFILING is the second worst. */
+      var lbl = String(x.row.store_label || x.row.storeName || '').trim();
+      rows.push([legalSortName(x.row), lbl ? 'UNASSIGNED (' + lbl + ')' : 'UNASSIGNED', money(v)]);
     });
+    /* Rides along on the array rather than changing the return shape: every caller and every test
+       indexes rows positionally, and the count is only ever read once, by the download. */
+    rows.omitted = omitted;
     return rows;
   }
 

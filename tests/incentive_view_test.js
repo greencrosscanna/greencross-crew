@@ -115,11 +115,14 @@ const csv = M.incCsvRows({
   payPeriod: { start: '2026-08-17' },
 }, false);
 ok('the export carries the PAYROLL figure, never the bonus',
-   csv[1][3] === '65.00' && !csv.some(r => r[3] === '565.00'));
+   csv[1][2] === '65.00' && !csv.some(r => r[2] === '565.00'));
 /* The header says Bonus because that is Capstone's column name; the VALUE is payroll. The file has
-   to speak their language, not ours. */
-ok('the header uses Capstone\'s own column names',
-   csv[0].join(',') === 'Section,Name,Store,Bonus');
+   to speak their language, not ours.
+   THREE COLUMNS, NOT FOUR (2026-09-02). Section held sec.label and so did Store — the same string
+   twice on every row. Sky: "the rest is noise". */
+ok('the header uses Capstone\'s own column names, without the duplicate',
+   csv[0].join(',') === 'Name,Store,Bonus');
+ok('no row carries the store twice', csv.slice(1).every(r => r.length === 3));
 
 /* ── "not recorded" is not zero ──
    The oldest report has no payroll column. Exporting 0.00 for those rows instructs payroll to pay
@@ -130,7 +133,11 @@ const noPayroll = { employee_id: 'g', pdf_name: 'Old Timer', store_label: 'Bend'
 const csv2 = M.incCsvRows({ admin: null, managers: [],
   budtenders: [Object.assign({}, noPayroll, { store_id: 'bend', full_name: 'Old Timer' })],
   pp_start: '2025-08-04' }, true);
-ok('an unrecorded payroll exports EMPTY, not 0.00', csv2[1][3] === '');
+/* NULL IS NOT ZERO, and the non-zero filter must not collapse the distinction. The oldest reports
+   have no payroll column at all, so every row is null; dropping those alongside the real zeros
+   would export an empty file for every period before that column existed. */
+ok('an unrecorded payroll exports EMPTY, not 0.00', csv2[1][2] === '');
+ok('...and is not dropped by the non-zero filter', csv2.length === 2);
 const oldHtml = M.incBudTable([noPayroll], b => ({ bonus: b.bonus, payroll: b.payroll,
   spiff: b.spiff, hr: b.per_hour, qual: null }), true, false, T);
 ok('and renders as a dash that says why', /No payroll column in this report/.test(oldHtml));
@@ -312,20 +319,56 @@ const big = M.incCsvRows({
     { full_name: 'Shane Styrt',      store_id: 'commercial', payroll: 25 },
     { full_name: 'Nobody Anywhere',  store_id: 'atlantis',  payroll: 10 },
   ], pp_start: '2026-08-03' }, true);
-const sections = big.slice(1).map(r => r[0]);
+const sections = big.slice(1).map(r => r[1]);
 ok('ADMIN leads, then the stores in Capstone\'s order',
    sections.join(',') === 'ADMIN,HILLSBORO,RIVER,RIVER,RIVER,SOUTH,UNASSIGNED');
 /* Commercial is SOUTH on their sheet, Baseline is HILLSBORO, Century is BEND. Deliberately NOT the
    store registry — it is a third party's import format and must not move when a store is renamed
    in Command Center. */
 ok('Commercial exports as SOUTH, their label not ours', sections.indexOf('SOUTH') > -1);
-const river = big.slice(1).filter(r => r[0] === 'RIVER').map(r => r[1]);
+const river = big.slice(1).filter(r => r[1] === 'RIVER').map(r => r[0]);
 ok('each block is sorted by surname, so a new starter lands in the right slot',
    river.join(' | ') === 'Bailey Kristin | Peterson Thomas | Pinkerton Noah');
 /* An unresolvable store would otherwise drop the person from the file entirely — a silent omission
    on a payroll export is the worst way for this to fail. */
-ok('somebody whose store did not resolve is flagged, not dropped',
-   big.some(r => r[0] === 'UNASSIGNED' && r[1] === 'Anywhere Nobody'));
+/* The UNASSIGNED flag used to live in the Section column. With that column gone it has to survive
+   in Store, or somebody owed money whose store did not resolve becomes an ordinary-looking row —
+   a silent MISFILING, which is only marginally better than the silent omission this guards. */
+ok('somebody whose store did not resolve is still flagged, not dropped',
+   big.some(r => r[0] === 'Anywhere Nobody' && r[1] === 'UNASSIGNED'));
+
+/* ── the file carries only the people who earned something (2026-09-02) ──
+   Most of a fortnight's roster clears no bonus. Thirty rows of 0.00 are thirty rows payroll reads
+   past to find the eleven that matter, and each one is also an instruction to pay nothing — which
+   is true but does not need saying forty times. Sky: "just show non zero staff, the rest is noise."
+   The distinction that must survive: 0 is "earned nothing", null is "the source never recorded it",
+   and only the first is noise. */
+const mixed = M.incCsvRows({
+  admin: { full_name: 'Sky Pinnick', payroll: 0 },
+  managers: [{ full_name: 'Dean Deloof', store_id: 'hillsboro', payroll: 0 }],
+  budtenders: [
+    { full_name: 'Mya Ward',        store_id: 'hillsboro', payroll: 40 },
+    { full_name: 'Taner Perri',     store_id: 'hillsboro', payroll: 0 },
+    { full_name: 'Noah Pinkerton',  store_id: 'river-rd',  payroll: 0 },
+    { full_name: 'Poem Olson',      store_id: 'river-rd',  payroll: 15 },
+  ], pp_start: '2026-08-17' }, true);
+const names = mixed.slice(1).map(r => r[0]);
+ok('only the staff who earned something reach the file',
+   names.join(' | ') === 'Ward Mya | Olson Poem');
+ok('a manager who earned nothing is dropped too — the rule is about the amount, not the role',
+   !names.some(n => /Deloof/.test(n)));
+ok('so is the admin row', !names.some(n => /Pinnick/.test(n)));
+/* Counted, because a short file and a broken filter look identical. The count is reported in the
+   toast, deliberately NOT as a row in the file — Capstone parses it and would try to import it. */
+ok('the people left out are counted so the omission can be stated', mixed.omitted === 4);
+ok('a store block with nobody left in it does not emit an empty heading',
+   !mixed.slice(1).some(r => r[0] === ''));
+
+/* A period nobody earned in produces a header and nothing else, rather than a file of zeros. */
+const none = M.incCsvRows({ admin: null, managers: [],
+  budtenders: [{ full_name: 'Mya Ward', store_id: 'hillsboro', payroll: 0 }],
+  pp_start: '2026-08-17' }, true);
+ok('a period nobody earned in exports just the header', none.length === 1 && none.omitted === 1);
 
 /* ── a period is marked against the rules that applied TO IT ──
    Performance froze, the goal froze, the inputs were per-period — and the thresholds floated. So an

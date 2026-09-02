@@ -588,7 +588,7 @@ nothing else in the suite would notice.
 inputs: only their dollar amounts are stored, so an editable field would invite setting a value the
 math ignores.
 
-### Hours — $/hr is per-person now, and SwipeClock is NOT connected (2026-08-30)
+### Hours — $/hr is per-person, but nothing fills it (2026-08-30, settled 2026-09-02)
 
 `$/hr` divided every bonus by a flat `thresholds.hoursPerPeriod` (80) for everybody. It still does
 for anyone with no hours on file. When a timecard **is** on file, `incHours_` (engine) /
@@ -613,28 +613,29 @@ closed period — same rule as the thresholds, for the same reason.
 
 `incCalcAdmin_` takes no `inputs` and is deliberately untouched: the owner does not clock in.
 
-#### What fills `hours` — nothing yet, and that is not an oversight
+#### SwipeClock is NOT being connected — the attendance upload is the answer (Sky, 2026-09-02)
 
-`?action=timeCardExport` exists and Apps Script could call it — WorkforceHub signs **HS256**, which
-`Utilities.computeHmacSha256Signature` does natively, and the flow is: self-sign a ≤5-minute JWT
-(`sub:"client"`, `iss:<siteId>`, `product:"twpclient"`, `siteInfo`) → `POST
-clock.payrollservers.us/AuthenticationService/oauth2/userToken` → call
-`api.workforcehub.com/api/` with `x-api-version: 1` and `x-integration-partner-id`.
+**Decided, not deferred.** The investigation found a real technical path — WorkforceHub signs
+**HS256**, which `Utilities.computeHmacSha256Signature` does natively, and `GET /api/timeCardExport`
+is the right endpoint — but every call carries an `x-integration-partner-id` that Swipeclock issues
+to **resellers**, and Green Cross is a client. Getting one means a procurement conversation with
+whoever sells us WorkforceHub, to automate a number that only ever moves a display column.
 
-**That last header is the blocker.** Swipeclock issues it to *resellers*, and Green Cross is a
-client. A client/site-level API secret does exist (and a client admin can *view* it), but the
-partner ID has to come from whoever sells us WorkforceHub. **Do not build the connector until it
-does** — this repo already ran that experiment: the METRC connector was written in full and then
-sat on the sandbox with unset keys, `metrc_health` reporting "Missing keys", nothing real ever
-through it. Note also that a client secret is **per site**, and we may have six.
+Sky's call: **use the attendance report upload instead.** That is the file Mike already makes every
+pay period, it carries the judgement the clock cannot (a mis-punch caused by a coworker, a covering
+shift, PTO applied to a call-out), and it removes the actual toil. So:
 
-So `hours` is **writable and consumed but unfilled**: `incentive_save` takes it, `incHours_` divides
-by it, and nothing produces it. A CSV importer for it was built and then **removed the same day**
-(2026-08-30) — Sky's answer to "what file does Mike actually make?" was the attendance list below,
-not a timecard. Keeping an importer for a file nobody produces is the dead-code habit this repo
-already corrected once with the avatar routes. `swipeclock_code` stays on `ATTR_HEADERS` (append-only)
-with its roster card, typed by hand, because it is the join key the day the connector lands — but
-**nothing fills it automatically any more**.
+- **Do not chase the partner ID, and do not build the connector.** If a future session finds this
+  section and thinks "we could finish that" — that is the METRC mistake, which this repo has already
+  made once: a connector written in full, then left on the sandbox with unset keys, `metrc_health`
+  reporting "Missing keys", nothing real ever through it.
+- **`hours` stays writable and consumed but unfilled.** `incentive_save` accepts it, `incHours_`
+  divides `$/hr` by it, and nothing produces it — so `$/hr` reads the flat 80 for everybody, exactly
+  as it did before. That is not dead code: it is a live divisor with no source, and it costs one
+  function. Its own importer was built and **removed the same day** (2026-08-30), because keeping an
+  importer for a file nobody makes is the dead-code habit the avatar routes already corrected.
+- **`swipeclock_code` stays** on `ATTR_HEADERS` (append-only) with its roster card, typed by hand.
+  Nothing fills it automatically any more.
 
 ### Attendance import — Mike's eligibility list (2026-08-30)
 
@@ -699,6 +700,25 @@ have none). Anyone whose store does not resolve exports under `UNASSIGNED` rathe
 
 **On screen, stores come from the registry** — `GXStores.name(store_id)`, never the label the row
 arrived with. The original shows on hover.
+
+**Three columns, and only the people who earned something (2026-09-02).** There was a fourth column,
+`Section`, which held `sec.label` — the same string the `Store` column already held, on every row.
+Sky: *"remove Column A, and just show non zero staff, the rest is noise."* Both halves have a catch
+worth keeping:
+
+- **The `UNASSIGNED` flag used to live in the column that was deleted.** Somebody whose store does
+  not resolve is still exported — a silent omission on a payroll file is the worst way for this to
+  fail — but the flag now goes in the **Store** cell, as `UNASSIGNED (<the label they arrived with>)`.
+  Without that move, a person owed money would have exported as an ordinary-looking row: a silent
+  *misfiling*, which is only marginally better than the silent omission.
+- **`0` is dropped; `null` is NOT.** A zero says "earned nothing" and is the noise. A null says the
+  source never recorded a payroll figure at all — which is precisely the oldest imported reports,
+  every row of which is null. Collapsing the two would export an empty file for every period before
+  that column existed.
+
+**How many were left out is reported in a toast, deliberately not in the file** — Capstone parses it
+and would try to import a footer row. It is stated rather than left to be inferred, because a short
+file and a broken filter look identical.
 
 ### What the APPROVAL path was computing, and it was not what the screen showed (2026-08-31)
 
