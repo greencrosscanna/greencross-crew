@@ -23,7 +23,7 @@ They render through a small local runtime (`support.js`) that turns the template
 into React at load time; that runtime is a preview harness, not something to ship.
 
 The task is to **recreate these designs inside GX Crew's actual environment**: no build step,
-plain ES5-flavoured JavaScript in `crew.js`, DOM built with the existing `el()` / `esc()` /
+plain ES5-flavored JavaScript in `crew.js`, DOM built with the existing `el()` / `esc()` /
 `card()` helpers, all color and type from `gx-theme.css` custom properties loaded from Pages.
 Every literal hex in the prototypes maps to a `--gx-*` token (table below) — **use the token,
 never the hex**. Do not restyle or fork a shared `gx-theme` component from inside Crew; if the
