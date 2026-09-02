@@ -170,6 +170,38 @@ is literally how the suite ended up with six different login screens.
 six get this?"* — if no, it is app-local and stays here. Note `gx-sync.sh` pulls **from** gx-theme; it is
 a one-way read, not an editing channel.
 
+## The HUB is core-admin's too — send a note, don't edit (rule from Sky, 2026-09-02)
+
+**Never edit `greencross-command-center` from this chat.** Same rule as gx-theme above, now extended
+to GX Core, and it is here because it was broken rather than because it was theorised.
+
+On 2026-09-02 a Crew session made a small, correct, tested fix to `gx_dutchie.gs` and put it on a
+branch for Sky to merge, because GX Core library cuts are PR-gated. **Another Claude session had the
+same repo open at the same time.** That repo is Dropbox-synced, so the two sessions shared one
+working tree and one HEAD: the branch was switched out from under the first session, its commit
+landed on `main` instead, and the other session then pushed `main` and ran `./ship.sh`. The change
+went out as library v284 with no PR and no review. The code was fine — that is the point. Nothing
+failed, nothing warned, and the gate Sky put on the highest-stakes repo in the suite was simply not
+there that time.
+
+Two sessions cannot share a git checkout. Neither can see the other, `git checkout -b` is not atomic
+against a second process, and the loser finds out afterwards by reading the log.
+
+**So from Crew: `add_note` to `core-admin` with what you need and why, and stop.** Requests are
+welcome and quick, and the hub session holds the repo alone while it works.
+
+**Where the line is, because over-applying this is its own failure:**
+
+- **Reading the hub is fine and often necessary** — `gx_core.gs` and `gx_dutchie.gs` are the source
+  of truth for every route Crew calls, and guessing a payload shape instead of reading it is how
+  this repo got `spiff_payouts`. Read freely; run `./gxpins.sh`; diff against it.
+- **Calling GX Core's HTTP routes is not editing it.** `deploy.sh`, `gxengine.sh`, `set_config`,
+  `bug_update`, `resolve_note`, `add_note` and the rest are the documented interface, secret-gated
+  and designed for exactly this. Changing a *setting* through `set_config` — a threshold, a store
+  list — is a config change Crew owns; changing *code* is not.
+- **Crew's own engine and repo are still yours.** `clasp push` / `gxengine.sh --deploy` here touch
+  only this project.
+
 ## Shipping — direct to `main` until launch (decided 2026-08-18)
 GX Crew is **pre-launch**: nobody outside Sky has access yet, so there are no staff to watch a feature
 bake. The shared `/gxbrain` ship policy's *feature → branch + PR + merge-when-done* rule exists to protect
