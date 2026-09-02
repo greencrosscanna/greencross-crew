@@ -244,7 +244,7 @@ which is exactly what fill-only exists to complete.
 
 **The export files do not name a store, and the registry has no license column.** `getStores()`
 returns `store_id, display_name, dutchie_name, short_code, color, region, sort_order, timezone,
-is_dc, aliases` — nothing to join an OLCC licence on. Known so far: **050-16892 → `portland-rd`**
+is_dc, aliases` — nothing to join an OLCC license on. Known so far: **050-16892 → `portland-rd`**
 (Sky, 2026-08-25). The other five (050-12997 / 13000 / 13003 / 13006 / 13009 — a consecutive block
 registered together, with 16892 added later) are unmapped. To identify one, take the people who
 appear on **that license only**: six staff have company-wide access and sit on all six exports
