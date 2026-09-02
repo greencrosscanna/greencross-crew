@@ -1879,6 +1879,18 @@
          and it fills itself when one is (the import learns the code on a name match). A `gap` here
          would put a red mark on 39 finished records to report that a feature has not been used
          yet, which is the same mistake the permanent `wage` gap made on the salaried. */
+      /* A statement, not an inference — see the ATTR_HEADERS comment. It changes how the incentive
+         screen treats them (their store rows are merged and booked to Corporate), so it sits with
+         the other things that change what a person is measured against, not in Links & visibility. */
+      { label: 'Floater', route: 'attr', field: 'is_floater',
+        value: row.is_floater ? 'yes' : '', options: [['', 'No'], ['yes', 'Yes']],
+        note: function (r) {
+          return r.is_floater
+            ? { text: 'Shifts across stores — incentive rows merge to Corporate', kind: '' }
+            : { text: 'Works one store', kind: '' };
+        },
+        read: function (r) { return r.is_floater ? 'yes' : ''; } },
+
       { label: 'WorkforceHub code', route: 'attr', field: 'swipeclock_code',
         value: row.swipeclock_code, placeholder: '—',
         note: function (r) {
@@ -2348,7 +2360,22 @@
              spiffEarned: earned, spiffManual: manual,
              /* What they actually worked, when the timekeeping export has been imported for this
                 period. null = nothing on file, which incHours reads as "use the flat figure". */
-             hours: (i && i.hours != null && i.hours !== '') ? Number(i.hours) : null };
+             hours: (i && i.hours != null && i.hours !== '') ? Number(i.hours) : null,
+             /* THE PAID FIGURE OVERRULING THE COMPUTED ONE. null means nobody overrode anything; a
+                deliberate 0 is a real answer and wins. Carried here rather than applied inside
+                calcBud/calcMgr, because those are pinned against a frozen oracle and an override is
+                not a different calculation — it is a person saying the calculation does not apply. */
+             payrollOverride: (i && i.payrollOverride != null && i.payrollOverride !== '')
+                              ? Number(i.payrollOverride) : null,
+             overrideNote: (i && i.overrideNote) || '' };
+  }
+
+  /* The paid figure, which is not always the computed one. Mirrors the engine's incPayroll_.
+     An IMPORTED row carries its own already-overridden `payroll` plus the note that explains it, so
+     nothing is applied there — that period is what was paid and is never recomputed. */
+  function incPaid(computed, i) {
+    var ov = i && i.payrollOverride;
+    return (ov == null) ? computed : ov;
   }
 
   /* The $/hr divisor. Mirrors the engine's incHours_ exactly — same fallback, same rejection of
@@ -2571,11 +2598,19 @@
     }
 
     var h = [];
-    var budTotal = buds.reduce(function (a, b) { return a + (budCalc(b).payroll || 0); }, 0);
-    var mgrTotal = mgrs.reduce(function (a, m) { return a + (mgrCalc(m).payroll || 0); }, 0);
+    /* THE TILES ADD UP THE PAID FIGURES. A total that disagrees with the column above it is how you
+       lose trust in both, and "Total payroll" is the number this screen exists to produce — it has
+       to be the one that leaves for Capstone. An imported row is already what was paid. */
+    function paidOf(r, c) {
+      var computed = c.payroll == null ? c.bonus : c.payroll;
+      if (isImported) return computed;
+      return incPaid(computed, incInput(incInputs(), incKey(r), r));
+    }
+    var budTotal = buds.reduce(function (a, b) { return a + (paidOf(b, budCalc(b)) || 0); }, 0);
+    var mgrTotal = mgrs.reduce(function (a, m) { return a + (paidOf(m, mgrCalc(m)) || 0); }, 0);
     var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll }
                                     : calcAdmin(d.admin, T)) : null;
-    var admPay = adm ? (adm.payroll == null ? adm.bonus : adm.payroll) : 0;
+    var admPay = adm ? (paidOf(d.admin, adm) || 0) : 0;
 
     h.push('<div class="crew-inc-band"><div class="crew-inc-head"><div class="crew-inc-headl">');
     h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive</span>' +
@@ -2706,6 +2741,20 @@
        deliberately un-paid — which is the more serious of the two and was reading as the milder.
        The offer to see what was voided sits inside it, because the figures somebody was already
        paid are the context for every number now on the screen. */
+    /* IN TWO SECTIONS — ALLOWED, AND STILL WORTH SAYING. Sky, 2026-09-02: somebody who floats CAN
+       earn on the shifts they cover, so both rows paying is the intended behavior, not a fault.
+       It is surfaced anyway because it is rare and because the same shape would appear if a row
+       were mis-attributed — the reader needs to see it once and recognise it, rather than find two
+       bonuses for one person while checking something else. Gold, not red: a thing to notice, not
+       a thing that is wrong. */
+    if (d.dual_role && d.dual_role.length) {
+      h.push('<div class="crew-inc-returned crew-inc-dual"><strong>Also worked the floor:</strong> ' +
+             esc(d.dual_role.map(function (x) {
+               return x.name + ' (' + x.sections.join(' + ') + ')';
+             }).join(', ')) +
+             ' — each row earns on its own merits, which is intended. Worth a look only if a row ' +
+             'looks mis-attributed.</div>');
+    }
     if (wf.status === 'draft' && wf.voided) {
       h.push('<div class="crew-inc-returned crew-inc-glassnote"><strong>Reopened:</strong> ' +
              esc(String(wf.note).replace(/^VOIDED:\s*/, '')) +
@@ -2752,6 +2801,49 @@
   /* Met or missed — the contrast IS the information, so a miss recedes rather than just not
      being green. Passing null means "no bar to clear", which reads as neither. */
   function incGoal(hit) { return hit == null ? '' : (hit ? 'crew-inc-hit' : 'crew-inc-miss'); }
+
+  /* THE PAYROLL CELL — the only figure on this screen that a human can overrule, so the only one
+     that has to say when a human did.
+     AMBER, not green or red: a manually-set figure is neither good news nor an error, it is a
+     decision, and the suite already uses gold for "a person did this and you should know". The
+     tooltip carries what the math said, what was paid, and why — because a year from now the
+     question is never "what is this number", it is "why does it disagree with the arithmetic".
+     Imported rows carry their own frozen note (`override_note`) rather than a live input, since
+     that period is what was paid and nothing is recomputed for it. */
+  function incPayCell(row, calc, isImported, breakdown) {
+    var computed = isImported ? calc.payroll
+                 : (calc.payroll == null ? calc.bonus : calc.payroll);
+    var i = (!isImported && row) ? incInput(incInputs(), incKey(row), row) : null;
+    var paid = isImported ? computed : incPaid(computed, i);
+    var note = isImported ? String(row && row.override_note || '')
+                          : (i && i.payrollOverride != null ? String(i.overrideNote || '') : '');
+    var was  = isImported ? (row && row.computed_payroll) : computed;
+    var over = !!note && paid !== was;
+    var canOver = !isImported && !!inc.data && !!inc.data.can_approve && !!inc.data.can_edit;
+
+    if (computed == null && !over) {
+      return '<td class="crew-inc-pay"><span class="crew-inc-zero" ' +
+             'title="No payroll column in this report">—</span></td>';
+    }
+    /* THE BREAKDOWN SURVIVES. It is how anybody checks a figure — "sales $300 · discount $100 ·
+       AOV $50 · team attendance $75" is the whole argument for the number — and an override is a
+       reason ON TOP of that argument, not a replacement for it. Dropping it would make the one cell
+       a human can change the only cell nobody can check. */
+    var tip = over
+      ? 'Manually set to ' + m2(paid) + ' — the math computes ' + m2(was || 0) + '. ' + note +
+        (breakdown ? ' · ' + breakdown : '')
+      : (breakdown || '');
+    return '<td class="crew-inc-pay' + (over ? ' crew-inc-over' : '') + '"' +
+           (tip ? ' title="' + esc(tip) + '"' : '') + '>' + incDash(paid) +
+           (over ? '<span class="crew-inc-overdot" aria-label="manually set">◆</span>' : '') +
+           (canOver ? '<button type="button" class="crew-inc-payedit" data-pay="' + esc(incKey(row)) +
+                      '" data-name="' + esc(incName(row)) + '" data-computed="' +
+                      esc(String(was == null ? '' : was)) + '" data-current="' +
+                      esc(String(paid == null ? '' : paid)) + '" data-note="' + esc(note) +
+                      '" title="Record what was actually paid" ' +
+                      'aria-label="Override payroll for ' + esc(incName(row)) + '">✎</button>' : '') +
+           '</td>';
+  }
 
   /* $/hr, saying WHICH divisor it used. Two people on the same bonus now show different figures
      depending on whether their hours were imported, and a column that changes for reasons the
@@ -2840,8 +2932,8 @@
 
   function incAdminTable(a, calc, isImported) {
     var pay = calc.payroll == null ? calc.bonus : calc.payroll;
-    var tip = isImported ? '' : ' title="' + esc(pct1(calc.pct) + ' of target — tier ' + m0(calc.tier) +
-              ', capped at ' + m0((a.stores || 0) * 50)) + '"';
+    var admTipText = isImported ? '' : pct1(calc.pct) + ' of target — tier ' + m0(calc.tier) +
+              ', capped at ' + m0((a.stores || 0) * 50);
     /* Admin uses the SAME twelve slots and leaves its unused ones EMPTY rather than stretching to
        fill — stretching is what broke the alignment with the two tables below it. */
     return incSecHead('Admin', 1) +
@@ -2857,7 +2949,7 @@
         '<td colspan="4"></td>' +
         incTd(9, incDash(calc.bonus)) +
         incTd(10, incDash(calc.hr == null ? (calc.bonus || 0) / 80 : calc.hr, m2), 'crew-inc-zero') +
-        '<td class="crew-inc-pay"' + tip + '>' + incDash(pay) + '</td>' +
+        incPayCell(a, calc, isImported, admTipText) +
       '</tr></tbody></table></div>';
   }
 
@@ -2873,9 +2965,9 @@
       var c = calcOf(m);
       var dp = incDiscPct(m);
       var goal = T ? T.budtender.discountMaxPct : null;
-      var tip = isImported ? '' : ' title="' + esc(
+      var mgrTipText = isImported ? '' :
         'sales ' + m0(c.salesB) + ' · discount ' + m0(c.discB) + ' · AOV ' + m0(c.aovB) +
-        ' · team attendance ' + m0(c.teamA)) + '"';
+        ' · team attendance ' + m0(c.teamA);
       return '<tr>' +
         incTd(0, esc(incName(m)), 'l crew-inc-name') +
         incTd(1, incDot(m) + incStoreName(m), 'l') +
@@ -2889,7 +2981,7 @@
         incSpiffCell(m, c, editable, 8) +
         incTd(9, incDash(c.bonus)) +
         incHrCell(c, isImported ? null : m, T) +
-        '<td class="crew-inc-pay"' + tip + '>' + incDash(c.payroll) + '</td></tr>';
+        incPayCell(m, c, isImported, mgrTipText) + '</tr>';
     }).join('');
     return incSecHead('Managers', mgrs.length) +
       '<div class="crew-inc-wrap"><table class="crew-inc-tbl">' + incMgrHead() +
@@ -2899,12 +2991,19 @@
   function incBudRow(b, calcOf, isImported, editable, T) {
     var c = calcOf(b);
     var dp = incDiscPct(b);
-    var tip = isImported ? '' : ' title="' + esc(
+    var budTipText = isImported ? '' :
       (c.qual ? 'qualified' : 'did not qualify — ' + (b.txn || 0) + ' transactions') +
-      ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB)) + '"';
+      ' · AOV ' + m0(c.aovB) + ' · discount ' + m0(c.disB) + ' · attendance ' + m0(c.attB);
     var i = incInput(incInputs(), incKey(b), b);
     return '<tr>' +
-      incTd(0, esc(incName(b)), 'l crew-inc-name') +
+      incTd(0, esc(incName(b)) +
+               /* A merged row must say so and say what it merged, or its transaction count looks
+                  wrong against any per-store report somebody checks it against. */
+               (b.folded_from && b.folded_from.length
+                 ? '<span class="crew-inc-folded" title="' +
+                   esc('Floater — ' + b.folded_from.join(' + ') + ' merged into one row') +
+                   '">merged</span>' : ''),
+            'l crew-inc-name') +
       incTd(1, incDot(b) + incStoreName(b), 'l') +
       incTd(2, esc(String(b.txn || 0)), isImported ? '' : incGoal(!!c.qual)) +
       incTd(3, incDash(b.sales)) +
@@ -2920,9 +3019,7 @@
       incSpiffCell(b, c, editable, 8) +
       incTd(9, incDash(c.bonus)) +
       incHrCell(c, isImported ? null : b, T) +
-      '<td class="crew-inc-pay"' + tip + '>' +
-        (c.payroll == null ? '<span class="crew-inc-zero" title="No payroll column in this report">—</span>'
-                           : incDash(c.payroll)) + '</td></tr>';
+      incPayCell(b, c, isImported, budTipText) + '</tr>';
   }
 
   function incBudTable(buds, calcOf, isImported, editable, T) {
@@ -3032,6 +3129,12 @@
     if (rp) rp.addEventListener('click', function () { incReopen(d); });
     var vd = host.querySelector('#incVoided');
     if (vd) vd.addEventListener('click', function () { incVoidedPanel(d); });
+    /* Wired BEFORE the `if (!editable) return` below, like the other approver controls: the pencil
+       only renders when can_approve && can_edit, so the render decides who sees it and this just
+       connects what is there. */
+    Array.prototype.forEach.call(host.querySelectorAll('.crew-inc-payedit'), function (btn) {
+      btn.addEventListener('click', function () { incPayOverride(btn); });
+    });
     var rf = host.querySelector('#incSpiffRefresh');
     if (rf) rf.addEventListener('click', function () { incSpiffRefresh(rf); });
     if (!editable) return;
@@ -3078,11 +3181,15 @@
     });
   }
 
-  async function incSave(employeeId, field, value) {
+  async function incSave(employeeId, field, value, note) {
     if (!inc.data || !employeeId) return;
     var pp = inc.data.payPeriod ? inc.data.payPeriod.start : inc.data.pp_start;
     var params = { token: token(), pp_start: pp, employee_id: employeeId };
     params[field] = value;
+    /* The figure and its reason go in ONE call. The engine refuses an override that has no reason,
+       so sending them separately would make the first of the two saves fail on its own — and the
+       order that works would depend on which one you happened to send first. */
+    if (field === 'payroll_override') params.override_note = note == null ? '' : note;
     try {
       var r = await Engine.jsonp('incentive_save', params, { timeoutMs: 20000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
@@ -3094,9 +3201,19 @@
          "they earned nothing". Storing null lets incInput fall back to the measurement. */
       cur[employeeId][field] = field === 'att' ? !!value
                              : (value === '' ? null : Number(value));
+      if (field === 'payroll_override') {
+        /* incInput reads camelCase off the cached inputs, so the local copy has to speak the same
+           shape the engine sends — otherwise the cell repaints from the pre-save value and the
+           override looks like it did not take until the next full load. */
+        cur[employeeId].payrollOverride = value === '' ? null : Number(value);
+        cur[employeeId].overrideNote = value === '' ? '' : (note || '');
+      }
       paintIncentive();
       toast(field === 'att' ? 'Attendance saved'
           : field === 'hours' ? (value === '' ? 'Hours cleared — back to the flat figure' : 'Hours saved')
+          : field === 'payroll_override'
+              ? (value === '' ? 'Override cleared — back to the computed figure'
+                              : 'Recorded as paid — ' + m2(Number(value)))
           : 'SPIFF saved');
     } catch (e) {
       toast('Could not save: ' + ((e && e.message) || 'unknown'), true);
@@ -3179,11 +3296,17 @@
     var rows = [['Name', 'Store', 'Bonus']];
     var T = d.thresholds || null, buds = d.budtenders || [];
     var omitted = 0;
+    /* THE PAID FIGURE, NOT THE COMPUTED ONE. An override that the screen honours and the export
+       ignores would send payroll a number nobody on this screen ever saw — the single worst way for
+       this feature to fail, because both halves look right in isolation. An imported row already
+       carries its overridden payroll frozen in, so nothing is re-applied there. */
     function pay(r, kind) {
       if (isImported) return r.payroll;
-      return kind === 'bud' ? calcBud(r, T, incInputs()).payroll
-           : kind === 'mgr' ? calcMgr(r, T, incInputs(), buds).payroll
-           : calcAdmin(r, T).bonus;
+      var i = incInput(incInputs(), incKey(r), r);
+      var computed = kind === 'bud' ? calcBud(r, T, incInputs()).payroll
+                   : kind === 'mgr' ? calcMgr(r, T, incInputs(), buds).payroll
+                   : calcAdmin(r, T).bonus;
+      return incPaid(computed, i);
     }
     function money(v) { return v == null ? '' : v.toFixed(2); }
 
@@ -3647,6 +3770,53 @@
     } catch (e) {
       toast('Could not re-measure: ' + ((e && e.message) || 'unknown'), true);
     } finally { btn.disabled = false; btn.textContent = label; }
+  }
+
+  /* RECORDING WHAT WAS ACTUALLY PAID, when the math no longer agrees.
+   *
+   * Two prompts on purpose. The figure and the reason are separate questions and the reason is the
+   * one that matters a year from now — bundling them into one box gets you a number and "fix".
+   *
+   * The engine refuses an override with no reason, so this asks for one rather than letting the
+   * save fail; and it refuses one from anybody but the approver, so the pencil is not rendered for
+   * anybody else. Clearing the figure clears the reason with it, which is why the empty case skips
+   * the second prompt entirely. */
+  async function incPayOverride(btn) {
+    var key = btn.getAttribute('data-pay');
+    var name = btn.getAttribute('data-name');
+    var computed = btn.getAttribute('data-computed');
+    var current = btn.getAttribute('data-current');
+    var note = btn.getAttribute('data-note');
+    var isOver = !!note;
+
+    var v = window.prompt(
+      'What was ' + name + ' actually paid for this period?\n\n' +
+      'The math computes ' + (computed === '' ? '—' : m2(Number(computed))) + '.' +
+      (isOver ? '\nCurrently overridden to ' + m2(Number(current)) + ' — ' + note : '') +
+      '\n\nLeave empty to clear the override and use the computed figure.',
+      isOver ? String(current) : '');
+    if (v == null) return;
+    v = String(v).trim().replace(/^\$/, '');
+
+    var reason = '';
+    if (v !== '') {
+      if (!isFinite(Number(v)) || Number(v) < 0) {
+        toast('That is not a dollar amount. Nothing was changed.', true);
+        return;
+      }
+      reason = window.prompt(
+        'Why does ' + name + '\u2019s figure differ from the math?\n\n' +
+        'This is the only record of it — it shows on the cell, and it freezes into the period ' +
+        'when it is approved.',
+        note || '');
+      if (reason == null) return;
+      reason = String(reason).trim();
+      if (reason.length < 5) {
+        toast('An override needs a reason. Nothing was changed.', true);
+        return;
+      }
+    }
+    await incSave(key, 'payroll_override', v, reason);
   }
 
   /* ══ Break glass — reopen an approved period ════════════════════════════════════════════════════

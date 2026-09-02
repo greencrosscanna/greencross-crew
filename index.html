@@ -936,6 +936,38 @@
 .crew-imp-warn b { color: var(--gx-text); }
 .crew-imp-warn.bad { border-left-color: var(--gx-red, #ef4444); background: rgba(239,68,68,.08); }
 .crew-imp-prog { font-size: 12px; color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
+    /* ── A manually-set payroll figure ────────────────────────────────────────────
+       AMBER, deliberately — not green and not red. A figure a human overruled is neither good news
+       nor an error, it is a DECISION, and the suite already reads gold as "a person did this and
+       you should know". Green would say it passed something; red would say it is broken.
+       The diamond is there for the same reason the colour is not enough on its own: this is a
+       payroll figure, and someone reading a printout in greyscale still has to see that it was set
+       by hand rather than computed. */
+.crew-inc-pay.crew-inc-over { color: var(--gx-gold, #d4a847) !important;
+  background: rgba(212,168,71,.08); }
+.crew-inc-overdot { font-size: 8px; margin-left: 5px; vertical-align: middle;
+  color: var(--gx-gold, #d4a847); }
+.crew-inc-payedit { background: none; border: none; padding: 0 0 0 6px; cursor: pointer;
+  color: var(--gx-text-mute); font-size: 11px; opacity: 0; transition: opacity .12s ease; }
+    /* Hidden until the row is under the cursor or the button has focus — the pencil is available on
+       every row and wanted on almost none, so it should not be thirty pieces of furniture. Focus
+       matters as much as hover: keyboard users cannot reveal it any other way. */
+tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
+.crew-inc-payedit:hover { color: var(--gx-gold, #d4a847); }
+@media print { .crew-inc-payedit { display: none !important; } }
+
+    /* A floater's row is several Leaderboard rows merged into one. It has to say so: the
+       transaction count will not match any single store's report, and without the label that reads
+       as a wrong number rather than a deliberate total. */
+    /* Gold, not red: a floater who also worked the floor earns on both rows by design (Sky,
+       2026-09-02). This is "notice this", not "fix this". */
+.crew-inc-dual { border-left: 2px solid var(--gx-gold, #d4a847) !important;
+  background: rgba(212,168,71,.08) !important; }
+
+.crew-inc-folded { font-size: 8.5px; text-transform: uppercase; letter-spacing: .06em;
+  margin-left: 6px; padding: 1px 5px; border-radius: 3px; vertical-align: middle;
+  color: var(--gx-text-mute); border: 1px solid var(--gx-border); }
+
 .crew-imp-t td.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .crew-imp-t td.n b.up { color: var(--gx-green); }
 .crew-imp-t td.n b.down { color: var(--gx-red, #ef4444); }
@@ -1056,6 +1088,6 @@
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.354"></script>
+  <script src="crew.js?v=1.356"></script>
 </body>
 </html>

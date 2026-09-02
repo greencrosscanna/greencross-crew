@@ -52,7 +52,17 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                              registry, but nothing outside Crew consumes hours, and putting it in
                              Core would need a library cut and a re-pin in five spokes to deliver a
                              field one app reads. Crew owns the rich attributes; this is one. */
-                          'swipeclock_code'];
+                          'swipeclock_code',
+                          /* APPENDED 2026-09-02. A FLOATER picks up shifts across stores rather
+                             than working one, so Leaderboard sends them as SEVERAL rows — Drew
+                             Phillips arrived as Portland (37 txn) and River (24) on the same
+                             period, and a person split in two qualifies for nothing on either half.
+                             DELIBERATELY NOT INFERRED FROM home_store = 'corporate'. That is where
+                             Drew sits, and it is also where Mike (admin) and other corporate staff
+                             sit who are not floaters at all — the same trap `pay_type` was written
+                             to escape when `Admin` and `corporate` turned out to belong to hourly
+                             staff too. Somebody has to say it, so this is a flag. */
+                          'is_floater'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
  *
@@ -2156,6 +2166,7 @@ function rosterJoin_() {
       preferred_name: String(r.preferred_name || ''),
       middle_initial: String(a.middle_initial || '').trim().toUpperCase().slice(0, 1),
       swipeclock_code: String(a.swipeclock_code || '').trim(),
+      is_floater: isTruthyFlag_(a.is_floater),
       avatar_config: String(r.avatar_config || ''),
       /* THE AVATAR SEED. DiceBear generates a face from a seed, and Leaderboard historically
          seeded on nameKey — which derives from the NAME, so a rename or one of our merges
@@ -2574,6 +2585,9 @@ function saveRosterAttrs_(p) {
     swipeclock_code:    p.swipeclock_code == null
                         ? (existing.swipeclock_code || '')
                         : String(p.swipeclock_code).trim(),
+    is_floater:         p.is_floater == null
+                        ? (existing.is_floater || '')
+                        : (isTruthyFlag_(p.is_floater) ? 'yes' : ''),
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };
@@ -3315,7 +3329,17 @@ function samePerson_(fullA, fullB) {
 var HISTORY_TAB = 'crew_incentive_history';
 var HISTORY_HEADERS = ['pp_start', 'pp_end', 'section', 'employee_id', 'pdf_name', 'store_label',
                        'store_id', 'txn', 'sales', 'discount_pct', 'aov', 'spiff', 'bonus',
-                       'per_hour', 'payroll', 'source_file', 'format', 'imported_at'];
+                       'per_hour', 'payroll', 'source_file', 'format', 'imported_at',
+                       /* APPENDED 2026-09-02, and appended for a positional reason as much as the
+                          usual one: incentiveUnapprove_ reads payroll as all[i][14], so anything
+                          inserted rather than appended silently re-points it at another column.
+                          `payroll` stays what was PAID. computed_payroll is what the math said at
+                          the moment of approval, and override_note is why they differ — so a
+                          frozen period carries its own explanation instead of needing one. Blank on
+                          every row written before today, which reads correctly as "not overridden".
+                          The lesson is Levy's: this record has to survive being read a year later
+                          by somebody who does not know what moved. */
+                       'computed_payroll', 'override_note'];
 
 /* Store labels in the reports are a year old and several no longer exist under those names —
  * "Hillsboro" is Baseline now, "Portland Road" is portland-rd. GXCore.resolveStore() already knows
@@ -3546,7 +3570,8 @@ function incentiveHistory_(p) {
       var o = {};
       HISTORY_HEADERS.forEach(function (h) {
         o[h] = (h === 'txn' || h === 'sales' || h === 'discount_pct' || h === 'aov' ||
-                h === 'spiff' || h === 'bonus' || h === 'per_hour' || h === 'payroll')
+                h === 'spiff' || h === 'bonus' || h === 'per_hour' || h === 'payroll' ||
+                h === 'computed_payroll')
                ? (r[h] === '' ? null : Number(r[h])) : r[h];
       });
       o.full_name = legalById[String(r.employee_id || '')] || '';
@@ -3581,7 +3606,21 @@ function incentiveHistory_(p) {
  * brain note asks core-admin to promote the per-employee slice into GX Core, and SPIFF wants the
  * same data. When that lands, only fetchLivePerf_ changes. */
 var INPUTS_TAB = 'crew_incentive_inputs';
-var INPUTS_HEADERS = ['pp_start', 'employee_id', 'att', 'spiff', 'hours', 'updated_at', 'updated_by'];
+var INPUTS_HEADERS = ['pp_start', 'employee_id', 'att', 'spiff', 'hours', 'updated_at', 'updated_by',
+                      /* APPENDED 2026-09-02. THE ONE FIELD ON THIS TAB THAT IS NOT AN INPUT TO THE
+                         MATH — it is an answer that OVERRULES the math.
+                         Everything else here feeds a calculation: attendance earns a bonus, spiff is
+                         vendor money, hours divide $/hr. This says "the computed figure is wrong for
+                         this person and the company paid THIS instead", which is a different kind of
+                         claim and needs a different kind of evidence — hence the note beside it,
+                         required and never optional.
+                         WHY IT HAD TO EXIST: reopening a paid period recomputes it against today's
+                         thresholds, so a person who cleared a bar by a hundredth of a percent in
+                         August can stop having cleared it in September. Levy Nelson was paid $25 on
+                         a 1.00% discount; the same fortnight now reads 1.04% and computes $0. Break
+                         glass could reopen her period and still could not record what she was
+                         actually paid — the reopen was half a tool without this. */
+                      'payroll_override', 'override_note'];
 
 /* `hours` is here BEFORE anything fills it, on purpose. The dashboard's $/hr column divides by a
  * flat thresholds.hoursPerPeriod (80) for everybody — fine as a uniform yardstick, which is what
@@ -3601,7 +3640,14 @@ function inputsFor_(ppStart) {
        never showed. Same shape as `hours` directly below, for the same reason. */
     out[r.employee_id] = { att: isTruthyFlag_(r.att),
                            spiff: (r.spiff === '' || r.spiff == null) ? null : (Number(r.spiff) || 0),
-                           hours: r.hours === '' ? null : (Number(r.hours) || null) };
+                           hours: r.hours === '' ? null : (Number(r.hours) || null),
+                           /* Same null-is-not-zero rule as spiff and hours, and it matters most
+                              here: an override of $0 is somebody saying "this person was paid
+                              nothing", which is a real and different answer from "nobody has
+                              overridden this". */
+                           payrollOverride: (r.payroll_override === '' || r.payroll_override == null)
+                                            ? null : (Number(r.payroll_override) || 0),
+                           overrideNote: String(r.override_note || '') };
   });
   return out;
 }
@@ -3907,12 +3953,13 @@ function stampEmployeeIds_(live) {
      been looked up under a key nothing wrote. Caught by incentive_probe reporting the impossible
      pair `stamped: 0, unmatched: []`. */
   var roster = emps.filter(function (e) { return String(e.status || '').toLowerCase() !== 'merged'; });
-  var midById = Object.create(null), swcById = Object.create(null);
+  var midById = Object.create(null), swcById = Object.create(null), floatById = Object.create(null);
   try {
     var _attrs = readAttrs_();
     Object.keys(_attrs).forEach(function (id) {
       midById[id] = String(_attrs[id].middle_initial || '');
       swcById[id] = String(_attrs[id].swipeclock_code || '').trim();
+      floatById[id] = isTruthyFlag_(_attrs[id].is_floater);
     });
   } catch (e) {}
   var byKey = Object.create(null), legalById = Object.create(null);
@@ -3956,6 +4003,7 @@ function stampEmployeeIds_(live) {
        field on the row that comes from the timekeeping system, and it is the difference between
        an import that survives a legal-name change and one that quietly drops that person. */
     r.swipeclock_code = hit ? (swcById[hit] || '') : '';
+    r.is_floater = hit ? !!floatById[hit] : false;
     if (!hit) unmatched.push(r.name);
   }
   /* LEADERBOARD'S STORE SLUGS ARE NOT GX CORE'S. LB says baseline / century / portland / river;
@@ -3982,6 +4030,115 @@ function stampEmployeeIds_(live) {
   (live.managers || []).forEach(function (r) { stamp(r); stampStore(r); });
   if (live.admin) stamp(live.admin);
   live.unmatched = unmatched;
+}
+
+/* ══ Floaters — one person, one row ══════════════════════════════════════════════════════════════
+ *
+ * A floater picks up shifts wherever they are needed, so Leaderboard sends them once PER STORE:
+ * Drew Phillips arrived on the 2026-08-17 period as Portland (37 txn, $901) and River (24, $557).
+ * Two rows for one person is wrong in three separate ways, and only the first is cosmetic:
+ *
+ *   1. He is listed twice on a payroll screen.
+ *   2. He QUALIFIES FOR NOTHING. The transaction bar is 200; 37 and 24 each miss it, while his
+ *      actual 61 would be judged on its merits. Splitting a person is how they silently earn zero.
+ *   3. He would be counted toward TWO stores' team-attendance headcount, paying two managers
+ *      $25 each for one person showing up.
+ *
+ * Sky's rule (2026-09-02): aggregate his performance so he can earn on the whole of it, book him to
+ * CORPORATE rather than to a store, and let his sales still count toward each store's own
+ * performance — but not toward their AOV, discount or attendance.
+ *
+ * The last part needs no code here, and that is worth stating so nobody "finishes" it later:
+ *   • Store sales/AOV/discount reach Crew on LEADERBOARD's manager row, already aggregated there.
+ *     Folding his budtender rows does not remove his sales from that, so they still contribute.
+ *   • AOV and discount are read off that same manager row — Crew never derives them from budtenders,
+ *     so there is nothing here to exclude him from.
+ *   • ATTENDANCE is the one Crew does compute from budtender rows (incTeamAtt / the teamA term),
+ *     and booking him to `corporate` takes him out of every store's headcount by construction —
+ *     no store matches his slug. That is the exclusion, and it falls out of the move.
+ *
+ * WEIGHTED, NOT AVERAGED. Discount is a rate, so the fold weights it by sales; AOV is recomputed
+ * from the totals rather than averaged, because the mean of two AOVs is not the AOV of the whole.
+ * Averaging either would hand a floater a number nobody could reproduce from the transactions. */
+function foldFloaters_(live) {
+  var buds = live.budtenders || [];
+  if (!buds.some(function (r) { return r && r.is_floater; })) return;
+
+  var kept = [], byId = Object.create(null), folded = [];
+  buds.forEach(function (r) {
+    /* Only ever folds rows that resolved to the SAME registry person. A floater whose row could not
+       be stamped keeps its own line rather than being merged on a name — attaching one person's
+       transactions to another is the failure this whole file keeps guarding against. */
+    var id = String((r && r.employee_id) || '');
+    if (!r || !r.is_floater || !id) { kept.push(r); return; }
+    var e = byId[id];
+    if (!e) { byId[id] = r; kept.push(r); return; }
+    /* Second and later rows fold into the first. Sums first, then the two derived figures, so the
+       rates are computed from the totals rather than from each other. */
+    var salesA = Number(e.sales) || 0, salesB = Number(r.sales) || 0;
+    var discA  = Number(e.discount) || 0, discB = Number(r.discount) || 0;
+    e.txn   = (Number(e.txn) || 0) + (Number(r.txn) || 0);
+    e.sales = salesA + salesB;
+    e.discount = (salesA + salesB) > 0 ? ((discA * salesA) + (discB * salesB)) / (salesA + salesB)
+                                       : 0;
+    e.aov = (Number(e.txn) || 0) > 0 ? e.sales / e.txn : 0;
+    e.folded_from = (e.folded_from || [String(e.storeName || e.storeSlug || '?')])
+                      .concat([String(r.storeName || r.storeSlug || '?')]);
+    if (folded.indexOf(id) < 0) folded.push(id);
+  });
+
+  /* Booked to CORPORATE once the fold is done, not before — the per-store labels are what the fold
+     records in `folded_from`, and the screen shows them so a merged row can still be traced back.
+     storeSlug drives the low-volume transaction bar and the team-attendance match, so this is the
+     line that actually performs the exclusion. */
+  folded.forEach(function (id) {
+    var e = byId[id];
+    e.storeSlug = 'corporate';
+    e.storeName = 'Corporate';
+    e.store_id  = 'corporate';
+  });
+  live.budtenders = kept;
+  live.floaters = folded.map(function (id) {
+    var e = byId[id];
+    return { employee_id: id, name: e.name, stores: e.folded_from || [],
+             txn: e.txn, sales: Math.round((Number(e.sales) || 0) * 100) / 100 };
+  });
+}
+
+/* ══ One person, one section ═════════════════════════════════════════════════════════════════════
+ *
+ * A floater who is ALSO an admin or a manager can arrive in two sections at once: their own row,
+ * plus a budtender row for the shifts they covered. Mike and Tawny both float occasionally (Sky,
+ * 2026-09-02), and Mike is the admin row.
+ *
+ * BOTH ROWS PAY, AND THAT IS INTENDED — Sky, 2026-09-02: a floater CAN earn on the shifts they
+ * cover. In practice they rarely will, because the transaction bar is 200 and a few covered shifts
+ * do not reach it; SPIFF is the likelier earner, and it is per-unit rather than gated on volume.
+ *
+ * SO WHY REPORT IT AT ALL. Because two bonuses for one person is exactly what a MIS-ATTRIBUTED row
+ * looks like too, and the difference is invisible in the totals — every individual figure is
+ * defensible either way. Naming it means the reader sees it deliberately and recognises it, instead
+ * of discovering it while checking something else and having to work out which case it is.
+ *
+ * DETECTED, NEVER RESOLVED HERE. Dropping a row would quietly withhold money that is owed; the
+ * decision about who earns what is compensation policy, and it is already made — this just makes
+ * the shape visible. */
+function dualRoleRows_(live) {
+  var where = Object.create(null);
+  function mark(section, r) {
+    if (!r) return;
+    var id = String(r.employee_id || '');
+    if (!id) return;                       // unstamped rows are already reported as `unmatched`
+    var e = where[id] || (where[id] = { employee_id: id, name: r.name, sections: [] });
+    if (e.sections.indexOf(section) < 0) e.sections.push(section);
+  }
+  if (live.admin) mark('admin', live.admin);
+  (live.managers || []).forEach(function (r) { mark('manager', r); });
+  (live.budtenders || []).forEach(function (r) { mark('budtender', r); });
+
+  var dual = Object.keys(where).map(function (k) { return where[k]; })
+                   .filter(function (e) { return e.sections.length > 1; });
+  if (dual.length) live.dual_role = dual;
 }
 
 /**
@@ -4570,6 +4727,14 @@ function getIncentive_(p) {
   }
   live.thresholds = coreT.thresholds;
   stampEmployeeIds_(live);
+  /* BEFORE the inputs and before SPIFF: an input is keyed on employee_id, and SPIFF folds onto
+     whichever rows exist, so merging afterwards would mean deciding which of two rows kept the
+     attendance tick and which kept the vendor money. Fold first and there is only ever one row to
+     attach either to. */
+  foldFloaters_(live);
+  /* AFTER the fold, so a floater's own two budtender rows are already one and the only thing left
+     to report is a genuine cross-section clash rather than the split this just repaired. */
+  dualRoleRows_(live);
   live.inputs = inputsFor_(live.payPeriod.start);
   /* THE ONLY CACHED SPIFF READ IN THE ENGINE. This route paints a screen; it writes nothing, and
      the round trip it saves is ~4s of a load that was taking 20-30. Approval and the send preview
@@ -4717,17 +4882,52 @@ function saveIncentiveInput_(p) {
     }
   }
 
+  /* THE OVERRIDE IS APPROVER-ONLY, and it is the only field on this route that is.
+     att, spiff and hours all feed a calculation any editor is trusted to prepare. This one REPLACES
+     the calculation's answer with a typed number that goes straight to the Capstone export, which
+     makes it the same kind of act as approving — and the same person's. Mike prepares a period; he
+     does not decide what somebody was paid. Same reasoning as the thresholds tray. */
+  var wantsOverride = (p.payroll_override !== undefined) || (p.override_note !== undefined);
+  if (wantsOverride && !canApprove_(auth)) {
+    return { ok: false, error: 'Only the approver can override a payroll figure. ' +
+             'Preparing a period and deciding what somebody was paid are different jobs.' };
+  }
+  var ovRaw = String(p.payroll_override == null ? '' : p.payroll_override).trim();
+  if (p.payroll_override !== undefined && ovRaw !== '') {
+    var ovNum = Number(ovRaw);
+    if (!isFinite(ovNum) || ovNum < 0) {
+      return { ok: false, error: 'invalid override: ' + ovRaw + ' (expected a dollar amount, or empty to clear it)' };
+    }
+  }
+
   var sh = sheetOf_(INPUTS_TAB, INPUTS_HEADERS);
   var rows = readTab_(INPUTS_TAB, INPUTS_HEADERS);
   var idx = -1;
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].pp_start === pp && rows[i].employee_id === eid) { idx = i; break; }
   }
-  var cur = idx >= 0 ? rows[idx] : { pp_start: pp, employee_id: eid, att: '', spiff: '', hours: '' };
-  ['att', 'spiff', 'hours'].forEach(function (f) {
+  var cur = idx >= 0 ? rows[idx] : { pp_start: pp, employee_id: eid, att: '', spiff: '', hours: '',
+                                     payroll_override: '', override_note: '' };
+  ['att', 'spiff', 'hours', 'payroll_override', 'override_note'].forEach(function (f) {
     if (p[f] === undefined) return;                       // absent = leave alone
     cur[f] = String(p[f]);                                // empty = clear
   });
+  /* Clearing the figure clears its reason with it — a note explaining an override that no longer
+     exists is a sentence about nothing, and it would still render as provenance. */
+  if (p.payroll_override !== undefined && String(p.payroll_override).trim() === '') cur.override_note = '';
+
+  /* A NOTE IS THE POINT, NOT A COURTESY — checked here rather than above because a note already on
+     the row counts: setting the figure and writing the reason are two saves from the same screen,
+     and the second must not be refused for repeating what the first already said.
+     The whole reason to RECORD an override rather than quietly edit a threshold is so somebody
+     reading this period next year can see why the figure disagrees with the math. An override with
+     no reason is a number with no provenance, which is worse than no override at all — it reads as
+     a bug in the calculation. */
+  if (String(cur.payroll_override || '').trim() !== '' &&
+      String(cur.override_note || '').trim().length < 5) {
+    return { ok: false, error: 'an override needs a reason — it is the only record of why this ' +
+             'figure disagrees with the math' };
+  }
   cur.updated_at = new Date().toISOString();
   cur.updated_by = auth.user || '';
 
@@ -4777,6 +4977,20 @@ function saveIncentiveInput_(p) {
  * SCOPE: $/hr ONLY. It does not touch bonus or payroll, and $/hr is not one of the four columns the
  * Capstone export carries — so nothing here can change what anybody is paid. That is deliberate:
  * it is why hours can be imported from a source we have not yet automated without a penny-match. */
+/* THE PAID FIGURE, which is not always the computed one.
+ *
+ * Applied AFTER the calc, never inside it: incCalcBud_/incCalcMgr_ are pinned byte-for-byte against
+ * a frozen Leaderboard oracle by tests/incentive_math_test.js, and an override reaching inside them
+ * would make that comparison meaningless — the whole guarantee is that the arithmetic still agrees
+ * with the arithmetic that paid people. An override is not a different calculation; it is a human
+ * saying the calculation does not apply to this row.
+ *
+ * null (not 0) means nobody overrode anything. A deliberate 0 is a real answer and must win. */
+function incPayroll_(computed, i) {
+  var ov = i && i.payrollOverride;
+  return (ov == null) ? computed : ov;
+}
+
 function incHours_(i, T) {
   var h = Number(i && i.hours);
   return (isFinite(h) && h > 0) ? h : T.hoursPerPeriod;
@@ -4918,13 +5132,21 @@ function incentiveApprove_(p) {
   var by  = String(auth.user || '');
   var noteTxt = 'approved by ' + by + (spiffFailed ? ' — SPIFF unreadable, vendor amounts not included' : '');
   function push(section, r, c, extra) {
+    var computed = c.payroll == null ? c.bonus : c.payroll;
+    var i = inputs[r.employee_id] || {};
+    /* THE OVERRIDE IS APPLIED HERE, at the one place that writes the permanent record — and BOTH
+       numbers are kept. Freezing only the paid figure would leave a period that disagrees with its
+       own arithmetic and nothing on the row to say a human decided it, which is exactly the state
+       that made Levy's $25 take an afternoon to explain. */
+    var paid = incPayroll_(computed, i);
     rows.push([pp, String(live.payPeriod.end || ''), section, r.employee_id || '', r.name || '',
                r.storeName || '', r.storeSlug || '',
                extra.txn == null ? '' : extra.txn, extra.sales == null ? '' : extra.sales,
                extra.disc == null ? '' : extra.disc, extra.aov == null ? '' : extra.aov,
                c.spiff == null ? '' : c.spiff, c.bonus, c.hr,
-               c.payroll == null ? c.bonus : c.payroll,
-               noteTxt, 'approved', now]);
+               paid,
+               noteTxt, 'approved', now,
+               computed, paid === computed ? '' : String(i.overrideNote || '')]);
   }
   (live.budtenders || []).forEach(function (b) {
     push('budtender', b, incCalcBud_(b, T, inputs),

@@ -716,6 +716,106 @@ Verified against the real 2026-08-17 file: 40 rows → 13 changes, 17 already co
 4 not on the period, 0 unreadable, 0 missing — and **11 gaining, which is exactly what the file's own
 Summary sheet says** (`Eligible (Yes) = 11`).
 
+### Floaters — one person, one row (2026-09-02)
+
+A floater picks up shifts wherever they are needed, so Leaderboard sends them **once per store**.
+Drew Phillips arrived on the 2026-08-17 period as **Portland (37 txn, $901)** and **River (24,
+$557)**. A person split in two is wrong three ways, and only the first is cosmetic:
+
+1. Listed twice on a payroll screen.
+2. **They qualify for nothing.** The transaction bar is 200; 37 and 24 each miss it, while the real
+   61 would at least be judged on its merits. Splitting a person is how they silently earn zero.
+3. They are counted toward **two** stores' team-attendance headcount — paying two managers $25 each
+   for one person showing up.
+
+Sky's rule: aggregate the performance, book them to **Corporate**, let the sales still count toward
+each store's own performance but **not** toward its AOV, discount or attendance.
+
+- **`is_floater` is a flag, deliberately NOT inferred from `home_store = 'corporate'`.** Drew sits
+  there — and so do Mike (admin) and other corporate staff who are not floaters. That is exactly the
+  trap `pay_type` was written to escape when `Admin` and `corporate` turned out to belong to hourly
+  staff too. Somebody has to say it; it is a control on the roster record.
+- **Weighted, not averaged.** Discount is a RATE (weighted by sales) and AOV a RATIO (recomputed
+  from the totals). Averaging either hands a floater a figure nobody can reproduce from the
+  transactions — on the test case a plain mean puts the discount a full point out and the AOV on the
+  wrong side of the $33 target.
+- **The attendance exclusion needed no code.** `incTeamAtt` counts budtenders whose slug matches the
+  manager's, so booking them to `corporate` removes them from every store's headcount by
+  construction. That IS the exclusion.
+- **"Sales still count toward the store" also needed no code, and this is worth stating so nobody
+  "finishes" it later.** Store sales/AOV/discount reach Crew on Leaderboard's *manager* row, already
+  aggregated there; folding budtender rows does not remove the sales from it, and Crew never derives
+  those figures from budtenders. Sky confirmed the split does not touch Leaderboard — Crew and SPIFF
+  only.
+- **Only rows that resolved to the same registry person are merged.** An unstamped row keeps its own
+  line rather than being folded on a name.
+- Folded rows carry `folded_from` and render a **merged** label, because the transaction count will
+  not match any single store's report and without the label that reads as a wrong number.
+
+**`dual_role` — the hazard that arrives with this, and it pays twice.** Mike and Tawny float
+occasionally (Sky, 2026-09-02) and **Mike is the admin row**. A floater who also holds an admin or
+manager row can appear in two sections at once: each section computes its own bonus, both land in
+the totals, and the person's sales are counted in each. Every individual figure looks defensible and
+the screen adds up. `dualRoleRows_` detects it and the screen says so in red above the tables.
+
+**Both rows pay, and that is intended** (Sky, 2026-09-02): a floater *can* earn on the shifts they
+cover. In practice they rarely will — the transaction bar is 200 and a few covered shifts do not
+reach it — so **SPIFF is the likelier earner**, being per-unit rather than gated on volume.
+
+So the notice is **informational, in gold rather than red**. It is surfaced because two bonuses for
+one person is also exactly what a **mis-attributed row** looks like, and the difference is invisible
+in the totals; naming it means the reader recognises the shape instead of discovering it while
+checking something else. It has not yet occurred on a real period.
+
+Pinned by `tests/floater_fold_test.js`.
+
+### The payroll override — recording what was actually paid (2026-09-02)
+
+Every other field on `crew_incentive_inputs` **feeds** the math: attendance earns a bonus, SPIFF is
+vendor money, hours divide `$/hr`. `payroll_override` **overrules** it — a typed figure that replaces
+the computed one and goes straight to the Capstone export. It is the first thing in Crew where a
+human decides what somebody was paid.
+
+**Why it had to exist, and it is Levy Nelson's case.** Reopening a paid period recomputes it against
+today's data, so somebody who cleared a bar by a hundredth of a percent in August can stop having
+cleared it in September: Levy was paid **$25** on a **1.00%** discount rate; Leaderboard now reports
+**1.04%** for that same closed fortnight, above the 1.0% ceiling, so it computes **$0**. Break glass
+could reopen her period and still could not record what she was actually paid — **the reopen was
+half a tool without this.**
+
+- **Approver-only**, and the only field on `incentive_save` that is. `att`/`spiff`/`hours` are
+  preparation, which any editor is trusted with; this is a decision about pay, which is the
+  approver's — the same split as the thresholds tray. The pencil is not rendered for anyone else,
+  because offering a control the route refuses is the worst kind of permission gate.
+- **A reason is required and refused if under 5 characters.** The whole point of recording an
+  override rather than quietly editing a threshold is that somebody reading the period next year can
+  see *why* the figure disagrees with the arithmetic. An override with no provenance reads as a bug
+  in the calculation. Clearing the figure clears its reason with it.
+- **AMBER, with a diamond.** Not green, not red — an overruled figure is neither good news nor an
+  error, it is a *decision*, and gold is what the suite already uses for "a person did this". The
+  glyph is there because a payroll printout in greyscale still has to show which figures were set by
+  hand.
+- **It is applied AFTER the calc, never inside it.** `incCalcBud_`/`incCalcMgr_` are pinned
+  byte-for-byte against the frozen Leaderboard oracle, and an override reaching inside them would
+  make that comparison meaningless. An override is not a different calculation; it is a person
+  saying the calculation does not apply to this row. `incPayroll_` (engine) / `incPaid` (browser).
+- **`null` is not `0`.** A deliberate $0 override means "paid nothing" and must beat the computed
+  figure; an absent one must not. Same rule as `spiff` and `hours`, and it matters most here.
+- **It reaches the export and the totals, or it is worse than useless.** A figure the screen honors
+  and the CSV ignores would send payroll a number nobody ever saw — both halves looking right in
+  isolation. Worse still with the non-zero filter: without the override Levy computes $0 and is
+  *dropped from the file entirely*, so a broken override does not pay her the wrong amount, it pays
+  her nothing.
+- **Approval freezes BOTH numbers.** `HISTORY_HEADERS` gained `computed_payroll` and `override_note`
+  — appended, because `incentiveUnapprove_` reads payroll as `all[i][14]` and anything inserted
+  re-points it at another column. A closed period therefore carries its own explanation instead of
+  needing one.
+
+Pinned by `tests/payroll_override_test.js`: the null-vs-zero rule, that both copies agree, that the
+math is byte-identical with and without one, that it reaches the export and the totals, that the
+bonus breakdown survives alongside the override reason, and that the preparer sees the flag but
+never the pencil.
+
 ### The Capstone export is THEIR shape, not ours
 
 ADMIN, then one block per store in Capstone's order (BEND / HILLSBORO / RIVER / CENTER / SOUTH /
