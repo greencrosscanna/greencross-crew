@@ -92,7 +92,7 @@ padding:7px 14px 7px 12px; border-left:2px solid transparent`. Left to right:
   Renders the DiceBear avatar when `avatar_config` exists, otherwise two-letter initials at
   9.5px/700 in `--gx-text-dim`. `_gchat` keeps the GC-hat SVG overlay. Avatar URL construction is
   unchanged from `buildAvatarUrl()` in `crew.js` — do not tidy those parameter rules.
-- Name 13px/600 `--gx-text`, ellipsised. A blanked identity row shows `⚠ Record blanked` in
+- Name 13px/600 `--gx-text`, ellipsized. A blanked identity row shows `⚠ Record blanked` in
   `--gx-red`.
 - Sub-line 11px `--gx-text-mute`: role, plus `· "Nickname"` when set.
 - `★` in `--gx-gold` if this person is Employee of the Month.

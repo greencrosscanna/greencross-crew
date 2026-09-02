@@ -241,7 +241,7 @@ var ROLE_ALIASES = Object.assign(Object.create(null), {
 });
 
 /**
- * Canonicalise a role title, or return '' if it is not one of the four.
+ * Canonicalize a role title, or return '' if it is not one of the four.
  *
  * '' is the honest answer for an unknown title and callers must treat it as a refusal, not as
  * "no role" — silently writing '' would erase a title someone deliberately set.

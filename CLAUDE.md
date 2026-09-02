@@ -226,7 +226,7 @@ human, not a value to write. A METRC sync must leave `hire_date` alone.
 Two more things the real exports show that the connector's field list does not:
 
 - **METRC's own casing is unreliable** — the same file carries `ellison, jayden`,
-  `PINKERTON, NOAH` and `Mcarthur, Ayla`. METRC wins on *spelling*, not on capitalisation, so a
+  `PINKERTON, NOAH` and `Mcarthur, Ayla`. METRC wins on *spelling*, not on capitalization, so a
   sync must not copy the case through.
 - **`Employee Role` is empty for everyone, and `Home` is a METRC landing page** (`Sales`,
   `Packages`, `Reports`), not a store. Neither maps to `role_title` or `home_store`.

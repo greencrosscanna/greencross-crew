@@ -526,9 +526,9 @@ ok('an un-overridden one is not marked', !/is-over/.test(plain));
    Its whole value is being already wired when something breaks: the app that skipped it is the one
    still showing a stack trace to a store while every other app shows the screen. */
 ok('gx-maintenance.js is loaded', /gx-maintenance\.js/.test(html));
-ok('and initialised with this app key', /GXMaintenance\.init\([\s\S]{0,200}app: 'crew'/.test(html));
+ok('and initialized with this app key', /GXMaintenance\.init\([\s\S]{0,200}app: 'crew'/.test(html));
 /* core-admin's note says `gxcore: GXCORE_URL`, but in Crew that constant lives inside crew.js's
-   IIFE and is not a global — referencing it here throws before the gate initialises, on every page
+   IIFE and is not a global — referencing it here throws before the gate initializes, on every page
    load, whether or not maintenance is on. */
 /* Scoped to the CALL, not the whole file: the comment above it quotes the wrong form in order to
    explain why not to use it, and a naive search for that string finds the warning and calls it the

@@ -996,7 +996,7 @@
   <script>
     /* The URL is written out rather than referenced: core-admin's note says `gxcore: GXCORE_URL`,
        but in this app that constant lives INSIDE crew.js's IIFE and is not a global — referencing
-       it here throws a ReferenceError before the gate can initialise, on every page load, whether
+       it here throws a ReferenceError before the gate can initialize, on every page load, whether
        or not maintenance is on. Same literal as crew.js and Code.gs. */
     GXMaintenance.init({
       app: 'crew', appName: 'GX Crew',
