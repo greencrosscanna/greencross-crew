@@ -33,7 +33,7 @@ of the intended look, not production code. It renders through a small local prev
 (`support.js`); that runtime is part of the harness and must not be ported.
 
 The task is to recreate it inside GX Crew's real environment: no build step, plain
-ES5-flavoured JavaScript in `crew.js`, DOM assembled with the existing `el()` / `esc()` string
+ES5-flavored JavaScript in `crew.js`, DOM assembled with the existing `el()` / `esc()` string
 builders, and **every color and radius from a `--gx-*` custom property in `gx-theme.css`** —
 the prototype inlines hex values only because the harness has no stylesheet. The mapping table
 below is exhaustive; there is no color in this design that is not already a token.
