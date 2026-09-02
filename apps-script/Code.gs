@@ -5379,7 +5379,7 @@ function approvalThresholds_(live) {
  *
  * This returned null on any failure and the caller fell back to "whatever Leaderboard sent" — which
  * worked only while Leaderboard was also sending them. GX Core's engine does not, deliberately:
- * Crew owns compensation and reads the scheme from kv, so a second copy travelling in the payload
+ * Crew owns compensation and reads the scheme from kv, so a second copy traveling in the payload
  * is exactly the drift the move was meant to end.
  *
  * So the fallback is gone, and the failure is loud. Silently computing a bonus against a MISSING
