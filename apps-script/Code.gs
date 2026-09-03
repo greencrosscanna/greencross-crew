@@ -5635,6 +5635,12 @@ function incentiveSend_(p) {
                                       payroll_total: pre.payroll_total, split: pre.split,
                                       still_open: !!pre.still_open,
                                       spiff: pre.spiff, thresholds: pre.thresholds,
+                                      /* The JSON must say what the EMAIL says. Without this the
+                                         dry run reported `overrides: 0` while the rendered body
+                                         named Levy Nelson's $25 — the two halves of the same
+                                         preview disagreeing is exactly the confusion a preview
+                                         exists to remove. */
+                                      overrides: pre.overrides || { rows: [], net: 0 },
                                       would_block: pre.would_block || [],
                                       unmatched: pre.unmatched || [],
                                       to: wfApproverEmails_(), html: html,
