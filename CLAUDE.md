@@ -908,6 +908,20 @@ two steps.** `?action=pdf_check` (deploy-secret) answers "is Drive working" with
 anything — it writes a real file and trashes it, because a permission that looks fine until the
 write is the failure it exists to catch.
 
+**`pdf_file` backfills an already-approved period** from its frozen rows, and refuses anything not
+in history — so it can only ever file a record that already exists, which is what keeps it a
+backfill rather than a second way to produce payout documents. `dry=1` reports what it would file.
+**All 27 historical periods were filed this way on 2026-09-02** (1,012 people-rows, $41,050), plus
+2026-08-17. Sky moved the hand-filed originals into an `Original/` subfolder first.
+
+***The backfill is what surfaced the blank-vs-zero bug, and it is the same rule as the export.***
+The oldest report (`gen1`, 2025-08-04) has **no payroll column** — all 37 rows carry a real bonus and
+an empty payroll. Rendered through `Number(x) || 0` that prints **$0.00 against every name and a
+$0.00 total**, which does not say "this report predates the column"; on a payroll document it says
+nobody was paid. Payroll, sales, AOV, SPIFF and bonus cells now render a blank as an em dash, and a
+period with no payroll anywhere shows the **bonus** total the source did record, with a line saying
+why. Genuine zeros still print `$0.00` — eight of that period's bonuses really are zero.
+
 Pinned by `tests/payout_pdf_test.js`.
 
 ### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
