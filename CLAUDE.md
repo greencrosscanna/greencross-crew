@@ -769,6 +769,67 @@ checking something else. It has not yet occurred on a real period.
 
 Pinned by `tests/floater_fold_test.js`.
 
+### "Send for approval" never worked, and it was not the email (2026-09-02)
+
+Sky: *"not getting the approval email, tested by me clicking and by Mike clicking, it worked
+previously."* It reads as a mail problem and it was not one — `mail_check` reported mail authorized
+with **1,477 sends of quota left**, and the last trigger send had gone out fine.
+
+**`incentiveSend_` is MIKE's button, and it ran `incentiveApprove_` as its dry run** to validate the
+period and total it. `incentiveApprove_` opened with the **approver-only gate, above the confirm
+split** — so the dry run was refused for anybody who is not the named approver, and Mike's click
+came back *"only the named approver can approve — use 'Send for approval' instead"*: an error
+telling him to press the button he had just pressed. No email was sent to anyone.
+
+**Both the gate and the dry-run call landed in the same commit (v1.330, 2026-08-27)**, so the
+hand-off has never once worked for the person it was built for. "It worked previously" is memory of
+the pre-workflow behavior.
+
+- **The gate moved to the WRITE, it did not go away.** `confirm === 'yes' && !canApprove_(auth)`.
+  Nothing above the confirm split writes anything, and a dry run returns the figures already on the
+  preparer's screen, so there is nothing to withhold from him. Approving is still approver-only.
+- **A send that mailed nobody no longer leaves the period `pending`.** This route *refuses* a period
+  that is already pending, so a failed send locked it out of ever being re-sent — recoverable only
+  by break glass. `wfUnsend_` puts the status back and **clears the token**, which matters as much:
+  the token is single-use and bound to the total sent, so a live one left behind means the next
+  legitimate send mints a second while the first still works. A human-written note is not touched.
+  The old comment argued the opposite — *"the state is already pending, which is correct — it WAS
+  sent for approval"*. It was not: nobody was told.
+- **An unreadable `cfg.crewApprover` is not an unset one.** `approverIds_` caught a failed
+  `GXCore.getKv` and returned `[]`, which every caller reported as "no approver is configured — set
+  it in the Command Center". The setting reads `sky` and is fine; the message sent whoever read it
+  to go and fix a value that was never wrong. It still fails **closed** (nobody wrongly approves);
+  it just says *connection problem* now. Same rule as the SPIFF and threshold reads.
+
+Pinned by `tests/approval_send_test.js`.
+
+### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
+
+There were **two `@media print` blocks** in `index.html`. The second said:
+
+```css
+body * { visibility: hidden; }
+.inc-wrap, .inc-wrap * { visibility: visible; }
+```
+
+Hide everything, then win the report back. A legitimate idiom, and it works in **Leaderboard**,
+where the incentive root really is `.inc-wrap`. **Crew's is `.crew-inc-wrap`** — the bare `inc-`
+names came over with the transplanted tray CSS and were never re-prefixed. So the first rule matched
+every element on the page, the second matched **nothing**, and the PDF was blank paper.
+
+**`visibility: hidden` on `body *` cannot be overridden by the other block**, however careful that
+one is. Two print blocks is the hazard itself: whichever is wrong simply wins, silently, in a medium
+nobody looks at until they need the document. **Keep it to one.**
+
+Deleted rather than re-prefixed — everything it reached for is handled by the surviving block, which
+hides named chrome instead of hiding the document. Its one live rule (`.crew-imp-back`) moved up.
+A second orphan, `.crew-inc-grand`, was found by the new test and removed; harmless only because it
+set a color rather than hiding the page.
+
+Pinned by `tests/print_css_test.js`, which asserts nothing blanket-hides the document **and** that
+every `.crew-inc-*` / `.inc-*` class named in a print rule is one the app actually renders — the
+prefix drift, generalized, which is the check that would have caught this the day it shipped.
+
 ### The payroll override — recording what was actually paid (2026-09-02)
 
 Every other field on `crew_incentive_inputs` **feeds** the math: attendance earns a bonus, SPIFF is

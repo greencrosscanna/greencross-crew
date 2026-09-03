@@ -5129,10 +5129,26 @@ function incentiveApprove_(p) {
      point of the workflow, and without this check Mike approves his own work. Deliberately a
      ROLE from GX Core's app_access rather than a username: Leaderboard gated its copy on a
      hardcoded sky/mike list and that is what this replaced. */
-  if (!canApprove_(auth)) {
+  /* THE APPROVER GATE BELONGS ON THE WRITE, NOT ON THE DRY RUN — and having it here is what cost
+     Mike the ability to send a period at all.
+
+     `incentiveSend_` ("Send for approval", which is MIKE's button) runs this function as its dry
+     run to validate the period and total it. With the gate above the confirm split, that dry run
+     was refused for anybody who is not the named approver, so Mike's click came back with
+     "only the named approver can approve — use “Send for approval” instead": an error telling him
+     to press the button he had just pressed, and no email was ever sent to anyone.
+
+     Broken since v1.330, which added this gate and the dry-run call in the SAME commit — so the
+     hand-off has never once worked for the person it was built for, and it reads as an email
+     problem because the failure is silent everywhere except that one toast.
+
+     Nothing above the confirm split writes anything, and the figures a dry run returns are the
+     same ones already on the preparer's screen, so there is nothing here to withhold from him.
+     Approving — the immutable write — is still approver-only, one line down. */
+  if (String(p.confirm || '') === 'yes' && !canApprove_(auth)) {
     return { ok: false, error: approverIds_().length
       ? 'only the named approver can approve — use “Send for approval” instead'
-      : 'no approver is configured — set cfg.crewApprover in the Command Center to a GX user_id' };
+      : noApproverError_() };
   }
 
   var pp = String(p.pp_start || '').trim();
@@ -5337,6 +5353,25 @@ function wfSet_(pp, patch) {
   return cur;
 }
 
+/* PUT A PERIOD BACK WHERE IT WAS after a send that mailed nobody.
+ *
+ * Restores the status and CLEARS THE TOKEN. Clearing matters as much as the status: the token is
+ * single-use and bound to the total that was sent, so leaving a live one behind after a failed
+ * send means a later, legitimate send mints a second token while the first is still valid — two
+ * standing keys to the same payroll, which is the thing the 72-hour expiry exists to limit.
+ *
+ * `prev` is whatever wfGet_ returned BEFORE the send; a period that had no row at all goes back to
+ * `draft`, which is what wfSet_ would have created it as. Deliberately not a delete — a period that
+ * has been sent back carries a note somebody wrote, and a failed send must not destroy it. */
+function wfUnsend_(pp, prev) {
+  try {
+    wfSet_(pp, { status: (prev && prev.status) || 'draft',
+                 sent_by: (prev && prev.sent_by) || '',
+                 sent_at: (prev && prev.sent_at) || '',
+                 token: '', token_expires: '', sent_total: '' });
+  } catch (e) { /* the send already failed; do not mask that with a rollback error */ }
+}
+
 /* WHO APPROVES — and why this is not a role check.
  *
  * The obvious answer was `role === 'owner'`, and it is wrong twice over. GX Core's role vocabulary
@@ -5352,11 +5387,31 @@ function wfSet_(pp, patch) {
  * Unset, NOBODY can approve, and the screen says so. Failing closed is right here: the alternative
  * is a default that quietly lets the preparer approve their own work, which is the one outcome this
  * whole workflow exists to prevent. */
+/* AN UNREADABLE SETTING IS NOT AN UNSET ONE. The catch here returns [], which every caller then
+   reports as "no approver is configured — set cfg.crewApprover in the Command Center". When the
+   setting IS set (it reads `sky`) and GX Core merely failed to answer, that message sends whoever
+   read it to go and fix a value that was never wrong, while the real cause — a flaky read — is
+   never named. Same rule this file already applies to the SPIFF read and the threshold read: a
+   source that could not be read must not be frozen as an empty one.
+
+   Reset at the top of every call rather than trusted from the last one: Apps Script reuses warm
+   instances, so a module-level flag outlives the request that set it. */
+var _approverReadFailed_ = false;
 function approverIds_() {
   var raw = '';
-  try { raw = String(GXCore.getKv('cfg.crewApprover') || ''); } catch (e) {}
+  _approverReadFailed_ = false;
+  try { raw = String(GXCore.getKv('cfg.crewApprover') || ''); }
+  catch (e) { _approverReadFailed_ = true; }
   return raw.split(',').map(function (x) { return x.trim().toLowerCase(); })
             .filter(function (x) { return !!x; });
+}
+/* Only meaningful immediately after an approverIds_() call — it describes THAT read. */
+function approverUnreadable_() { return _approverReadFailed_; }
+function noApproverError_() {
+  return approverUnreadable_()
+    ? 'could not read the approver setting from GX Core — this is a connection problem, not a ' +
+      'missing setting; try again in a moment'
+    : 'no approver is configured — set cfg.crewApprover in the Command Center to a GX user_id';
 }
 function canApprove_(auth) {
   var me = String((auth && auth.user) || '').trim().toLowerCase();
@@ -5544,22 +5599,32 @@ function incentiveSend_(p) {
         subject: (preview ? '[PREVIEW] ' : '') + 'Approve incentive — ' + pp });
       mailed = to;
     } catch (e) {
-      /* The state is already `pending`, which is correct — it WAS sent for approval. Report the
-         mail failure rather than throwing, so the sender learns to nudge in person instead of
-         believing an email went out. */
-      return { ok: true, pp_start: pp, status: preview ? 'preview' : 'pending', rows: pre.rows,
-               payroll_total: pre.payroll_total, mailed: [],
-               warning: 'the email failed: ' + String((e && e.message) || e) };
+      /* A SEND THAT REACHED NOBODY IS NOT A SEND, so it must not leave the period `pending`.
+         This used to argue the opposite — "the state is already pending, which is correct — it WAS
+         sent for approval". It was not: nobody was told, and there is no approver sitting on an
+         email. Worse, this route REFUSES a period that is already `pending`, so the failed send
+         locked the period out of being re-sent by anyone; the only way back was break glass. */
+      if (!preview) wfUnsend_(pp, wfPrev);
+      return { ok: true, pp_start: pp, status: preview ? 'preview' : (wfPrev && wfPrev.status) || 'draft',
+               rows: pre.rows, payroll_total: pre.payroll_total, mailed: [],
+               warning: 'the email failed, so the period was left where it was — try again: ' +
+                        String((e && e.message) || e) };
     }
   }
+  /* Same rule for the quieter failure: no approver RESOLVED, so nothing was mailed and nobody is
+     waiting. Rolling back is what keeps the button pressable once cfg.crewApprover is readable
+     again — a stuck `pending` with no email out is the state nobody can clear from the screen. */
+  if (!preview && !mailed.length) wfUnsend_(pp, wfPrev);
   /* The split is echoed back, not just put in the email: a send that reports only a total cannot
      be checked against the screen without opening the mail, and the whole reason it is in the
      email is that the two must agree. */
   return { ok: true, preview: preview || undefined, pp_start: pp,
-           status: preview ? 'preview' : 'pending', rows: pre.rows,
+           status: preview ? 'preview'
+                 : (mailed.length ? 'pending' : ((wfPrev && wfPrev.status) || 'draft')), rows: pre.rows,
            payroll_total: pre.payroll_total, split: pre.split, mailed: mailed,
            still_open: !!pre.still_open,
-           warning: mailed.length ? '' : 'no approver is configured (cfg.crewApprover) — nobody was emailed' };
+           warning: mailed.length ? '' : (noApproverError_() + ' — nobody was emailed, so ' + pp +
+                                          ' was left where it was') };
 }
 
 /* ONE builder for the real email and the preview. Two would drift, and the drift would only show

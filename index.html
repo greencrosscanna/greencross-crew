@@ -678,6 +678,7 @@
       .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner,
       .crew-inc-returned, .inc-tray, .inc-tray-back, .crew-inc-gear,
       .crew-inc-nav, .crew-inc-group, .crew-inc-edit, .crew-inc-revert,
+      .crew-imp-back,
       .crew-inc-refresh { display: none !important; }
       /* The two explanatory notes are for somebody reading the screen and deciding. The PDF is a
          payroll record that gets filed — it does not need to be told what Payroll means, and one
@@ -702,7 +703,10 @@
       .crew-inc-tot .is-total dd { color: #000 !important; }
       .crew-inc-badge { border-width: 1px !important; }
       .crew-inc-tot dt { color: #555 !important; }
-      .crew-inc-grand, .crew-inc-tbl td.crew-inc-pay { color: #000 !important; }
+      /* `.crew-inc-grand` was named here too and is rendered nowhere — the same prefix drift as
+         `.inc-wrap`, harmless only because it set a color rather than hiding the page. The grand
+         total is `.crew-inc-tot .is-total dd`, forced black a few lines below. */
+      .crew-inc-tbl td.crew-inc-pay { color: #000 !important; }
       /* The green that means "hit a target" is the one color worth the ink — it is the
          difference between a bonus earned and not, and a gray copy cannot show it. */
       .crew-inc-tbl td.crew-inc-hit { color: #0a7a3d !important; font-weight: 700; }
@@ -991,14 +995,26 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
   text-decoration: underline; text-underline-offset: 2px; }
 .crew-inc-glasslink:hover { color: var(--gx-text); }
 
-@media print {
-  body * { visibility: hidden; }
-  .inc-wrap, .inc-wrap * { visibility: visible; }
-  .inc-wrap { position: absolute; left: 0; top: 0; }
-  .inc-actions, .inc-gear, .inc-tray, .inc-tray-back, .inc-att, .inc-spiff, .inc-arrow { display: none !important; }
-  .crew-imp-back { display: none !important; }
-  .inc-att-print, .inc-spiff-print { display: inline !important; }
-}
+/* THE PRINT RULES LIVE IN ONE PLACE — the @media print block further up, keyed on `.crew-inc-*`.
+   A SECOND block sat here until 2026-09-02 and it is why the PDF came out BLANK:
+
+     body * { visibility: hidden; }
+     .inc-wrap, .inc-wrap * { visibility: visible; }
+
+   It hid every element on the page and then un-hid `.inc-wrap` — a class this app has never
+   rendered. Crew's incentive root is `.crew-inc` / `.crew-inc-wrap`; the bare `inc-` names came
+   over from Leaderboard with the transplanted tray CSS and were never re-prefixed. So the first
+   rule matched everything, the second matched nothing, and Print PDF produced blank paper. The
+   rest of the block was the same mistake repeated harmlessly: `.inc-actions`, `.inc-gear`,
+   `.inc-att`, `.inc-spiff`, `.inc-arrow` and `.inc-att-print` name nothing here either.
+
+   Deleted rather than re-prefixed. Everything it was reaching for is already handled above, more
+   carefully — that block hides the chrome by name and leaves the report visible, instead of
+   hiding the document and trying to win it back. The ONE rule that was doing real work was
+   `.crew-imp-back`, which is a live class; it has moved up into that block's hide list.
+
+   Two print blocks is the hazard itself: `visibility: hidden` on `body *` cannot be overridden by
+   anything the other block says, so whichever one is wrong wins silently. Keep it to one. */
 
 /* ===== Period Standings (#/standings) ===== */
 .stn-wrap { max-width: 1100px; margin: 0 auto; padding: 22px 24px 60px; }
@@ -1088,6 +1104,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.358"></script>
+  <script src="crew.js?v=1.359"></script>
 </body>
 </html>
