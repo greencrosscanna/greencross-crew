@@ -845,8 +845,19 @@ Chrome names a Save-as-PDF from `document.title`, so a payroll record filed itse
 **The naming code existed and still did not work**, because it lived inside the app's own Print
 button's handler. **Cmd+P and File > Print call `window.print()` directly** — which is how anybody
 prints a page they are already looking at — and reached the dialog with the title untouched.
-`beforeprint` is the one hook the browser fires for *both* routes, so the naming lives there and the
-button now just prints.
+
+***Moving it to `beforeprint` was NOT enough either, and this took two goes.*** Sky printed the
+incentive dashboard and macOS's save panel still came up **`GX Crew.pdf`** — right view, right data,
+and the browser had simply **already decided the filename** by the time the event ran. Chrome and
+Safari settle the save-panel name while preparing the print preview, and `beforeprint` is not
+reliably early enough to beat that; against macOS's native panel it plainly is not.
+
+**So the title is set when the VIEW PAINTS, and there is no race left to lose.** While the incentive
+tab is open the document is genuinely called `Incentive Dashboard - 081726-083026`, from the moment
+its data lands — so every print route reads a name that has been correct for as long as the screen
+has been open. `beforeprint` stays as a backstop for a print fired between the tab opening and its
+data arriving, calling the same one function so the two cannot disagree. The tab reading the pay
+period is a mild side effect: it names what you are looking at, and goes back on the way out.
 
 Retired with it: a `setTimeout(restore, 4000)`, which existed because `afterprint` is not universal.
 A 4-second timer racing a human choosing a save folder decided the filename on **how fast they

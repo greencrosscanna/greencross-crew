@@ -1035,6 +1035,7 @@
     ui.rail.style.display = onInc ? 'none' : '';
     ui.pane.style.display = onInc ? 'none' : '';
     ui.inc.style.display = onInc ? '' : 'none';
+    syncDocTitle();                 // leaving incentive puts the tab name back
     if (!onInc) return;
     /* Fetched once per visit rather than on every tab click: the live period asks Leaderboard for
        a fortnight of transactions, which is slow enough to notice. */
@@ -2572,6 +2573,8 @@
   }
 
   function paintIncentive() {
+    syncDocTitle();   // the data may have just arrived — name the document before anyone prints
+
     if (!ui || !ui.inc) return;
     var host = ui.inc;
     if (inc.loading) { host.innerHTML = '<div class="crew-inc-msg">Loading incentive data…</div>'; return; }
@@ -3393,22 +3396,34 @@
     var b = incMMDDYY(d.pp_end   || (d.payPeriod && d.payPeriod.end));
     return (a && b) ? 'Incentive Dashboard - ' + a + '-' + b : '';
   }
+  /* THE TITLE IS SET WHEN THE VIEW PAINTS, NOT WHEN PRINTING STARTS — and that is the second
+     attempt at this. Doing it on `beforeprint` was still too late in practice: Sky printed the
+     incentive dashboard and macOS's save panel came up "GX Crew.pdf" anyway. The page had the right
+     data and the right view; the browser had simply already decided the filename by the time the
+     event ran. Chrome and Safari settle the save-panel name as the print preview is prepared, and
+     `beforeprint` is not reliably early enough to beat it — on macOS's native panel it plainly is
+     not.
+
+     So there is no race left to lose: while the incentive tab is open the DOCUMENT IS ACTUALLY
+     CALLED "Incentive Dashboard - 081726-083026", from the moment its data lands. Every print
+     route — the button, Cmd+P, File > Print, the system dialog — reads a title that has been
+     correct for however long the screen has been open.
+
+     The tab reading the pay period rather than "GX Crew" is a side effect, and a mild one: it names
+     what you are looking at, which is what a tab is for. It goes back on the way out. */
+  function syncDocTitle() {
+    var name = incDocName();
+    if (name) { if (!_titleWas) _titleWas = document.title; document.title = name; return; }
+    if (_titleWas) { document.title = _titleWas; _titleWas = ''; }
+  }
   var _titleWas = '';
-  /* Guarded because crew.js is LOADED IN NODE by six test harnesses, which stub `window` with just
-     the two globals the app reads at import time. These are the file's only module-scope window
-     listeners, so an unguarded pair takes every one of those suites down at require time with a
-     TypeError — which is what happened when this was first written. A real browser always has it. */
+  /* beforeprint stays as a backstop for the one case painting cannot cover: a print fired between
+     the tab opening and its data arriving. It is the same one line, so the two cannot disagree.
+     Guarded because crew.js is LOADED IN NODE by seven test harnesses, which stub `window` with
+     just the globals the app reads at import time. These are the file's only module-scope window
+     listeners, so an unguarded pair takes every one of those suites down at require time. */
   if (window && typeof window.addEventListener === 'function') {
-    window.addEventListener('beforeprint', function () {
-      var name = incDocName();
-      if (!name) return;                    // not the incentive screen — leave the tab alone
-      if (!_titleWas) _titleWas = document.title;
-      document.title = name;
-    });
-    window.addEventListener('afterprint', function () {
-      if (!_titleWas) return;
-      document.title = _titleWas; _titleWas = '';
-    });
+    window.addEventListener('beforeprint', syncDocTitle);
   }
   function incPrintWithName(d) { window.print(); }
 

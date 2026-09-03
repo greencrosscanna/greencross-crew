@@ -28,7 +28,7 @@
 const fs=require('fs');
 let src=fs.readFileSync('crew.js','utf8');
 const TAIL='})();';const cut=src.lastIndexOf(TAIL);
-src=src.slice(0,cut)+'\n; return { incMMDDYY, incDocName, __setInc:(d,vis)=>{inc.data=d; ui={inc:{style:{display:vis?"block":"none"}}};} };\n'+src.slice(cut);
+src=src.slice(0,cut)+'\n; return { incMMDDYY, incDocName, syncDocTitle, __setInc:(d,vis)=>{inc.data=d; ui={inc:{style:{display:vis?"":"none"}}};} };\n'+src.slice(cut);
 src=src.replace('(function () {','return (function () {');
 const listeners={};
 const doc={readyState:'loading',currentScript:{src:'crew.js?v=99'},title:'GX Crew',
@@ -47,34 +47,42 @@ ok("2026-03-30 -> 033026", M.incMMDDYY('2026-03-30')==='033026');
 ok("2026-04-12 -> 041226", M.incMMDDYY('2026-04-12')==='041226');
 
 const fire=k=>(listeners[k]||[]).forEach(f=>f());
-console.log("\nCmd+P on the incentive screen (the case that was broken)");
+const paint=()=>M.syncDocTitle();   // what paintTab/paintIncentive call
+console.log("\nThe document is NAMED while the screen is open — no print event needed");
 M.__setInc({pp_start:'2026-03-30',pp_end:'2026-04-12'},true);
-fire('beforeprint');
+paint();
 ok('document is named for the pay period', doc.title==='Incentive Dashboard - 033026-041226');
 ok('…which is exactly Sky\'s example filename',
    doc.title+'.pdf'==='Incentive Dashboard - 033026-041226.pdf');
-fire('afterprint');
-ok('and the tab goes back afterwards', doc.title==='GX Crew');
+M.__setInc(null,false); paint();
+ok('and the tab goes back on leaving incentive', doc.title==='GX Crew');
 
 console.log("\nA live period carries its dates on payPeriod instead");
 M.__setInc({payPeriod:{start:'2026-08-17',end:'2026-08-30'}},true);
-fire('beforeprint');
+paint();
 ok('still named correctly', doc.title==='Incentive Dashboard - 081726-083026');
-fire('afterprint');
 
 console.log("\nIt must not rename the tab when you are not looking at incentive");
 M.__setInc({pp_start:'2026-03-30',pp_end:'2026-04-12'},false);
-fire('beforeprint');
+paint();
 ok('printing the roster leaves the title alone', doc.title==='GX Crew');
-fire('afterprint');
-ok('and afterprint does not clobber it either', doc.title==='GX Crew');
+ok('and it stays put', doc.title==='GX Crew');
 
 console.log("\nMissing dates must not produce a half-name");
 M.__setInc({pp_start:'2026-03-30'},true);
-fire('beforeprint');
+paint();
 ok('no end date -> title untouched', doc.title==='GX Crew');
 M.__setInc(null,true);
-fire('beforeprint');
+paint();
 ok('no data at all -> title untouched', doc.title==='GX Crew');
+
+console.log("\nThe backstop still exists, and is the same one line");
+{
+  M.__setInc({pp_start:'2026-08-17',pp_end:'2026-08-30'},true);
+  fire('beforeprint');
+  ok('beforeprint also names it (for a print fired before paint)',
+     doc.title==='Incentive Dashboard - 081726-083026');
+  M.__setInc(null,false); paint();
+}
 
 console.log(fail?'\n'+fail+' FAILED\n':'\nAll good.\n');process.exit(fail?1:0);
