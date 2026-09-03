@@ -466,6 +466,9 @@ function route_(e) {
       /* Is Drive actually authorized? The route to reach for when a period is approved
          and no PDF appears in the folder. Writes a real file and removes it. */
       case 'pdf_check':         return json_(pdfCheck_(p), p.callback);
+      /* Backfill: file the PDF for an ALREADY-APPROVED period from its frozen rows.
+         Refuses anything not in history, so it can only ever file a real record. */
+      case 'pdf_file':          return json_(pdfFile_(p), p.callback);
       // The approval loop: prepare -> send -> approve, or send back with a reason.
       case 'incentive_send':    return json_(incentiveSend_(p), p.callback);
       case 'incentive_return':  return json_(incentiveReturn_(p), p.callback);
@@ -5518,6 +5521,80 @@ function pdfCheck_(p) {
               'a scope added to an already-authorized project. The engine is down between those two steps.';
   }
   return out;
+}
+
+/* FILE THE PDF FOR A PERIOD THAT IS ALREADY APPROVED — the backfill, and the only honest way to
+ * test the filing without approving something.
+ *
+ * Approval is the normal trigger, and approving is immutable, so there is no "run it again to see"
+ * on the real path. This reads the FROZEN rows straight out of crew_incentive_history and renders
+ * the same report from them — which is the same source approval uses, one moment later.
+ *
+ * IT REFUSES A PERIOD THAT IS NOT IN HISTORY. That is what keeps it a backfill rather than a second
+ * way to produce payout documents: it can only ever file a record that already exists, so nothing
+ * it writes can disagree with what was paid. It is also why it needs no approver check — it decides
+ * nothing.
+ *
+ * `dry=1` reports what it WOULD file, including whether that name is already in the folder, and
+ * writes nothing. Twenty-seven historical periods predate this feature and have no filed PDF; this
+ * is how they get one. */
+function pdfFile_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var pp = String(p.pp_start || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+
+  var all = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === pp; });
+  if (!all.length) {
+    return { ok: false, error: pp + ' is not an approved period — there is no frozen record to file. ' +
+                                'This route only ever files a record that already exists.' };
+  }
+  var ppEnd = all[0].pp_end || '';
+  /* Back into HISTORY_HEADERS order, because payoutHtml_ reads the row BY INDEX — the same
+     positional contract incentiveApprove_ writes and incentiveUnapprove_ reads. */
+  var rows = all.map(function (o) {
+    return HISTORY_HEADERS.map(function (h) { return o[h] == null ? '' : o[h]; });
+  });
+  function sectionTotal(name) {
+    return Math.round(rows.reduce(function (a, r) {
+      return a + (r[2] === name ? (Number(r[14]) || 0) : 0);
+    }, 0) * 100) / 100;
+  }
+  var split = { manager: sectionTotal('manager'), budtender: sectionTotal('budtender'),
+                admin: sectionTotal('admin') };
+  var total = Math.round((split.manager + split.budtender + split.admin) * 100) / 100;
+  var overrides = { rows: [], net: 0 };
+  rows.forEach(function (r) {
+    var paid = Number(r[14]) || 0, computed = Number(r[18]) || 0;
+    if (String(r[19] || '') !== '' || (String(r[18] || '') !== '' && paid !== computed)) {
+      overrides.rows.push({ name: r[4] || '', paid: paid, computed: computed, note: String(r[19] || '') });
+      overrides.net += (paid - computed);
+    }
+  });
+  overrides.net = Math.round(overrides.net * 100) / 100;
+  var spiffTotal = Math.round(rows.reduce(function (a, r) { return a + (Number(r[11]) || 0); }, 0) * 100) / 100;
+  /* Whoever approved it, off the record itself — not whoever is running the backfill. */
+  var wf = wfGet_(pp) || {};
+  var by = wf.decided_by || String(all[0].source_file || '').replace(/^approved by /, '') || 'GX Crew';
+  var at = wf.decided_at || all[0].imported_at || '';
+
+  var name = payoutFileName_(pp, ppEnd);
+  if (String(p.dry || '') === '1') {
+    var exists = false, fid = payoutFolderId_(), fname = '';
+    try {
+      var fo = DriveApp.getFolderById(fid);
+      fname = fo.getName();
+      exists = fo.getFilesByName(name + '.pdf').hasNext();
+    } catch (e) { return { ok: false, error: String((e && e.message) || e), folder_id: fid }; }
+    return { ok: true, dry_run: true, pp_start: pp, pp_end: ppEnd, rows: rows.length,
+             payroll_total: total, split: split, spiff_total: spiffTotal,
+             overrides: overrides, approved_by: by, approved_at: at,
+             folder_id: fid, folder_name: fname,
+             would_file: name + '.pdf', already_there: exists,
+             note: 'nothing written — drop dry=1 to file it' };
+  }
+  var r = filePayoutPdf_(pp, ppEnd, rows, split, total, by, at, overrides, { total: spiffTotal });
+  return { ok: !!r.ok, pp_start: pp, pp_end: ppEnd, rows: rows.length, payroll_total: total,
+           split: split, overrides: overrides, pdf: r };
 }
 
 /* Run THIS from the editor after revoking, to force the consent screen for the Drive scope.

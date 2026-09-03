@@ -139,5 +139,28 @@ console.log('\nThe folder is configurable but never depends on a live read');
   ok('a failed GX Core read cannot cost the filing', /catch \(e\) \{\}/.test(F));
 }
 
+console.log('\nThe backfill can only ever file a record that already exists');
+{
+  /* Approval is immutable, so there is no "run it again to see" on the real path. This route reads
+     the FROZEN rows and renders the same report — which is also how the 27 historical periods that
+     predate the feature get a filed PDF. */
+  const F = fnSrc('pdfFile_');
+  ok('it is deploy-secret gated', /deploySecretOk_/.test(F));
+  ok('it REFUSES a period that is not in history',
+     /is not an approved period/.test(F));
+  ok('it reads the frozen rows, it does not recompute',
+     /readTab_\(HISTORY_TAB, HISTORY_HEADERS\)/.test(F) && !/incCalcBud_|fetchLivePerf_/.test(F));
+  ok('rows go back into HISTORY_HEADERS order, since payoutHtml_ reads BY INDEX',
+     /HISTORY_HEADERS\.map/.test(F));
+  ok('the paid figure is column 14 and computed 18, as everywhere else',
+     /r\[14\]/.test(F) && /r\[18\]/.test(F));
+  ok('dry=1 writes nothing and says whether the file is already there',
+     /dry_run: true/.test(F) && /already_there/.test(F) && /nothing written/.test(F));
+  ok('it credits whoever APPROVED it, not whoever ran the backfill',
+     /wf\.decided_by/.test(F));
+  /* It decides nothing, so it needs no approver gate — but it must not be able to write history. */
+  ok('it cannot write to history', !/setValues|historySheet_\(\)/.test(F));
+}
+
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll good.\n');
 process.exit(fail ? 1 : 0);
