@@ -463,6 +463,9 @@ function route_(e) {
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
       // record like the imported ones and can never be recomputed.
       case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
+      /* Is Drive actually authorized? The route to reach for when a period is approved
+         and no PDF appears in the folder. Writes a real file and removes it. */
+      case 'pdf_check':         return json_(pdfCheck_(p), p.callback);
       // The approval loop: prepare -> send -> approve, or send back with a reason.
       case 'incentive_send':    return json_(incentiveSend_(p), p.callback);
       case 'incentive_return':  return json_(incentiveReturn_(p), p.callback);
@@ -5304,9 +5307,227 @@ function incentiveApprove_(p) {
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
   freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
   wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
+  /* THE PAYOUT PDF, filed from the rows just written — LAST, and unable to fail the approval.
+     Everything above is the permanent record; this is a copy of it for the Drive archive Sky has
+     kept by hand for 28 fortnights. Ordered after wfSet_ so a Drive outage cannot leave a period
+     written to history but still reading `pending`. */
+  var pdf = filePayoutPdf_(pp, String(live.payPeriod.end || ''), rows, split,
+                           Math.round(total * 100) / 100, by, now, overrides, spiffInfo);
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
-           thresholds: schemeInfo, unmatched: live.unmatched || [] };
+           thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf };
+}
+
+/* ══ The payout PDF — filed to Drive the moment a period is approved ═════════════════════════════
+ *
+ * Sky, 2026-09-02, pointing at the folder these have always lived in:
+ * "Incentive Program Payout Reports". Twenty-eight of them, one per fortnight, saved by hand.
+ *
+ * WHY IT FIRES ON APPROVAL RATHER THAN FROM A BUTTON. Approval is the moment the numbers stop
+ * moving: `rows` here is the exact array being written to `crew_incentive_history`, so the PDF, the
+ * record and the Capstone export cannot disagree — they are one source. A button files whatever is
+ * on screen at the time somebody remembers to press it, which is how the existing folder ended up
+ * with `8.3.26-8.16.26.pdf`, `07.06.26-07.19.26.pdf` and one saved as `...6.7.26pdf` with the dot
+ * missing. Naming it from the frozen period ends that.
+ *
+ * A DRIVE FAILURE MUST NOT FAIL THE APPROVAL, and this is the important one. By the time this runs
+ * the history rows are already written and a period cannot be approved twice — so throwing here
+ * would show an error for work that actually succeeded, and the obvious retry would come back
+ * "already a closed record". The PDF is a BYPRODUCT of the record, never a condition of it. Every
+ * failure is caught and reported alongside the success.
+ *
+ * SCOPE WARNING for whoever touches this next: DriveApp is the only Drive call in the engine, and
+ * adding it required revoking the project's authorization and re-consenting, because Apps Script
+ * does not re-prompt for a scope added to an already-authorized project. If this silently stops
+ * filing, that is the first thing to check — `?action=pdf_check` answers it directly. */
+
+/* The archive Sky named. A CONSTANT with a config override, the same shape as ENGINE_URL_FALLBACK:
+   the folder moves about once a decade, and a GX Core read on the approval path that fails would
+   otherwise cost the filing at exactly the moment the record is being made. */
+var PAYOUT_FOLDER_ID = '1rQAQsRDwzh0VvUWEqytdSuNtoHAz-fYW';
+function payoutFolderId_() {
+  var v = '';
+  try { v = String(GXCore.getKv('cfg.crewPayoutFolder') || ''); } catch (e) {}
+  return v || PAYOUT_FOLDER_ID;
+}
+
+/* MMDDYY-MMDDYY, matching the file Sky pointed at ("Incentive Dashboard - 033026-041226.pdf") and
+   the browser-print name in crew.js. Both derive it; neither invents it. */
+function payoutMMDDYY_(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  return m ? m[2] + m[3] + m[1].slice(2) : '';
+}
+function payoutFileName_(ppStart, ppEnd) {
+  var a = payoutMMDDYY_(ppStart), b = payoutMMDDYY_(ppEnd);
+  return (a && b) ? 'Incentive Dashboard - ' + a + '-' + b : '';
+}
+
+/* The report itself, built from the frozen rows. Deliberately plain and light: this is a document
+   that gets printed, filed and read on paper, not the dashboard. Column order follows the screen so
+   the two read the same way. */
+function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo) {
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function money(v) { return wfMoney_(v); }
+  function num(v, d) {
+    if (v === '' || v == null) return '';
+    var n = Number(v); return isNaN(n) ? String(v) : n.toFixed(d == null ? 0 : d);
+  }
+  var TH = 'style="text-align:left;padding:5px 8px;border-bottom:1.5px solid #666;' +
+           'font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;color:#333"';
+  var TD = 'style="padding:4px 8px;border-bottom:1px solid #e4e4e4;font-size:10.5px"';
+  var TDR = 'style="padding:4px 8px;border-bottom:1px solid #e4e4e4;font-size:10.5px;text-align:right"';
+
+  function section(label, want, cols) {
+    var mine = rows.filter(function (r) { return r[2] === want; });
+    if (!mine.length) return '';
+    mine.sort(function (a, b) { return String(a[4] || '').localeCompare(String(b[4] || '')); });
+    return '<h3 style="margin:16px 0 5px;font-size:12px;text-transform:uppercase;' +
+      'letter-spacing:.06em;color:#222">' + esc(label) + '</h3>' +
+      '<table style="border-collapse:collapse;width:100%">' +
+      '<tr>' + cols.map(function (c) { return '<th ' + TH + '>' + esc(c.h) + '</th>'; }).join('') + '</tr>' +
+      mine.map(function (r) {
+        return '<tr>' + cols.map(function (c) {
+          return '<td ' + (c.r ? TDR : TD) + '>' + c.v(r) + '</td>';
+        }).join('') + '</tr>';
+      }).join('') + '</table>';
+  }
+  /* The paid figure is column 14 and carries any override; 18 is what the math produced. A row where
+     they differ is marked, so the paper says which numbers a person decided — the same claim the
+     approval email makes, and the reason a payroll printout in greyscale still has to show it. */
+  var paidCell = function (r) {
+    var paid = Number(r[14]) || 0, computed = Number(r[18]) || 0;
+    var mark = (String(r[19] || '') !== '' || paid !== computed)
+      ? ' <span style="color:#8a6d10">&#9670;</span>' : '';
+    return '<strong>' + money(paid) + '</strong>' + mark;
+  };
+  var budCols = [
+    { h: 'Name',     v: function (r) { return esc(r[4]); } },
+    { h: 'Store',    v: function (r) { return esc(r[5]); } },
+    { h: 'Txn',      v: function (r) { return num(r[7]); },   r: 1 },
+    { h: 'Sales',    v: function (r) { return money(r[8]); }, r: 1 },
+    { h: 'Disc %',   v: function (r) { return num(r[9], 2); },r: 1 },
+    { h: 'AOV',      v: function (r) { return money(r[10]); },r: 1 },
+    { h: 'SPIFF',    v: function (r) { return r[11] === '' ? '' : money(r[11]); }, r: 1 },
+    { h: 'Bonus',    v: function (r) { return money(r[12]); },r: 1 },
+    { h: 'Payroll',  v: paidCell, r: 1 }
+  ];
+  var mgrCols = budCols.filter(function (c) { return c.h !== 'Txn'; });
+  var admCols = [
+    { h: 'Name',    v: function (r) { return esc(r[4]); } },
+    { h: 'Sales',   v: function (r) { return money(r[8]); }, r: 1 },
+    { h: 'Bonus',   v: function (r) { return money(r[12]); }, r: 1 },
+    { h: 'Payroll', v: paidCell, r: 1 }
+  ];
+
+  return '<html><body style="font-family:Arial,Helvetica,sans-serif;color:#111;margin:0">' +
+    '<h1 style="margin:0 0 2px;font-size:19px">Incentive Dashboard</h1>' +
+    '<p style="margin:0 0 2px;font-size:12px;color:#444">Pay period <strong>' + esc(pp) +
+      '</strong> &rarr; <strong>' + esc(ppEnd) + '</strong></p>' +
+    '<p style="margin:0 0 14px;font-size:11px;color:#666">Approved by ' + esc(by) +
+      ' on ' + esc(String(at).slice(0, 10)) + ' &middot; ' + rows.length + ' people</p>' +
+    '<table style="border-collapse:collapse;margin-bottom:6px">' +
+      [['Manager bonuses', split.manager], ['Budtender bonuses', split.budtender],
+       ['Admin', split.admin]].map(function (x) {
+        return '<tr><td style="padding:3px 26px 3px 0;font-size:12px;color:#444">' + x[0] + '</td>' +
+          '<td style="text-align:right;font-size:12px;font-weight:700">' + money(x[1] || 0) + '</td></tr>';
+      }).join('') +
+      '<tr><td style="padding:6px 26px 0 0;font-size:13px;border-top:1px solid #999">Total</td>' +
+      '<td style="text-align:right;font-size:15px;font-weight:700;border-top:1px solid #999">' +
+        money(total) + '</td></tr>' +
+    '</table>' +
+    (spiffInfo && spiffInfo.total != null
+      ? '<p style="margin:0 0 10px;font-size:10.5px;color:#666">Vendor SPIFF included in bonus: ' +
+        money(spiffInfo.total) + ' (vendor money — not payroll)</p>' : '') +
+    /* Same claim as the email, in the medium that outlives it. */
+    (overrides && overrides.rows && overrides.rows.length
+      ? '<div style="border-left:3px solid #b8912a;background:#fdf6e3;padding:7px 11px;margin:0 0 12px">' +
+        '<p style="margin:0 0 4px;font-size:11px;font-weight:700;color:#6b5210">&#9670; ' +
+          overrides.rows.length + (overrides.rows.length === 1 ? ' figure was' : ' figures were') +
+          ' set by hand</p>' +
+        overrides.rows.map(function (o) {
+          return '<p style="margin:0;font-size:10.5px;color:#4a3d18">' + esc(o.name) + ' &mdash; ' +
+            money(o.paid) + ', was ' + money(o.computed) +
+            (o.note ? ' &middot; ' + esc(o.note) : '') + '</p>';
+        }).join('') + '</div>' : '') +
+    section('Admin', 'admin', admCols) +
+    section('Managers', 'manager', mgrCols) +
+    section('Budtenders', 'budtender', budCols) +
+    '<p style="margin:18px 0 0;font-size:9.5px;color:#888">Filed automatically by GX Crew when this ' +
+      'pay period was approved. These figures are the frozen record of what was paid.</p>' +
+    '</body></html>';
+}
+
+/* Writes the PDF and returns what happened — never throws. See the header: the record is already
+   written by the time this runs, so a Drive problem is news, not a failure of the approval. */
+function filePayoutPdf_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo) {
+  var name = payoutFileName_(pp, ppEnd);
+  if (!name) return { ok: false, error: 'could not build a filename from ' + pp + '/' + ppEnd };
+  try {
+    var folder = DriveApp.getFolderById(payoutFolderId_());
+    var html = payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo);
+    var blob = Utilities.newBlob(html, 'text/html', name + '.html').getAs('application/pdf');
+    /* A RE-APPROVAL DOES NOT OVERWRITE THE ORIGINAL. Reopening a period and approving it again
+       produces different figures on purpose (that is what the void trail records), and the file
+       that was filed at the time is part of the paper record. Two files with the same name in one
+       Drive folder is legal and unreadable, so the later one says what it is. */
+    var final = name;
+    if (folder.getFilesByName(name + '.pdf').hasNext()) {
+      final = name + ' (reapproved ' + String(at).slice(0, 10) + ')';
+    }
+    blob.setName(final + '.pdf');
+    var f = folder.createFile(blob);
+    return { ok: true, name: final + '.pdf', id: f.getId(), url: f.getUrl() };
+  } catch (e) {
+    var msg = String((e && e.message) || e);
+    return { ok: false, error: msg,
+             fix: /permission|authoriz|scope/i.test(msg)
+               ? 'Drive access is not granted to this deployment. Apps Script does not re-prompt ' +
+                 'for a scope added to an already-authorized project: revoke GX Crew at ' +
+                 'myaccount.google.com/permissions, then run pdfSelfTest() from the editor and ' +
+                 'accept the consent screen. The engine is down between those two steps.'
+               : '' };
+  }
+}
+
+/* Answers "is Drive actually working" without approving anything — the route to reach for when a
+   period is approved and no file appears. Writes a real file, because a permission that looks fine
+   until the write is the failure this exists to catch, then removes it. */
+function pdfCheck_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var out = { folder_id: payoutFolderId_(), effective_user: '' };
+  try { out.effective_user = Session.getEffectiveUser().getEmail(); } catch (e) {}
+  try {
+    var folder = DriveApp.getFolderById(out.folder_id);
+    out.folder_name = folder.getName();
+    var blob = Utilities.newBlob('<html><body><h1>GX Crew Drive check</h1></body></html>',
+                                 'text/html', 'gx-crew-drive-check.html').getAs('application/pdf');
+    blob.setName('gx-crew-drive-check.pdf');
+    var f = folder.createFile(blob);
+    out.wrote = f.getName(); out.id = f.getId();
+    f.setTrashed(true);
+    out.cleaned_up = true;
+    out.ok = true;
+    out.note = 'Drive is authorized and the folder is writable.';
+  } catch (e) {
+    out.ok = false;
+    out.error = String((e && e.message) || e);
+    out.fix = 'Revoke GX Crew at myaccount.google.com/permissions, then run pdfSelfTest() from the ' +
+              'Apps Script editor and accept the consent screen. Apps Script does not re-prompt for ' +
+              'a scope added to an already-authorized project. The engine is down between those two steps.';
+  }
+  return out;
+}
+
+/* Run THIS from the editor after revoking, to force the consent screen for the Drive scope.
+   It throws on failure on purpose — pdfCheck_ catches and reports, which is right for a route and
+   wrong for the one function whose entire job is to surface an authorization error. */
+function pdfSelfTest() {
+  var r = pdfCheck_({ secret: PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET') });
+  if (!r.ok) throw new Error('Drive check failed: ' + r.error);
+  Logger.log('Drive OK — folder "%s" (%s)', r.folder_name, r.folder_id);
+  return r;
 }
 
 /* ══ Approval — who prepares, who decides, and how a mistake gets undone ══════════════════════════

@@ -862,6 +862,43 @@ listeners, so the unguarded pair took five suites down at require time.
 
 Pinned by `tests/print_name_test.js`.
 
+### The payout PDF files itself to Drive on approval (2026-09-02)
+
+Sky has saved one of these by hand every fortnight for **28 periods**, into the Drive folder
+**"Incentive Program Payout Reports"** (`1rQAQsRDwzh0VvUWEqytdSuNtoHAz-fYW`, owned by Sky).
+
+**It fires on APPROVAL, not from a button, and that is the whole design.** Approval is the moment
+the numbers stop moving: the PDF is built from `rows` — the exact array being written to
+`crew_incentive_history` — so the document, the record and the Capstone export are **one source**
+and cannot drift. A button files whatever is on screen when somebody remembers to press it, which is
+how the folder came to hold `8.3.26-8.16.26.pdf`, `07.06.26-07.19.26.pdf`, `033026-041226.pdf` and
+one saved as `...6.7.26pdf` with the dot missing. The name is derived, never typed.
+
+- **A Drive failure must never fail the approval.** By the time `filePayoutPdf_` runs the history
+  rows are written and a period cannot be approved twice — throwing would report an error for work
+  that succeeded, and the obvious retry answers *"already a closed record"*. It catches everything
+  and returns `pdf: {ok:false, error, fix}` alongside the success. Ordered **after** `wfSet_` so an
+  outage cannot leave a period in history still reading `pending`.
+- **A re-approval does not overwrite the original filing.** Reopening produces different figures on
+  purpose; the file filed at the time is part of the paper record. A name collision becomes
+  `… (reapproved YYYY-MM-DD).pdf`. Nothing is ever trashed.
+- **The folder is a constant with a `cfg.crewPayoutFolder` override**, same shape as
+  `ENGINE_URL_FALLBACK` — a failed GX Core read must not cost the filing at the exact moment the
+  record is made.
+- **A hand-set figure is marked with the ◆ diamond, not only colored** — a payroll printout in
+  greyscale still has to show which numbers a person decided.
+
+***THE SCOPE TRAP, and this one bit before.*** `DriveApp` is the **only** Drive call in the engine,
+and Apps Script **does not re-prompt** for a scope added to an already-authorized project — exactly
+the failure the `MailApp` section above cost a day on. Granting it means: revoke GX Crew at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions), then run
+`pdfSelfTest()` from the editor and accept the consent screen. **The engine is down between those
+two steps.** `?action=pdf_check` (deploy-secret) answers "is Drive working" without approving
+anything — it writes a real file and trashes it, because a permission that looks fine until the
+write is the failure it exists to catch.
+
+Pinned by `tests/payout_pdf_test.js`.
+
 ### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
 
 There were **two `@media print` blocks** in `index.html`. The second said:
