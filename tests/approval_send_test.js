@@ -164,6 +164,10 @@ console.log('\nThe email states manual adjustments');
 
   ok('the real approval path reports its overrides', /overrides: overrides/.test(SRC));
   ok('the preview path reports them too', /overrides: _over/.test(SEND));
+  /* BOTH returns, not one. The no-recipient branch was fixed first and the send-that-mailed branch
+     kept reporting `overrides: 0` next to an email that named Levy correctly. */
+  ok('every incentive_send return carries overrides',
+     (SEND.match(/overrides: pre\.overrides \|\| \{ rows: \[\], net: 0 \}/g) || []).length === 2);
 }
 
 console.log('\nThe preview must not under-state the total');

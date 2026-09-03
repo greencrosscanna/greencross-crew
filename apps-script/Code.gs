@@ -5672,7 +5672,11 @@ function incentiveSend_(p) {
   /* The split is echoed back, not just put in the email: a send that reports only a total cannot
      be checked against the screen without opening the mail, and the whole reason it is in the
      email is that the two must agree. */
+  /* Overrides here too — this is the return for a preview that DID mail, and for every real send.
+     Fixing only the no-recipient branch left the more common path still reporting `overrides: 0`
+     beside an email that named Levy Nelson's $25 correctly. Two returns, one rule. */
   return { ok: true, preview: preview || undefined, pp_start: pp,
+           overrides: pre.overrides || { rows: [], net: 0 },
            status: preview ? 'preview'
                  : (mailed.length ? 'pending' : ((wfPrev && wfPrev.status) || 'draft')), rows: pre.rows,
            payroll_total: pre.payroll_total, split: pre.split, mailed: mailed,
