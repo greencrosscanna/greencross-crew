@@ -803,6 +803,40 @@ the pre-workflow behavior.
 
 Pinned by `tests/approval_send_test.js`.
 
+### The approval email understated the total, and never said a human set it (2026-09-02)
+
+Sky previewed the 8/17 email: **$915 over 39 people**, against a frozen record of **$940 over 38**.
+
+**The $25 is Levy Nelson** (`pdf_name` *Laural Nelson*) — the override case this repo already
+documents. The preview branch summed `c.payroll`, the **computed** figure, while `incentiveApprove_`
+sums `incPayroll_(computed, i)`, the figure a person **recorded**. So the preview under-stated the
+total by every override on the period. Fixed by calling `incPayroll_` — the single applier — rather
+than copying the rule.
+
+**A preview that renders different NUMBERS is worse than one that renders different HTML**, which is
+the argument this file already makes for the shared email builder: different markup tests nothing,
+different figures look like they worked.
+
+**The email now names the adjustments** (Sky's ask). Every other figure in it is arithmetic the
+approver could re-derive; an override is the one number a **person** decided, and Approve is what
+freezes it — so it must not be discoverable only as a gold diamond inside the app. Amber block, same
+diamond as the screen, **each person named** with what the math said and the reason required at
+entry. A count would invite approving without knowing whose pay was set by hand.
+
+Read off the rows about to be written — **14 `payroll`, 18 `computed_payroll`, 19 `override_note`** —
+so what the approver is told is by construction what gets frozen. Those indices are positional and
+`HISTORY_HEADERS` only ever **appends**, for exactly this reason.
+
+*Two smaller things from the same screenshot:* a dry run read **"prepared by preview."** because the
+preview branch borrows `auth.user` and defaults it to that literal — now "a preview run", or pass
+`as=mike`. And the no-recipient preview's JSON early-return reported `overrides: 0` while its own
+rendered body named Levy correctly; the two halves of one preview disagreeing is the confusion a
+preview exists to remove.
+
+**Only the non-approver sees "Send for approval."** Sky is the approver, so he gets **Approve**
+directly — *"making Sky email himself would be ceremony, not a control"*. The consequence for
+testing: **Sky cannot exercise the send button from his own login at all.** Mike has to click it.
+
 ### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
 
 There were **two `@media print` blocks** in `index.html`. The second said:
