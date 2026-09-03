@@ -5246,6 +5246,24 @@ function incentiveApprove_(p) {
   }
   var split = { manager: sectionTotal('manager'), budtender: sectionTotal('budtender'),
                 admin: sectionTotal('admin') };
+  /* MANUAL ADJUSTMENTS, READ BACK OFF THE ROWS THAT WILL BE WRITTEN — not recomputed from the
+     inputs. These are the columns the record itself will carry (14 payroll, 18 computed_payroll,
+     19 override_note — positional, and HISTORY_HEADERS only ever APPENDS for exactly this reason), so
+     what the approver is told is by construction what gets frozen.
+
+     Why it belongs in the email at all (Sky, 2026-09-02): every other figure here is arithmetic the
+     approver could re-derive. An override is the one number a PERSON decided, and approving is the
+     act that makes it permanent — so it is precisely the line that should not be discoverable only
+     by opening the app and noticing a gold diamond. */
+  var overrides = { rows: [], net: 0 };
+  rows.forEach(function (r) {
+    var paid = Number(r[14]) || 0, computed = Number(r[18]) || 0;
+    if (String(r[19] || '') !== '' || paid !== computed) {
+      overrides.rows.push({ name: r[4] || '', paid: paid, computed: computed, note: String(r[19] || '') });
+      overrides.net += (paid - computed);
+    }
+  });
+  overrides.net = Math.round(overrides.net * 100) / 100;
   /* The SPIFF column, stated in the dry run rather than only in the rows it writes. This is what
      `incentive_send` puts in front of the approver, and a vendor total of $0 is the symptom of
      every failure mode this fold has — an unreachable SPIFF, a join that matched nobody, a stale
@@ -5258,6 +5276,7 @@ function incentiveApprove_(p) {
   var schemeInfo = { source: scheme.source, leaderboard_agrees: scheme.lb_agrees };
   if (String(p.confirm || '') !== 'yes') {
     return { ok: true, dry_run: true, pp_start: pp, rows: rows.length, pp_end: live.payPeriod.end,
+             overrides: overrides,
              payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
              thresholds: schemeInfo,
              unmatched: live.unmatched || [], note: 'nothing written — re-send with confirm=yes' };
@@ -5519,7 +5538,7 @@ function incentiveSend_(p) {
     }
   }
 
-  var pre;
+  var pre, _over = { rows: [], net: 0 };
   if (preview) {
     /* incentiveApprove_ refuses an open period, which is correct for approving and useless for
        previewing. Compute the same figures directly instead of loosening that guard. */
@@ -5541,20 +5560,45 @@ function incentiveSend_(p) {
 
     var T = _sch.T, inputs = inputsFor_(pp), n = 0;
     var sp = { budtender: 0, manager: 0, admin: 0 };
+    /* THE OVERRIDE IS APPLIED HERE TOO, and it was not until 2026-09-02. This branch summed
+       `c.payroll` — the COMPUTED figure — while `incentiveApprove_` sums `incPayroll_(computed, i)`,
+       the figure a human actually recorded. So the preview under-stated the total by every override
+       on the period: Laural Nelson's $25 (paid at 1.00%, now computing $0 at 1.04%) made a $940
+       fortnight render as $915 in the email.
+
+       That is the one thing a preview must never do. This file's own argument for the shared
+       builder is that "a preview that renders different HTML tests nothing" — and a preview that
+       renders different NUMBERS is worse, because it looks like it worked. `incPayroll_` is the
+       single applier; calling it here is what keeps the two paths honest, not a second copy of the
+       rule. */
+    _over = { rows: [], net: 0 };
+    function _paid(r, c) {
+      var i = inputs[r.employee_id] || {};
+      var computed = c.payroll == null ? c.bonus : c.payroll;
+      var paid = incPayroll_(computed, i);
+      if (paid !== computed) {
+        _over.rows.push({ name: displayNameOf_(r) || r.name || '', paid: paid, computed: computed,
+                          note: String(i.overrideNote || '') });
+        _over.net += (paid - computed);
+      }
+      return paid;
+    }
     (live.budtenders || []).forEach(function (b) {
-      var c = incCalcBud_(b, T, inputs); sp.budtender += c.payroll || 0;
+      var c = incCalcBud_(b, T, inputs); sp.budtender += _paid(b, c) || 0;
       _spiffTotal += Number(c.spiff) || 0; n++;
     });
     (live.managers || []).forEach(function (m) {
       var c = incCalcMgr_(m, T, inputs, live.budtenders || []);
-      sp.manager += c.payroll || 0; _spiffTotal += Number(c.spiff) || 0; n++;
+      sp.manager += _paid(m, c) || 0; _spiffTotal += Number(c.spiff) || 0; n++;
     });
     if (live.admin) { sp.admin += incCalcAdmin_(live.admin, T).bonus || 0; n++; }
+    _over.net = Math.round(_over.net * 100) / 100;
     Object.keys(sp).forEach(function (k) { sp[k] = Math.round(sp[k] * 100) / 100; });
     _spiffTotal = Math.round(_spiffTotal * 100) / 100;
     /* The blockers are REPORTED, not enforced: the preview writes nothing, and it is deliberately
        allowed on an open period. `would_block` is empty for a period approval would accept. */
-    pre = { ok: true, rows: n, payroll_total: Math.round((sp.budtender + sp.manager + sp.admin) * 100) / 100,
+    pre = { ok: true, rows: n, overrides: _over,
+            payroll_total: Math.round((sp.budtender + sp.manager + sp.admin) * 100) / 100,
             split: sp, pp_end: (live.payPeriod || {}).end || '', unmatched: live.unmatched || [],
             still_open: !!(live.payPeriod || {}).current,
             spiff: incentiveSpiffReport_(live, _spiffFailed, _ack, _spiffTotal),
@@ -5576,7 +5620,11 @@ function incentiveSend_(p) {
                  sent_total: String(pre.payroll_total) });
   }
 
-  var html = wfApprovalEmail_(pp, pre, auth.user || 'a manager', token, preview);
+  /* "prepared by preview." is what the sender line read on a dry run, because the preview branch
+     borrows `auth.user` and defaults it to the literal string 'preview'. Pass `as=mike` to rehearse
+     it as a person; with nothing given it now reads as a sentence instead of a variable. */
+  var _sender = preview ? (p.as ? String(p.as) : 'a preview run') : (auth.user || 'a manager');
+  var html = wfApprovalEmail_(pp, pre, _sender, token, preview);
   var to = preview
     ? String(p.to || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean)
     : wfApproverEmails_();
@@ -5663,6 +5711,38 @@ function wfApprovalEmail_(pp, pre, sender, token, preview) {
           ? '<tr><td style="padding:5px 22px 0 0;color:#a33">Not on the roster</td>' +
             '<td style="text-align:right;color:#a33">' + pre.unmatched.join(', ') + '</td></tr>' : '') +
         '</table>';
+    })() +
+    /* MANUAL ADJUSTMENTS — asked for by Sky, 2026-09-02, and the reasoning is worth keeping.
+       Every other number in this email is arithmetic the approver could re-derive from the period.
+       An override is the one figure a PERSON decided, and clicking Approve is what makes it
+       permanent. Leaving it discoverable only as a gold diamond inside the app means the approval
+       email — the thing actually being acted on — is silent about the only human judgement in it.
+
+       Amber, and the same diamond the screen uses, because an overruled figure is neither good news
+       nor an error: it is a decision. Named individually rather than counted, since "2 manual
+       adjustments" invites approving without knowing whose pay was set by hand — and the reason is
+       carried through for the same purpose it is required at entry, so somebody reading this next
+       year can see WHY the figure disagrees with the arithmetic. */
+    (function () {
+      var ov = pre.overrides || {};
+      var list = ov.rows || [];
+      if (!list.length) return '';
+      var net = Number(ov.net) || 0;
+      return '<div style="border-left:3px solid #d4a847;background:#fdf6e3;padding:10px 14px;' +
+        'margin:0 0 18px;border-radius:0 6px 6px 0">' +
+        '<p style="margin:0 0 6px;font-weight:700;color:#7a5c10;font-size:13px">&#9670; ' +
+        list.length + (list.length === 1 ? ' figure was' : ' figures were') + ' set by hand' +
+        (net ? ' (' + (net > 0 ? '+' : '\u2212') + wfMoney_(Math.abs(net)).replace('$', '$') +
+               ' against what the math computes)' : '') + '</p>' +
+        '<table style="border-collapse:collapse;font-size:13px">' +
+        list.map(function (o) {
+          return '<tr><td style="padding:2px 14px 2px 0;color:#4a3208">' + (o.name || '') + '</td>' +
+            '<td style="padding:2px 14px 2px 0;text-align:right;font-weight:700;color:#7a5c10">' +
+            wfMoney_(o.paid) + '</td>' +
+            '<td style="padding:2px 0;color:#8a7550">was ' + wfMoney_(o.computed) +
+            (o.note ? ' &middot; ' + o.note : '') + '</td></tr>';
+        }).join('') +
+        '</table></div>';
     })() +
     '<p style="margin:0 0 8px"><a href="' + approveLink + '" style="background:#22c55e;color:#04210f;' +
       'padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:700">Approve</a>' +

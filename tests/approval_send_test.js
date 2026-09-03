@@ -145,5 +145,57 @@ console.log('\nA send that mailed nobody is not a send');
      /already sent for approval on/.test(sent));
 }
 
+console.log('\nThe email states manual adjustments');
+{
+  /* Sky, 2026-09-02: "maybe the email should note if there were any manual adjustments." Every
+     other figure in that email is arithmetic the approver could re-derive; an override is the one
+     number a person decided, and Approve is what makes it permanent. */
+  const SEND = fnSrc('incentiveSend_');
+  const MAIL = fnSrc('wfApprovalEmail_');
+
+  ok('the email renders an overrides block', /pre\.overrides/.test(MAIL));
+  ok('…naming each person, not just a count',
+     /list\.map\(/.test(MAIL) && /o\.name/.test(MAIL));
+  ok('…showing what the math computed alongside what was paid',
+     /o\.computed/.test(MAIL) && /o\.paid/.test(MAIL));
+  ok('…and carrying the reason that was required at entry', /o\.note/.test(MAIL));
+  ok('nothing is rendered when there are no overrides',
+     /if \(!list\.length\) return '';/.test(MAIL));
+
+  ok('the real approval path reports its overrides', /overrides: overrides/.test(SRC));
+  ok('the preview path reports them too', /overrides: _over/.test(SEND));
+}
+
+console.log('\nThe preview must not under-state the total');
+{
+  /* THE BUG THIS SECTION EXISTS FOR: the preview summed the COMPUTED figure while the real
+     approval sums the figure a human recorded, so a $940 fortnight rendered as $915 in the email —
+     Laural Nelson's $25, paid at a 1.00% discount and now computing $0 at 1.04%. A preview that
+     shows different NUMBERS is worse than one that shows different HTML: it looks like it worked. */
+  const SEND = fnSrc('incentiveSend_');
+  ok('the preview applies the override through incPayroll_', /incPayroll_\(computed, i\)/.test(SEND));
+  ok('…and no longer sums the raw computed payroll',
+     !/sp\.budtender \+= c\.payroll/.test(SEND) && !/sp\.manager \+= c\.payroll/.test(SEND));
+  /* One applier, not two copies of the rule — the same argument the shared email builder rests on. */
+  ok('incPayroll_ is the single applier (the preview does not reimplement it)',
+     (SEND.match(/payrollOverride/g) || []).length === 0);
+
+  /* Both paths must agree, since the whole point of a preview is to rehearse the real thing. */
+  const APPROVE = fnSrc('incentiveApprove_');
+  ok('the approval path applies it the same way', /incPayroll_\(computed, i\)/.test(APPROVE));
+
+  /* The record's columns are positional and HISTORY_HEADERS only ever appends; reading the wrong
+     index here would report somebody else's number as a manual adjustment. */
+  ok('overrides are read from payroll(14) vs computed_payroll(18) with the note at 19',
+     /Number\(r\[14\]\)[^;]*Number\(r\[18\]\)/.test(APPROVE) && /r\[19\]/.test(APPROVE));
+}
+
+console.log('\nThe preview says who prepared it');
+{
+  const SEND = fnSrc('incentiveSend_');
+  ok('a dry run no longer reads "prepared by preview"', /'a preview run'/.test(SEND));
+  ok('and `as=` can rehearse it as a named person', /p\.as \? String\(p\.as\)/.test(SEND));
+}
+
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll good.\n');
 process.exit(fail ? 1 : 0);
