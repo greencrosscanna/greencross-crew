@@ -3376,22 +3376,41 @@
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
     return m ? m[2] + m[3] + m[1].slice(2) : '';
   }
-  function incPrintWithName(d) {
+  /* THE NAME HAS TO BE RIGHT FOR EVERY ROUTE INTO THE PRINT DIALOG, not just our own button.
+     This used to rename the document inside the click handler, so Cmd+P / File > Print — which is
+     how anybody prints a page they are already looking at — went straight to the dialog with the
+     title untouched and saved "GX Crew.pdf". `beforeprint` is the one hook the browser fires for
+     BOTH, which is why the naming lives here now and the button just prints.
+
+     The old restore-on-a-4-second-timer is gone with it. It existed because `afterprint` is not
+     universal, but a timer racing a human choosing a folder is the wrong trade on the one thing
+     that decides the filename: 4 seconds into the Save dialog the document quietly renamed itself
+     back, and whether the PDF was filed correctly depended on how fast somebody clicked. */
+  function incDocName() {
+    if (!ui || !ui.inc || ui.inc.style.display === 'none') return '';
+    var d = inc.data; if (!d) return '';
     var a = incMMDDYY(d.pp_start || (d.payPeriod && d.payPeriod.start));
-    var b = incMMDDYY(d.pp_end || (d.payPeriod && d.payPeriod.end));
-    var was = document.title;
-    if (a && b) document.title = 'Incentive Dashboard - ' + a + '-' + b;
-    function restore() {
-      document.title = was;
-      window.removeEventListener('afterprint', restore);
-    }
-    window.addEventListener('afterprint', restore);
-    window.print();
-    /* afterprint does not fire everywhere (and not at all in some headless paths), so the title is
-       restored on a timer as well — a tab left named after a pay period is a small thing that
-       looks broken. */
-    setTimeout(restore, 4000);
+    var b = incMMDDYY(d.pp_end   || (d.payPeriod && d.payPeriod.end));
+    return (a && b) ? 'Incentive Dashboard - ' + a + '-' + b : '';
   }
+  var _titleWas = '';
+  /* Guarded because crew.js is LOADED IN NODE by six test harnesses, which stub `window` with just
+     the two globals the app reads at import time. These are the file's only module-scope window
+     listeners, so an unguarded pair takes every one of those suites down at require time with a
+     TypeError — which is what happened when this was first written. A real browser always has it. */
+  if (window && typeof window.addEventListener === 'function') {
+    window.addEventListener('beforeprint', function () {
+      var name = incDocName();
+      if (!name) return;                    // not the incentive screen — leave the tab alone
+      if (!_titleWas) _titleWas = document.title;
+      document.title = name;
+    });
+    window.addEventListener('afterprint', function () {
+      if (!_titleWas) return;
+      document.title = _titleWas; _titleWas = '';
+    });
+  }
+  function incPrintWithName(d) { window.print(); }
 
   /* APPROVE & PRINT.
      An already-closed record just prints — it was approved when it was written, and there is

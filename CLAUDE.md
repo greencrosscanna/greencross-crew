@@ -837,6 +837,31 @@ preview exists to remove.
 directly — *"making Sky email himself would be ceremony, not a control"*. The consequence for
 testing: **Sky cannot exercise the send button from his own login at all.** Mike has to click it.
 
+### The Print PDF filename — `beforeprint`, not the button's click handler (2026-09-02)
+
+Chrome names a Save-as-PDF from `document.title`, so a payroll record filed itself as
+**`GX Crew.pdf`** beside archives named `Incentive Dashboard - 033026-041226.pdf`.
+
+**The naming code existed and still did not work**, because it lived inside the app's own Print
+button's handler. **Cmd+P and File > Print call `window.print()` directly** — which is how anybody
+prints a page they are already looking at — and reached the dialog with the title untouched.
+`beforeprint` is the one hook the browser fires for *both* routes, so the naming lives there and the
+button now just prints.
+
+Retired with it: a `setTimeout(restore, 4000)`, which existed because `afterprint` is not universal.
+A 4-second timer racing a human choosing a save folder decided the filename on **how fast they
+clicked**.
+
+It renames nothing unless the incentive slot is actually displayed (`ui.inc.style.display`), and a
+missing date yields no name rather than half of one.
+
+***The listeners are guarded on `typeof window.addEventListener === 'function'`, and that is not
+defensive noise:*** `crew.js` is loaded **in Node by six test harnesses** that stub `window` with
+only the globals the app reads at import time. These are the file's only module-scope window
+listeners, so the unguarded pair took five suites down at require time.
+
+Pinned by `tests/print_name_test.js`.
+
 ### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
 
 There were **two `@media print` blocks** in `index.html`. The second said:
