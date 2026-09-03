@@ -5373,6 +5373,12 @@ function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo
     return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
   function money(v) { return wfMoney_(v); }
+  /* Same rule as the payroll cell, applied to every money column: a BLANK is "the source did not
+     record this", and $0.00 is "this was zero". The gen1 reports carry neither sales nor SPIFF, so
+     rendering them through wfMoney_ filled the table with $0.00 figures nobody ever measured. */
+  function cash(v) {
+    return String(v == null ? '' : v) === '' ? '<span style="color:#999">&mdash;</span>' : wfMoney_(v);
+  }
   function num(v, d) {
     if (v === '' || v == null) return '';
     var n = Number(v); return isNaN(n) ? String(v) : n.toFixed(d == null ? 0 : d);
@@ -5399,9 +5405,17 @@ function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo
   /* The paid figure is column 14 and carries any override; 18 is what the math produced. A row where
      they differ is marked, so the paper says which numbers a person decided — the same claim the
      approval email makes, and the reason a payroll printout in greyscale still has to show it. */
+  /* '' AND 0 ARE DIFFERENT CLAIMS, and on a payroll document the difference is the whole point.
+     The oldest imported report (`gen1`, 2025-08-04) has NO payroll column at all — all 37 rows carry
+     an empty payroll with real bonus figures beside them. Rendering that through `Number(x) || 0`
+     prints "$0.00" against every name and a $0.00 total, which does not say "this report predates
+     the column"; it says nobody was paid. */
+  var anyPayroll = rows.some(function (r) { return String(r[14] == null ? '' : r[14]) !== ''; });
   var paidCell = function (r) {
+    var raw = String(r[14] == null ? '' : r[14]);
+    if (raw === '') return '<span style="color:#999">&mdash;</span>';
     var paid = Number(r[14]) || 0, computed = Number(r[18]) || 0;
-    var mark = (String(r[19] || '') !== '' || paid !== computed)
+    var mark = (String(r[19] || '') !== '' || (String(r[18] || '') !== '' && paid !== computed))
       ? ' <span style="color:#8a6d10">&#9670;</span>' : '';
     return '<strong>' + money(paid) + '</strong>' + mark;
   };
@@ -5409,18 +5423,18 @@ function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo
     { h: 'Name',     v: function (r) { return esc(r[4]); } },
     { h: 'Store',    v: function (r) { return esc(r[5]); } },
     { h: 'Txn',      v: function (r) { return num(r[7]); },   r: 1 },
-    { h: 'Sales',    v: function (r) { return money(r[8]); }, r: 1 },
+    { h: 'Sales',    v: function (r) { return cash(r[8]); },  r: 1 },
     { h: 'Disc %',   v: function (r) { return num(r[9], 2); },r: 1 },
-    { h: 'AOV',      v: function (r) { return money(r[10]); },r: 1 },
-    { h: 'SPIFF',    v: function (r) { return r[11] === '' ? '' : money(r[11]); }, r: 1 },
-    { h: 'Bonus',    v: function (r) { return money(r[12]); },r: 1 },
+    { h: 'AOV',      v: function (r) { return cash(r[10]); }, r: 1 },
+    { h: 'SPIFF',    v: function (r) { return cash(r[11]); }, r: 1 },
+    { h: 'Bonus',    v: function (r) { return cash(r[12]); }, r: 1 },
     { h: 'Payroll',  v: paidCell, r: 1 }
   ];
   var mgrCols = budCols.filter(function (c) { return c.h !== 'Txn'; });
   var admCols = [
     { h: 'Name',    v: function (r) { return esc(r[4]); } },
-    { h: 'Sales',   v: function (r) { return money(r[8]); }, r: 1 },
-    { h: 'Bonus',   v: function (r) { return money(r[12]); }, r: 1 },
+    { h: 'Sales',   v: function (r) { return cash(r[8]); }, r: 1 },
+    { h: 'Bonus',   v: function (r) { return cash(r[12]); }, r: 1 },
     { h: 'Payroll', v: paidCell, r: 1 }
   ];
 
@@ -5430,16 +5444,29 @@ function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo
       '</strong> &rarr; <strong>' + esc(ppEnd) + '</strong></p>' +
     '<p style="margin:0 0 14px;font-size:11px;color:#666">Approved by ' + esc(by) +
       ' on ' + esc(String(at).slice(0, 10)) + ' &middot; ' + rows.length + ' people</p>' +
-    '<table style="border-collapse:collapse;margin-bottom:6px">' +
-      [['Manager bonuses', split.manager], ['Budtender bonuses', split.budtender],
-       ['Admin', split.admin]].map(function (x) {
-        return '<tr><td style="padding:3px 26px 3px 0;font-size:12px;color:#444">' + x[0] + '</td>' +
-          '<td style="text-align:right;font-size:12px;font-weight:700">' + money(x[1] || 0) + '</td></tr>';
-      }).join('') +
-      '<tr><td style="padding:6px 26px 0 0;font-size:13px;border-top:1px solid #999">Total</td>' +
-      '<td style="text-align:right;font-size:15px;font-weight:700;border-top:1px solid #999">' +
-        money(total) + '</td></tr>' +
-    '</table>' +
+    /* With no payroll column anywhere, the totals block would read $0.00 three times over. Show the
+       BONUS total instead — which this report does carry — and say plainly why payroll is absent, so
+       the document is honest about what its source recorded rather than quietly asserting zero. */
+    (anyPayroll
+      ? '<table style="border-collapse:collapse;margin-bottom:6px">' +
+        [['Manager bonuses', split.manager], ['Budtender bonuses', split.budtender],
+         ['Admin', split.admin]].map(function (x) {
+          return '<tr><td style="padding:3px 26px 3px 0;font-size:12px;color:#444">' + x[0] + '</td>' +
+            '<td style="text-align:right;font-size:12px;font-weight:700">' + money(x[1] || 0) + '</td></tr>';
+        }).join('') +
+        '<tr><td style="padding:6px 26px 0 0;font-size:13px;border-top:1px solid #999">Total</td>' +
+        '<td style="text-align:right;font-size:15px;font-weight:700;border-top:1px solid #999">' +
+          money(total) + '</td></tr>' +
+        '</table>'
+      : '<table style="border-collapse:collapse;margin-bottom:6px">' +
+        '<tr><td style="padding:3px 26px 3px 0;font-size:12px;color:#444">Total bonus</td>' +
+        '<td style="text-align:right;font-size:15px;font-weight:700">' +
+          money(rows.reduce(function (a, r) { return a + (Number(r[12]) || 0); }, 0)) + '</td></tr>' +
+        '</table>' +
+        '<p style="border-left:3px solid #999;background:#f4f4f4;padding:7px 11px;margin:0 0 12px;' +
+          'font-size:10.5px;color:#444">This report predates the payroll column. The source recorded ' +
+          'a <strong>bonus</strong> for each person but not a separate payroll figure, so payroll is ' +
+          'shown as &mdash; rather than as $0.00 &mdash; which would claim they were paid nothing.</p>') +
     (spiffInfo && spiffInfo.total != null
       ? '<p style="margin:0 0 10px;font-size:10.5px;color:#666">Vendor SPIFF included in bonus: ' +
         money(spiffInfo.total) + ' (vendor money — not payroll)</p>' : '') +

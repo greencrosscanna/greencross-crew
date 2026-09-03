@@ -162,5 +162,35 @@ console.log('\nThe backfill can only ever file a record that already exists');
   ok('it cannot write to history', !/setValues|historySheet_\(\)/.test(F));
 }
 
+console.log("\n'' and 0 are different claims — the oldest report has no payroll column");
+{
+  /* 2025-08-04 (`gen1`) carries a real bonus for all 37 people and NO payroll figure at all.
+     Through `Number(x) || 0` that renders "$0.00" against every name and a $0.00 total, which does
+     not say "this report predates the column" — it says nobody was paid, on a payroll document. */
+  const g1 = [
+    R('budtender', 'Robert Wydick', 'River', 550, '', '', '', '', 40, '', '', ''),
+    R('budtender', 'Jon Juslen', 'Century', 300, '', '', '', '', 25, '', '', ''),
+    R('manager', 'Shawn Todd', 'Commercial', '', '', '', '', '', 65, '', '', '')
+  ];
+  const h = M.html('2025-08-04', '2025-08-17', g1, { manager: 0, budtender: 0, admin: 0 }, 0,
+                   'import', '2025-08-18T00:00:00Z', { rows: [], net: 0 }, null);
+  /* Only the explanatory sentence may contain that string — never a table cell. */
+  const cells = h.replace(/<p style="border-left[\s\S]*?<\/p>/, '');
+  ok('no "$0.00" is printed against anybody in the table', !/\$0\.00/.test(cells));
+  ok('blank sales and SPIFF are dashes too, not zeros',
+     (cells.match(/&mdash;/g) || []).length >= 3);
+  ok('payroll reads as an em dash instead', /&mdash;/.test(h));
+  ok('it says the report predates the payroll column', /predates the payroll column/.test(h));
+  ok('and shows the BONUS total, which the source did record', /Total bonus/.test(h) && /\$130\.00/.test(h));
+  ok('the people are still all listed',
+     ['Robert Wydick', 'Jon Juslen', 'Shawn Todd'].every(n => h.includes(n)));
+
+  /* And the normal case must be untouched by that branch. */
+  const ok2 = M.html('2026-08-17', '2026-08-30', rows, { manager: 100, budtender: 65, admin: 0 }, 165,
+                     'sky', '2026-09-03T01:00:00Z', { rows: [], net: 0 }, null);
+  ok('a report WITH payroll still shows the three-way split',
+     /Manager bonuses/.test(ok2) && !/predates the payroll column/.test(ok2));
+}
+
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll good.\n');
 process.exit(fail ? 1 : 0);
