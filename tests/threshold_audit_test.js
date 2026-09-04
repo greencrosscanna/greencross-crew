@@ -35,6 +35,8 @@ const assert = require('assert');
  * it. Adding to it means going and looking, not guessing. */
 const LIB_SURFACE = [
   'requireAuth', 'roleCanEdit', 'libVersion',
+  // gx_core.gs:667 — Crew's own `login` route calls it in-process (2026-09-03), off Core's shared queue.
+  'login',
   'getEmployees', 'getEmployeeByName', 'getEmployeeByNumber', 'getEmployeeByDutchieId',
   'gxUpsertEmployee', 'gxUpsertEmployees', 'gxUpsertUser',
   'getStores', 'resolveStore', 'getKv', 'setAvatar',

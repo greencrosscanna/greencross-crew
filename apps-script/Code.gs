@@ -300,6 +300,38 @@ function route_(e) {
       // One-time-ish migration of Leaderboard's nickname + avatar maps into Core display fields.
       case 'migrate_leaderboard': return json_(migrateLeaderboard_(p, body), p.callback);
 
+      /* SIGN-IN RUNS HERE, IN-PROCESS, AND IS DELIBERATELY UNGATED (2026-09-03).
+       *
+       * It used to go straight from the browser to GX Core by JSONP. That worked, and it is not
+       * what was wrong with it: Apps Script serializes execution PER SCRIPT, so a Crew sign-in
+       * queued behind whatever GX Core happened to be doing — the Dutchie pulls, the sales sweeps,
+       * the AI digest. GX Core was measured spiking to 42s on 2026-09-03, with one call never
+       * answering inside 90s. Crew's front door was in that queue for no reason: the library call
+       * itself is ~1.3s of work. Calling GXCore.login() from THIS script puts the sign-in in
+       * CREW's execution queue instead, which has one user on it. SPIFF moved the same night and
+       * measured 2.1-2.9s warm.
+       *
+       * WHAT THIS DOES NOT FIX: Crew's own /exec has the same ~6% second-hop flake every Apps
+       * Script web app has. The frontend still retries the transport. The escape is from the
+       * SHARED queue, not from Apps Script.
+       *
+       * NOT SECRET-GATED, ON PURPOSE. This route runs BEFORE anyone is authenticated — the
+       * credentials in the request ARE the credential, and there is nothing to check a token
+       * against yet. Do not "harden" it by adding the deploy secret: it would have to travel in
+       * the URL of an unauthenticated request, and UrlFetchApp puts a whole URL into its own
+       * exception messages, which is exactly how the live secret reached an on-screen error
+       * banner on 2026-09-02.
+       *
+       * RETURN GXCore.login's PAYLOAD WHOLE. It carries token, expiresAt, user (the SLUG), role,
+       * displayName and avatarConfig, and setSession() reads three of those. Keeping only r.user
+       * is what once put the slug — "sky" — in the header chip where the person's name belongs.
+       *
+       * A LIBRARY THAT CANNOT ANSWER IS NOT A BAD PASSWORD, and saying so plainly is the whole
+       * point of the three checks below: a broken pin reported as "invalid username or password"
+       * is a thing people retype their password at, forever. */
+      case 'login':
+        return json_(login_(p), p.callback);
+
       // `lib` is the GXCore version this DEPLOYMENT actually runs, not the one appsscript.json
       // reads today — a library call executes the snapshot the live deployment pinned, so the
       // manifest in git can say 155 while the deployed engine still runs 152. This is the only
@@ -491,6 +523,41 @@ function route_(e) {
 }
 
 /** JSON response, or JSONP when a ?callback= is supplied (gx-client uses JSONP for cross-origin GETs). */
+/* Sign-in. See the `login` case in route_ for why this lives here rather than in GX Core.
+ *
+ * The password is in this frame and must not leave it: it is never logged, never echoed back, and
+ * never travels onward except as the argument to GXCore.login. loginScrub_ exists for the return
+ * path — an exception message from a library call can carry a URL, and a URL can carry a secret. */
+function login_(p) {
+  var user = String((p && p.user) || '').trim();
+  var pass = String((p && p.pass) || '');
+  if (!user || !pass) return { ok: false, error: 'Enter your username and password.' };
+  try {
+    if (typeof GXCore === 'undefined' || !GXCore) {
+      return { ok: false, error: 'Sign-in unavailable: GXCore is not bound to this engine.' };
+    }
+    if (typeof GXCore.login !== 'function') {
+      return { ok: false, error: 'Sign-in unavailable: the pinned GXCore has no login().' };
+    }
+    var r = GXCore.login(user, pass, 'crew');
+    /* Nothing back is not a refusal. A refusal is {ok:false} WITH a reason; undefined means the
+       call itself did not complete, and reporting that as bad credentials sends someone to reset a
+       password that was always correct. */
+    if (!r) return { ok: false, error: 'Sign-in unavailable: GXCore.login returned nothing.' };
+    return r;
+  } catch (e) {
+    return { ok: false, error: 'Sign-in failed: ' + loginScrub_((e && e.message) || e) };
+  }
+}
+
+/* Redact anything secret-shaped before an engine error reaches a login screen. Apps Script puts
+   whole URLs into exception messages, so a query string is the realistic carrier — this is the
+   2026-09-02 banner leak, kept from recurring on the one route that answers before auth. */
+function loginScrub_(msg) {
+  var s = String(msg == null ? '' : msg);
+  return s.replace(/([?&](?:secret|token|key|pass|password)=)[^&\s]*/gi, '$1[redacted]');
+}
+
 function json_(obj, callback) {
   var body = JSON.stringify(obj);
   if (callback) {

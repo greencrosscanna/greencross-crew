@@ -154,6 +154,45 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   `gx-sync.sh`, filled from `.gx_app` (= `crew`). Re-run `./gx-sync.sh` to refresh them. This CLAUDE.md is
   intentionally **not** synced — keep it app-specific.
 
+## Sign-in runs on Crew's OWN engine (2026-09-03)
+
+`crew.js` used to call GX Core's `/exec` directly to sign in. **That worked, and it is not why it
+moved.** Apps Script serializes execution **per script**, so a Crew sign-in queued behind whatever
+GX Core happened to be running — the Dutchie pulls, the sales sweeps, the AI digest. GX Core was
+measured spiking to **42s** that day, with one call never answering inside 90s, against ~1.3s of
+actual work in `GXCore.login`. The `login` route in `Code.gs` calls the same library function
+**in-process**, which puts the front door in Crew's own queue, with one user on it. SPIFF moved the
+same night (v1.359) and measures 2.1-2.9s warm.
+
+- **The route is ungated, on purpose.** It answers before anyone is authenticated — the credentials
+  in the request *are* the credential. **Do not add the deploy secret to it.** It would have to
+  travel in the URL of an unauthenticated request, and `UrlFetchApp` puts whole URLs into its own
+  exception messages: that is how the live secret reached an on-screen banner on 2026-09-02.
+- **`GXCore.login`'s payload is returned WHOLE** — token, expiresAt, user (the **slug**), role,
+  displayName, avatarConfig. `setSession` reads three of them; keeping only `r.user` is what once
+  printed *sky* in the header where the person's name belongs.
+- **A library that cannot answer is not a bad password.** Unbound `GXCore`, a pin with no `login()`,
+  and a call returning nothing each say so in their own words — otherwise somebody retypes a correct
+  password forever and it looks like user error from every angle.
+- **`engineNow()` must never call GX Core.** `resolveEngine()` asks Core for `cfg.crewEngineUrl` so
+  a redeployed `/exec` self-corrects, and that is right everywhere except here: routing the front
+  door through Core to learn where the front door is reintroduces the exact wait this removed. It
+  uses the remembered URL, else `ENGINE_URL_FALLBACK`, and never blocks; `boot()` runs the real
+  resolution the moment sign-in succeeds. A stale constant would therefore break sign-in only — and
+  it moves only if somebody mints a NEW deployment, which orphans `cfg.crewEngineUrl` too and is
+  what `gxengine.sh` refuses to do.
+- **Retry the transport, never a refusal.** `getJSON` is a bounded fetch (per-attempt
+  `AbortController`, body read as text so the Drive HTML page reports as a bounce rather than a
+  parser fault). A parsed `{ok:false}` is the server's **answer** — a wrong password — and
+  re-sending it hammers Core's login throttle for somebody who mistyped.
+- **This does not escape Apps Script, only Core's shared queue.** Crew's own `/exec` has the same
+  ~6% second-hop flake; that is what the two retries are for.
+
+**Not in scope, and Sky knows:** sign-in is the front door only. Crew still calls GX Core by browser
+JSONP for **stores** and **config** at boot. Whether those move is his call.
+
+Pinned by `tests/login_transport_test.js`.
+
 ## gx-theme is core-admin's — send a request, don't edit (rule from Sky, 2026-08-20)
 **Never edit `greencross-gx-theme` from this chat.** Five apps load `gx-theme.css`, `gx-client.js`,
 `gx-topnav.js`, `gx-avatar.js`, `gx-session.js` and `gx-stores.js` **live from Pages**, so a change there

@@ -167,6 +167,29 @@
     return Engine;
   }
 
+  /* THE ENGINE, WITHOUT ASKING GX CORE FIRST — the one call that must not queue behind it.
+   *
+   * resolveEngine() is the right function everywhere else: it asks GX Core for cfg.crewEngineUrl so
+   * a redeployed /exec corrects itself across the whole suite. But on a cold cache that lookup is a
+   * GX Core call, and sign-in is precisely the call being moved OFF GX Core's shared execution
+   * queue. Routing the front door through Core to find out where the front door is would keep the
+   * exact wait this change exists to remove.
+   *
+   * So sign-in uses what is already known — the URL confirmed on a previous load, else the constant
+   * — and never blocks. Correctness is not lost, only deferred: boot() runs resolveEngine() the
+   * moment the sign-in succeeds, and the remembered-URL path there refreshes cfg.crewEngineUrl in
+   * the background. A stale constant would therefore break sign-in and nothing else, and it is
+   * checked at deploy: ENGINE_URL_FALLBACK is the versioned deployment gxengine.sh redeploys, so it
+   * moves only if somebody mints a NEW deployment — which orphans cfg.crewEngineUrl too, and is the
+   * thing gxengine.sh refuses to do. */
+  function engineNow() {
+    if (Engine) return Engine;
+    var url = '';
+    try { url = localStorage.getItem(ENGINE_CACHE_KEY) || ''; } catch (e) {}
+    Engine = window.GXClient(url || ENGINE_URL_FALLBACK);
+    return Engine;
+  }
+
   /* Store display names come from GX Core's registry, so Crew shows "Century" and "Baseline"
      like every other app instead of inventing its own labels from the store_id slug.
 
@@ -429,9 +452,23 @@
       btn.disabled = true; btn.textContent = 'Signing in…';
       msg.textContent = '';
       try {
-        var r = await GXCore.jsonp('login', {
+        /* CREW'S OWN ENGINE, NOT GX CORE (2026-09-03). Same GXCore.login() runs at the far end —
+           it is called in-process by the `login` route in Code.gs — so the payload and the rules
+           are unchanged. What changes is the QUEUE it waits in: Apps Script serializes per script,
+           and GX Core's is shared with the Dutchie pulls, the sales sweeps and the AI digest (42s
+           spikes measured the day this moved). Crew's own script has one user on it.
+
+           getJSON, not jsonp: a bounded fetch, per-ATTEMPT AbortController, body read as text and
+           parsed so the Drive HTML page reports as a bounce rather than a syntax error. Two retries
+           cover the ~6% second-hop flake that Crew's /exec has too — this escapes Core's queue, not
+           Apps Script.
+
+           THE RETRIES ARE THE TRANSPORT'S ALONE. A parsed {ok:false} is the server's ANSWER — a
+           wrong password — and it resolves on the first attempt. Re-sending a refusal would hammer
+           GX Core's login throttle on behalf of someone who simply mistyped. */
+        var r = await engineNow().getJSON('login', {
           user: form.user.value.trim(), pass: form.pass.value, app: APP
-        });
+        }, { retries: 2, timeoutMs: 20000 });
         if (!r || !r.ok) throw new Error((r && r.error) || 'Sign-in failed');
         // r.user is the SLUG ('sky'); r.displayName is the person's name. The chip showed the slug
         // because only r.user was ever stored.

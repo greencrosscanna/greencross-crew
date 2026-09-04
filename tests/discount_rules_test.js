@@ -37,6 +37,8 @@ const CREW_JS = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
    mock, for the same reason threshold_audit_test.js is not one. `setKv` is absent on purpose. */
 const LIB_SURFACE = [
   'requireAuth', 'roleCanEdit', 'libVersion',
+  // gx_core.gs:667 — Crew's own `login` route calls it in-process (2026-09-03), off Core's shared queue.
+  'login',
   'getEmployees', 'getEmployeeByName', 'getEmployeeByNumber', 'getEmployeeByDutchieId',
   'gxUpsertEmployee', 'gxUpsertEmployees', 'gxUpsertUser',
   'getStores', 'resolveStore', 'getKv', 'setAvatar',
