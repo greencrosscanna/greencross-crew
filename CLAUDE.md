@@ -471,6 +471,34 @@ deliberate and temporary** — promoting the per-employee slice into GX Core nee
 could not wait for. A brain note asks `core-admin` for it; SPIFF wants the same data. Delete the
 route when GX Core exposes the slice.
 
+***It no longer does, and this section described the old wiring for two days.*** GX Core got the
+slice: **`cfg.incentiveEngine` has read `gxcore` since 2026-09-01**, so `fetchLivePerf_` routes to
+GX Core's `incentive_perf` and Crew does not call Leaderboard on the incentive path at all. The
+app-to-app hop the paragraph above calls "deliberate and temporary" is the *fallback* now —
+`fetchLivePerfLeaderboard_` still exists, still works, and runs only if the flag is set back. Read
+the flag, never this paragraph.
+
+**The consequence that bit, because it is the one nothing errors on: GX Core sends NO thresholds.**
+That is correct and deliberate — Core computes no scheme and Crew reads it from kv — but
+`approvalThresholds_` compared `live.thresholds` against Core's and reported the answer as a
+BOOLEAN. With nothing to compare, "no scheme arrived" and "Leaderboard disagrees" were the same
+`false`, so **every dry run since the flip has claimed Leaderboard disagrees about an app Crew no
+longer asks.**
+
+The claim is alarming and plausible — the kiosk grading staff against a scheme they are not paid on
+— which is exactly why it cost something. On 2026-09-03 it was reported to Sky as a live problem and
+chased across both apps until both schemes were fetched and diffed by hand: **byte-identical**,
+`discountMaxPct` 1.0 included. Nothing was wrong anywhere except one line.
+
+`lb_agrees` is **three-state** now — `true` / `false` / **`null` meaning not checked** — with
+`lb_check` beside it saying which of the two "nothing to compare" cases it was: the engine sends no
+scheme (a wiring fact, every period), or Leaderboard had no record for that one closed period (its
+documented `unrecorded` answer for the 28 snapshots that predate scheme-freezing). Same value,
+opposite implications. **Never read `lb_agrees` for truthiness** — `null` coerces to `false`, which
+is the original bug restored. The comparison itself is untouched: a genuinely different scheme still
+reports `false`, because Leaderboard does still hold its own copy and the board really would grade
+people against it. Pinned by `tests/threshold_agreement_test.js`.
+
 ### A period is served from one of two places, and the payload says which
 
 - **`imported`** — a closed period from the 27 payout PDFs (2025-08-04 → 2026-08-16), or one Crew

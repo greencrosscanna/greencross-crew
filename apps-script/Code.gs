@@ -5346,7 +5346,8 @@ function incentiveApprove_(p) {
   /* `lb_agrees: false` is not an error and does not block: the figures here are GX Core's, which is
      the authority. It means LEADERBOARD is grading the board against a different scheme from the one
      people are paid on — worth knowing, and invisible from either app on its own. */
-  var schemeInfo = { source: scheme.source, leaderboard_agrees: scheme.lb_agrees };
+  var schemeInfo = { source: scheme.source, leaderboard_agrees: scheme.lb_agrees,
+                     leaderboard_check: scheme.lb_check };
   if (String(p.confirm || '') !== 'yes') {
     return { ok: true, dry_run: true, pp_start: pp, rows: rows.length, pp_end: live.payPeriod.end,
              overrides: overrides,
@@ -5994,7 +5995,8 @@ function incentiveSend_(p) {
             split: sp, pp_end: (live.payPeriod || {}).end || '', unmatched: live.unmatched || [],
             still_open: !!(live.payPeriod || {}).current,
             spiff: incentiveSpiffReport_(live, _spiffFailed, _ack, _spiffTotal),
-            thresholds: { source: _sch.source, leaderboard_agrees: _sch.lb_agrees },
+            thresholds: { source: _sch.source, leaderboard_agrees: _sch.lb_agrees,
+                          leaderboard_check: _sch.lb_check },
             would_block: incentiveBlockers_(live, _spiffFailed, _ack) };
   } else {
     pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
@@ -6391,8 +6393,51 @@ function approvalThresholds_(live) {
              'Incentive settings tray, save the thresholds, and approve again.' };
   }
   var core = coreRes.thresholds;
-  return { ok: true, T: core, source: 'gx_core',
-           lb_agrees: deepSame_(live.thresholds || null, core) };
+
+  /* WHETHER LEADERBOARD AGREES IS A THREE-WAY QUESTION, AND IT USED TO BE ANSWERED AS A BOOLEAN.
+   *
+   * This was `lb_agrees: deepSame_(live.thresholds || null, core)`, which reports FALSE for
+   * "disagrees" and FALSE for "there was nothing to compare" — and since 2026-09-01 the second one
+   * is the only case that ever happens. `cfg.incentiveEngine` was flipped to `gxcore`, so
+   * fetchLivePerf_ routes to GX Core's incentive_perf, and that mapping carries NO thresholds on
+   * purpose: Core computes no scheme, Crew reads it from kv. So `live.thresholds` is undefined,
+   * every comparison is against null, and the dry run has reported "Leaderboard disagrees" on every
+   * period since — about an app it no longer asks.
+   *
+   * That is worse than a wrong value, because the thing it claims is alarming and plausible: the
+   * kiosk grading staff against a scheme they are not paid on. It cost a real investigation on
+   * 2026-09-03 that ended with both schemes fetched and diffed by hand and found BYTE-IDENTICAL,
+   * discountMaxPct 1.0 included. Nothing was wrong except this line.
+   *
+   * The check is still worth having — Leaderboard does still hold its own copy and the board really
+   * would grade people against it — so this reports what it actually knows instead of being
+   * deleted or left lying:
+   *
+   *   true / false   a scheme arrived and was compared
+   *   null           nothing arrived, and `lb_check` says WHY
+   *
+   * A caller must treat null as "not checked", never as agreement. Reading it as a boolean gets
+   * `false`, which is the old behavior — hence the explicit `lb_check` string beside it, so a
+   * consumer that only wants a headline has one that cannot be silently misread. */
+  var lbT = live && live.thresholds;
+  if (lbT && lbT.budtender && lbT.manager && lbT.admin) {
+    return { ok: true, T: core, source: 'gx_core',
+             lb_agrees: deepSame_(lbT, core),
+             lb_check: 'compared' };
+  }
+  if (incentiveEngine_() === 'gxcore') {
+    return { ok: true, T: core, source: 'gx_core', lb_agrees: null,
+             lb_check: 'not applicable — performance comes from GX Core, which sends no scheme to compare' };
+  }
+  /* Leaderboard answered without a usable scheme. For a CLOSED period that is its documented third
+     answer: the 28 snapshots taken before it began recording the scheme have none, and it reports
+     `unrecorded` rather than substituting today's — which is correct, and must not read here as a
+     disagreement. Its own label is carried through when it sent one. */
+  var lbSrc = String((live && live.thresholds_source) || '');
+  return { ok: true, T: core, source: 'gx_core', lb_agrees: null,
+           lb_check: lbSrc
+             ? 'Leaderboard sent no scheme for this period (thresholds_source: ' + lbSrc + ')'
+             : 'Leaderboard sent no scheme for this period' };
 }
 
 /* GX CORE HOLDS THE THRESHOLDS, AND THERE IS NOTHING BEHIND THEM.
