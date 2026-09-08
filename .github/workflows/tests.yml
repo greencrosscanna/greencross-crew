@@ -31,6 +31,16 @@ jobs:
         with:
           path: greencross-crew
 
+      # incentive_math_test.js checks crew's bonus math against the LEADERBOARD's implementation and
+      # SKIPS when that repo is not a sibling checkout. Until now it never was one here, so the drift
+      # check ran only on one Mac while the green tick implied it had run everywhere. Public repo, so
+      # the default GITHUB_TOKEN reaches it — no secret to create, rotate or leak.
+      - name: Check out greencross-leaderboard
+        uses: actions/checkout@v4
+        with:
+          repository: greencrosscanna/greencross-leaderboard
+          path: greencross-leaderboard
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -38,3 +48,32 @@ jobs:
       - name: Run the gate
         working-directory: greencross-crew
         run: sh ./gx-preflight.sh
+
+      # Say what did NOT run. A green tick reports that every test EXITED 0, which is not the same
+      # as every test having COVERED something: a suite that skips prints a pass line and looks
+      # identical to one that ran.
+      # If the Leaderboard checkout above ever fails or is removed, the incentive drift check goes
+      # back to skipping — and THIS is what says so, instead of a green tick that means less than
+      # it did the week before.
+      - name: Report coverage honestly
+        if: always()
+        working-directory: greencross-crew
+        run: |
+          {
+            echo "### Coverage"
+            echo ""
+            for t in tests/*_test.js; do
+              out="$(node "$t" 2>&1 || true)"
+              if printf '%s' "$out" | grep -qiE '^SKIP|not a sibling|checkout not present'; then
+                echo "- ⚠️ \`$t\` — **SKIPPED**: $(printf '%s' "$out" | grep -iE '^SKIP|not a sibling|checkout not present' | head -1)"
+              else
+                echo "- ✅ \`$t\` — $(printf '%s' "$out" | tail -1)"
+              fi
+            done
+            echo ""
+            if [ -d ../greencross-leaderboard ]; then
+              echo "Leaderboard checked out — the incentive drift check ran."
+            else
+              echo "> **Leaderboard absent.** incentive_math_test.js's drift check did NOT run here."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
