@@ -2718,8 +2718,42 @@
              '<em>discretionary</em> discount, so the two are not comparable.</p>');
     }
     h.push('</div>');
+    /* THE REPAINT REPLACES EVERY NODE, INCLUDING THE ONE BEING USED. Ticking attendance now
+       repaints on the click rather than on the server's answer, so the checkbox under the cursor is
+       destroyed and rebuilt immediately — and a keyboard user who pressed Space would lose focus to
+       the body and have to tab back from the top of the table for every person. Remembering which
+       cell had it and restoring it afterwards is what makes the faster repaint safe to do. */
+    var refocus = incFocusKey(host);
     host.innerHTML = h.join('');
     incWire(host, d, isImported, editable);
+    incRefocus(host, refocus);
+  }
+
+  /* Identify the focused cell by the row key it carries rather than by position: the tables are
+     re-sorted and re-filtered, so an index would restore focus to whoever happens to be in that
+     slot now — silently moving the cursor to a different PERSON on a payroll screen. */
+  function incFocusKey(host) {
+    try {
+      var a = document.activeElement;
+      if (!a || !host.contains(a)) return null;
+      var k = a.getAttribute && a.getAttribute('data-k');
+      if (!k) return null;
+      /* The two controls on this screen that carry a row key. $/hr is NOT one of them — it is a
+         display cell with no input, so listing it here would be a class that never matches, and
+         focus restoration fails SILENTLY by nature: nothing errors, the cursor just goes missing.
+         Pinned against the rendered markup by incentive_optimistic_test.js. */
+      var cls = (a.className || '').split(/\s+/).filter(function (c) {
+        return c === 'crew-inc-att' || c === 'crew-inc-spiff';
+      })[0];
+      return cls ? { cls: cls, k: k } : null;
+    } catch (e) { return null; }
+  }
+  function incRefocus(host, want) {
+    if (!want) return;
+    try {
+      var n = host.querySelector('.' + want.cls + '[data-k="' + want.k.replace(/"/g, '\\"') + '"]');
+      if (n && n.focus) n.focus();
+    } catch (e) {}
   }
 
   /* A closed record has nothing left to approve — it was approved when it was written — and an
@@ -3230,6 +3264,46 @@
     });
   }
 
+  /* The cache patch for one edit, in the shape the engine sends — written in ONE place because it
+     is now applied twice: forward when the click happens, and backward if the save is refused. Two
+     copies of this mapping would drift, and the direction that drifts is the one nobody exercises. */
+  function incPatch_(cur, employeeId, field, value, note) {
+    cur[employeeId] = cur[employeeId] || {};
+    /* '' CLEARS an override — it must not become 0, which is itself a valid override meaning
+       "they earned nothing". Storing null lets incInput fall back to the measurement. */
+    cur[employeeId][field] = field === 'att' ? !!value
+                           : (value === '' ? null : Number(value));
+    if (field === 'payroll_override') {
+      /* incInput reads camelCase off the cached inputs, so the local copy has to speak the same
+         shape the engine sends — otherwise the cell repaints from the pre-save value and the
+         override looks like it did not take until the next full load. */
+      cur[employeeId].payrollOverride = value === '' ? null : Number(value);
+      cur[employeeId].overrideNote = value === '' ? '' : (note || '');
+    }
+  }
+
+  /* Which edit is the NEWEST for a given cell. Only the newest may roll itself back: a slow refusal
+     landing after a later save has already succeeded would otherwise restore a value the server no
+     longer holds, and the screen would then disagree with the sheet with nothing on it to say so. */
+  var incEditSeq = {};
+
+  /* THE SCREEN CHANGES ON THE CLICK, NOT ON THE SERVER'S ANSWER.
+     This used to await the round trip before touching the cache or repainting, and Crew's own
+     engine answers in ~2.1-2.9s warm. So ticking attendance did nothing visible for about two and a
+     half seconds — the box flipped, because the browser flips it, and every figure the tick moves
+     sat at its old value. One tick is worth $40 (the budtender's own attendance bonus plus the
+     $25 their manager earns for them), and Mike ticks about forty of them per period.
+
+     The second half was worse than the wait, and is the part that reads as broken rather than slow.
+     `paintIncentive` rebuilds the whole table from the cache, so when the FIRST save landed it
+     repainted every checkbox — including ones clicked since, whose saves were still in flight and
+     whose cache entries were therefore still false. A box Mike had ticked two seconds earlier
+     visually UNTICKED ITSELF, then came back when its own save landed. Reproduced against the real
+     code at 2.5s latency before this was changed.
+
+     So the patch is applied and painted immediately and the request is sent behind it. A refusal
+     rolls the cache back, repaints, and says so — which is the honest ordering, because the thing
+     that can fail is the write, not the arithmetic. */
   async function incSave(employeeId, field, value, note) {
     if (!inc.data || !employeeId) return;
     var pp = inc.data.payPeriod ? inc.data.payPeriod.start : inc.data.pp_start;
@@ -3239,25 +3313,20 @@
        so sending them separately would make the first of the two saves fail on its own — and the
        order that works would depend on which one you happened to send first. */
     if (field === 'payroll_override') params.override_note = note == null ? '' : note;
+
+    var cur = incInputs();
+    var cell = employeeId + '\u0000' + field;
+    var seq = incEditSeq[cell] = (incEditSeq[cell] || 0) + 1;
+    /* Snapshot the whole row, not the one field: payroll_override writes three keys, and putting
+       back only the one that was named would leave a cleared reason beside a restored figure. */
+    var before = cur[employeeId] ? JSON.parse(JSON.stringify(cur[employeeId])) : null;
+
+    incPatch_(cur, employeeId, field, value, note);
+    paintIncentive();
+
     try {
       var r = await Engine.jsonp('incentive_save', params, { timeoutMs: 20000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
-      /* Update in place and repaint from the same data, so the bonus recomputes without a
-         round trip — the edit is the point of doing the math client-side. */
-      var cur = incInputs();
-      cur[employeeId] = cur[employeeId] || {};
-      /* '' CLEARS an override — it must not become 0, which is itself a valid override meaning
-         "they earned nothing". Storing null lets incInput fall back to the measurement. */
-      cur[employeeId][field] = field === 'att' ? !!value
-                             : (value === '' ? null : Number(value));
-      if (field === 'payroll_override') {
-        /* incInput reads camelCase off the cached inputs, so the local copy has to speak the same
-           shape the engine sends — otherwise the cell repaints from the pre-save value and the
-           override looks like it did not take until the next full load. */
-        cur[employeeId].payrollOverride = value === '' ? null : Number(value);
-        cur[employeeId].overrideNote = value === '' ? '' : (note || '');
-      }
-      paintIncentive();
       toast(field === 'att' ? 'Attendance saved'
           : field === 'hours' ? (value === '' ? 'Hours cleared — back to the flat figure' : 'Hours saved')
           : field === 'payroll_override'
@@ -3265,7 +3334,15 @@
                               : 'Recorded as paid — ' + m2(Number(value)))
           : 'SPIFF saved');
     } catch (e) {
-      toast('Could not save: ' + ((e && e.message) || 'unknown'), true);
+      /* Stale refusal: something newer has since been sent for this same cell, and IT owns the
+         value now. Still said out loud — a write that did not land is never silent — but the
+         screen is left alone. */
+      if (incEditSeq[cell] === seq) {
+        var back = incInputs();
+        if (before) back[employeeId] = before; else delete back[employeeId];
+        paintIncentive();
+      }
+      toast('Could not save: ' + ((e && e.message) || 'unknown') + ' — put back', true);
     }
   }
 
