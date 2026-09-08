@@ -24,9 +24,13 @@
  *   3. A holder from an earlier month is named by that month, never "last month".
  *   4. Anything undatable or unreadable ASKS. The cost of asking twice is a line of email; the
  *      cost of staying quiet is a month with no Employee of the Month.
- *   5. The card still appears when the pick is in, carrying who and when. `since` records when the
- *      value was SET, not the month it was set FOR, so a late pick for the previous month must be
- *      visible rather than silently swallowed.
+ *   5. A settled pick produces NO BLOCK AT ALL — not a quieter one. Sky, 2026-09-08: "it should go
+ *      silent in the email recap, we only need to identify what needs to be addressed, nothing
+ *      else." The first cut of this fix rendered an "already chosen" card instead, on the argument
+ *      that `since` records when a pick was SET rather than which month it was FOR, so a late pick
+ *      for the previous month could be swallowed. That is his call to make and he made it: the
+ *      recap is a list of things to do, and a settled pick is not one. `?action=digest`'s JSON
+ *      still reports it, which is where that distinction belongs.
  */
 'use strict';
 const fs = require('fs');
@@ -128,33 +132,34 @@ console.log('\nEverything undatable or unreadable ASKS');
      err.picked === false && err.state === 'unknown');
 }
 
-console.log('\nThe email and the subject follow the same answer');
+console.log('\nA settled pick leaves the email entirely — no card, no subject line');
 {
-  /* Source-level: the render and the subject are built inline inside sendDigest_, which needs a
-     live roster and MailApp. What can be held here is that neither one nags when the pick is in,
-     and that the sentence which was false is gone. */
-  /* Looks for it as EMITTED TEXT — a single-quoted fragment the renderer concatenates — not as
-     the phrase anywhere in the file. The comment above digestEom_ quotes the old line to explain
-     what was wrong with it, and a test that cannot tell code from the note describing it would
-     force the next person to delete the explanation to get a green gate. */
+  /* Source-level: the render and the subject are built inside sendDigest_, which needs a live
+     roster and MailApp. What a push gate can hold is that ONE decision drops it, so the card and
+     the subject cannot disagree, and that no "already chosen" branch survives to be maintained. */
+  /* Sliced to the end of digestData_'s return object rather than by a character count — a fixed
+     window silently stops matching the moment a comment above the line grows. */
+  const dStart = SRC.indexOf('var eomFacts =');
+  const data = SRC.slice(dStart, SRC.indexOf('eom_facts: eomFacts', dStart) + 40);
+  ok('digestData_ drops a settled pick before anything renders',
+     /eom:\s*\(eomFacts\s*&&\s*eomFacts\.picked\)\s*\?\s*null\s*:\s*eomFacts/.test(data));
+  ok('…and still keeps the facts for the preview JSON', /eom_facts:\s*eomFacts/.test(data));
+
+  const card = SRC.slice(SRC.indexOf('if (d.eom) {'), SRC.indexOf('if (d.fresh.length)'));
+  ok('the card has no "already chosen" branch left to keep in step',
+     card.indexOf('Already chosen') < 0 && card.indexOf('eomDone') < 0);
+  ok('it is the ask, and only the ask', card.indexOf('Pick ') > 0);
+
+  const subj = SRC.slice(SRC.indexOf('var subject ='), SRC.indexOf('var subject =') + 700);
+  ok('the subject needs no second condition — presence IS outstanding',
+     /\(d\.eom\s*\?\s*'pick '/.test(subj) && subj.indexOf('!d.eom.picked') < 0);
+
   ok('the hardcoded "since last month" is gone from the rendered output',
      SRC.indexOf("' has held it since last month.'") < 0);
   ok('…and the month it names is read from the data',
      /has held it since '\s*\+/.test(SRC) && SRC.indexOf('d.eom.since_month') > 0);
-  const subj = SRC.slice(SRC.indexOf('var subject ='), SRC.indexOf('var subject =') + 700);
-  ok('the subject only nags when the pick is OUTSTANDING', /d\.eom\s*&&\s*!d\.eom\.picked/.test(subj));
-  const card = SRC.slice(SRC.indexOf('if (d.eom) {'), SRC.indexOf('if (d.fresh.length)'));
-  ok('the card still renders when the pick is in — not suppressed',
-     /eomDone\s*=\s*!!d\.eom\.picked/.test(card) && card.indexOf('Already chosen') > 0);
-  ok('a done card drops the word "Pick" from its heading',
-     /eomDone\s*\?\s*esc\(d\.eom\.month\)/.test(card));
-  ok('and it shows its evidence — who picked, and when',
-     card.indexOf('since_on') > 0 && card.indexOf('set_by') > 0);
-  ok('done reads green, outstanding stays gold',
-     /eomAccent\s*=\s*eomDone\s*\?\s*GREEN\s*:\s*GOLD/.test(card));
-  ok('the reported flag means what was ASKED, not what was shown',
-     SRC.indexOf('eom_reminder: !!(d.eom && !d.eom.picked)') > 0 &&
-     SRC.indexOf('eom_reminder: !!d.eom,') < 0);
+  ok('the preview still tells "already chosen" apart from "not the first Monday"',
+     SRC.indexOf('eom_picked: !!(d.eom_facts && d.eom_facts.picked)') > 0);
 }
 
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll good.\n');

@@ -285,25 +285,18 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
      current pick described as the old one, under a reminder to make it again. */
   eq(html.indexOf('last month') >= 0, false, 'never the hardcoded "last month"');
 
-  /* THE PICK ALREADY MADE — rendered here rather than only asserted on digestEom_'s return value,
-     because this is the file that builds the actual HTML, and the complaint was about what the
-     email SAID. Sky picked Noah on 1 September and the 7th's recap still told him to pick one. */
+  /* THE PICK ALREADY MADE — nothing at all. Sky, 2026-09-08: "it should go silent in the email
+     recap, we only need to identify what needs to be addressed, nothing else." digestData_ drops
+     it, so digestHtml_ is handed eom: null exactly as it is on any other Monday, and the card that
+     used to say "Already chosen" is gone with the branch that drew it. Rendered here rather than
+     only asserted on the data, because the complaint was about what the email SAID. */
   const done = C.digestHtml_({
     active: 43, gaps: 0, expiring: [], questions: [], fresh: [], celebrations: [],
-    eom: { month: 'September', holder: 'Noah Pinkerton', state: 'held',
-           since: '2026-09-01T19:43:19.774Z', picked: true, since_month: 'September',
-           since_on: 'Sep 1', set_by: 'mike' },
-    byId: {}, stores: {}
+    eom: null, byId: {}, stores: {}
   });
-  eq(done.indexOf('Pick September') >= 0, false, 'a pick already made is NOT asked for again');
-  eq(done.indexOf('Already chosen') >= 0, true, 'the card says it is settled');
-  eq(done.indexOf('Noah Pinkerton') >= 0, true, 'and names who holds it');
-  /* The evidence, so a late pick FOR THE MONTH BEFORE gives itself away instead of being
-     silently swallowed — `since` is when the value was set, not the month it was set for. */
-  eq(done.indexOf('Sep 1') >= 0, true, 'with the date it was set');
-  eq(done.indexOf('mike') >= 0, true, 'and by whom');
-  eq(done.indexOf('has held it since') >= 0, false,
-     'and never ALSO the outstanding wording — one card, one meaning');
+  eq(done.indexOf('Employee of the Month') >= 0, false,
+     'a settled pick puts NOTHING in the email — not a quieter card');
+  eq(done.indexOf('First Monday') >= 0, false, 'and no first-Monday kicker either');
 
   /* THE GENERAL GUARD. Every CSS color in this document is a hex literal; anything else means a
      value landed in a slot meant for a color, which is precisely how the name went invisible. */

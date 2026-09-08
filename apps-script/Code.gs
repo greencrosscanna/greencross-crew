@@ -2884,6 +2884,15 @@ function digestData_() {
   } catch (e) { /* labels are a nicety; the slug still reads */ }
   stores.corporate = stores.corporate || 'Corporate';
   var today = todayInStoreTz_();
+  /* THE RECAP CARRIES WHAT NEEDS ADDRESSING, AND NOTHING ELSE (Sky, 2026-09-08). A pick already
+     made is not an item, so it does not appear — no card, no subject line, nothing to scroll past.
+     `eom` is therefore the ASK or nothing, and one decision makes the card and the subject agree
+     by construction rather than by two matching conditions.
+
+     `eomFacts` keeps the full answer for ?action=digest's JSON, which is a diagnostic rather than
+     the email — it is how "settled" is told apart from "not the first Monday" without waiting a
+     month to look. */
+  var eomFacts = isFirstMondayOfMonth_(today) ? digestEom_(byId, today) : null;
   return {
     active: live.length,
     questions: items,
@@ -2892,7 +2901,8 @@ function digestData_() {
     fresh: live.filter(function (r) { return r.needs_setup; }),
     celebrations: digestCelebrations_(live, today),
     /* null on every other Monday of the month, so the template has one thing to test. */
-    eom: isFirstMondayOfMonth_(today) ? digestEom_(byId, today) : null,
+    eom: (eomFacts && eomFacts.picked) ? null : eomFacts,
+    eom_facts: eomFacts,
     byId: byId, stores: stores, all: joined.rows
   };
 }
@@ -2954,26 +2964,13 @@ function digestHtml_(d) {
      once-a-month ask with a deadline attached; under a long questions list it is the line
      somebody scrolls past, and then the month has no Employee of the Month. */
   if (d.eom) {
-    /* DONE reads green and asks nothing; OUTSTANDING keeps the gold that means somebody must act.
-       The color is the fastest thing read in an email, so it carries the difference before any
-       of the words do. */
-    var eomDone = !!d.eom.picked;
-    var eomAccent = eomDone ? GREEN : GOLD;
-    var eomHead = eomDone ? esc(d.eom.month) + '&rsquo;s Employee of the Month'
-                          : 'Pick ' + esc(d.eom.month) + '&rsquo;s Employee of the Month';
+    /* Only ever the ASK. A settled pick never reaches here — digestData_ drops it — so there is no
+       "already chosen" branch to keep in step with the subject line. */
     var eomLine;
-    if (eomDone) {
-      /* THE EVIDENCE, not just the verdict. `since` is when the value was set, not the month it
-         was set FOR, so this line has to let a wrong reading be spotted rather than assert it is
-         right: name who chose and when, and a late pick for the previous month gives itself away. */
-      eomLine = '<strong style="color:' + TXT + '">' + esc(d.eom.holder) + '</strong>' +
-                (d.eom.since_on ? ' &middot; picked ' + esc(d.eom.since_on) : '') +
-                (d.eom.set_by ? ' by ' + esc(d.eom.set_by) : '') +
-                '. Nothing to do.';
-    } else if (d.eom.state === 'held') {
+    if (d.eom.state === 'held') {
       /* NAMED, never "last month". A holder from July is not last month's in September, and this
-         line claimed otherwise every time it was not — including for a holder picked this month,
-         which is the pair of falsehoods that started this. */
+         line claimed otherwise every time it was not — including for a holder picked THIS month,
+         where it described the current pick as the old one under a reminder to make it again. */
       eomLine = esc(d.eom.holder) + ' has held it since ' +
                 (d.eom.since_month ? esc(d.eom.since_month) : 'an earlier month') + '.';
     } else {
@@ -2982,12 +2979,11 @@ function digestHtml_(d) {
         : 'Nobody holds it at the moment.';
     }
     h += '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-left:3px solid ' +
-      eomAccent + ';border-radius:9px;padding:14px 16px;margin:18px 0 0">' +
+      GOLD + ';border-radius:9px;padding:14px 16px;margin:18px 0 0">' +
       '<div style="font:700 9.5px/1.4 Helvetica,Arial,sans-serif;letter-spacing:.9px;' +
-      'text-transform:uppercase;color:' + eomAccent + '">' +
-      (eomDone ? 'Already chosen' : 'First Monday') + '</div>' +
+      'text-transform:uppercase;color:' + GOLD + '">First Monday</div>' +
       '<div style="font:600 14px/1.4 Helvetica,Arial,sans-serif;color:' + TXT + ';padding:2px 0 4px">' +
-      eomHead + '</div>' +
+      'Pick ' + esc(d.eom.month) + '&rsquo;s Employee of the Month</div>' +
       '<div style="font:400 12.5px/1.5 Helvetica,Arial,sans-serif;color:' + DIM + '">' +
       eomLine + '</div></div>';
   }
@@ -3133,11 +3129,9 @@ function sendDigest_(p) {
      without one. Celebrations deliberately stay OUT of the subject — a birthday is not why
      somebody should open their email, and it would push the queue count out on most weeks. */
   var subject = 'GX Crew — ' +
-                /* Only when it is actually OUTSTANDING. The subject exists to put the one line
-                   with a deadline in front of the queue count; a pick already made has no
-                   deadline, and nagging about it there is the loudest possible place to be wrong. */
-                (d.eom && !d.eom.picked
-                   ? 'pick ' + d.eom.month + '\u2019s Employee of the Month \u00b7 ' : '') +
+                /* d.eom IS the outstanding ask — a settled pick was dropped upstream — so this
+                   needs no second condition to stay in step with the card. */
+                (d.eom ? 'pick ' + d.eom.month + '\u2019s Employee of the Month \u00b7 ' : '') +
                 (open ? open + ' open question' + (open === 1 ? '' : 's') : 'all clear') +
                 (d.expiring.length ? ', ' + d.expiring.length + ' permit' +
                  (d.expiring.length === 1 ? '' : 's') + ' inside 90 days' : '');
@@ -3150,8 +3144,9 @@ function sendDigest_(p) {
              active: d.active, open_questions: open, expiring: d.expiring.length,
              gaps: d.gaps, new_here: d.fresh.length,
              celebrations: d.celebrations.length,
-                /* what was ASKED, not what was shown — the block also appears when the pick is in. */
-                eom_reminder: !!(d.eom && !d.eom.picked), eom_picked: !!(d.eom && d.eom.picked),
+                /* d.eom is the ask; eom_facts still knows a settled pick, which is how the
+                   preview distinguishes "already chosen" from "not the first Monday". */
+                eom_reminder: !!d.eom, eom_picked: !!(d.eom_facts && d.eom_facts.picked),
              /* WHO, not just how many. A preview that says "celebrations: 1" cannot be checked
                 against anything — the first cross-check against ?action=celebrations found a
                 count that disagreed, and the payload gave nothing to find the missing person
@@ -3188,8 +3183,8 @@ function sendDigest_(p) {
                 remaining_daily_quota: quota,
                 open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length,
                 celebrations: d.celebrations.length,
-                   eom_reminder: !!(d.eom && !d.eom.picked),
-                   eom_picked: !!(d.eom && d.eom.picked) });
+                   eom_reminder: !!d.eom,
+                   eom_picked: !!(d.eom_facts && d.eom_facts.picked) });
 }
 
 /* Trigger entry point, and the editor-runnable twin for the one-time mail authorization. */
