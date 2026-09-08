@@ -4827,6 +4827,21 @@ function getIncentive_(p) {
        available here is the break glass — reopening it. Without this the button can never render on
        the very screen it exists for. */
     h.can_approve = canApprove_(auth);
+    /* ATTENDANCE IS NOT IN HISTORY_HEADERS, and the inputs tab is the only record of it. Nothing
+       anywhere deletes from that tab — checked every deleteRow/deleteRows in this file — so the
+       ticks for a period Crew approved are still there, and the closed screen can show WHO earned
+       the attendance bonus instead of a dash for everybody.
+
+       SAFE TO ATTACH BECAUSE EVERY MONEY PATH IN THE BROWSER IS ALREADY GUARDED ON isImported:
+       budCalc/mgrCalc return the frozen row, paidOf returns the frozen payroll, incHrCell is
+       handed a null row, and the CSV export returns r.payroll. The one unguarded reader is the
+       attendance cell, which is exactly the cell this is for. Pinned by
+       tests/closed_attendance_test.js so a future reader of inputs on an imported period cannot
+       quietly start moving a frozen figure.
+
+       The 27 periods imported from the payout PDFs have no rows here at all, so this is {} for
+       them and the screen keeps saying it does not know — which is the truth. */
+    h.inputs = inputsFor_(want);
     h.why_read_only = 'Imported from the payout report for this period — the figures as paid.';
     return h;
   }

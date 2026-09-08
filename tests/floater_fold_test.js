@@ -224,9 +224,22 @@ console.log('\nBoth paths fold');
   ok('and so does approval — the record and the screen must agree',
      /foldFloaters_\s*\(/.test(approve));
   /* Order matters as much as presence: fold BEFORE the inputs and SPIFF are attached, or an
-     attendance tick and the vendor money land on whichever of two rows is about to disappear. */
+     attendance tick and the vendor money land on whichever of two rows is about to disappear.
+
+     SCOPED TO THE LIVE BRANCH, and that is the whole point of the slice. getIncentive_ now calls
+     inputsFor_ TWICE, in two branches that cannot both run: once for a closed period (so the
+     attendance column can show who earned it) and once for a live one. A bare indexOf over the
+     function finds whichever appears first in the FILE, which is the closed one — so this read as
+     "the fold happens after the inputs" and failed, while the ordering it exists to protect was
+     never touched. Nothing folds on the closed branch: those rows were folded when they were
+     approved, and a frozen period is not recomputed. */
+  const liveBranch = screen.slice(screen.indexOf('var live = fetchLivePerf_'));
+  ok('the live branch is where the fold and the inputs meet', liveBranch.length > 0);
   ok('the screen folds before it reads the inputs',
-     screen.indexOf('foldFloaters_') < screen.indexOf('inputsFor_'));
+     liveBranch.indexOf('foldFloaters_') >= 0 &&
+     liveBranch.indexOf('inputsFor_') > liveBranch.indexOf('foldFloaters_'));
+  ok('and before SPIFF earnings are folded on',
+     liveBranch.indexOf('applySpiffEarnings_') > liveBranch.indexOf('foldFloaters_'));
   ok('approval folds before it computes anybody',
      approve.indexOf('foldFloaters_') < approve.indexOf('incCalcBud_'));
 }

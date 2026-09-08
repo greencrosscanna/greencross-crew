@@ -2711,6 +2711,14 @@
                  : '') + '</p>');
       }
     }
+    if (incAttUnrecorded(d, isImported)) {
+      /* Said once, at period level, because it is a fact about the PERIOD. Without it a column of
+         dashes on a 2025 report reads as "nobody earned attendance" — and those reports did pay
+         attendance bonuses, they just did not record who. */
+      h.push('<p class="crew-inc-note">Attendance was not recorded person-by-person for this ' +
+             'period, so the attendance column is blank throughout. The bonuses shown already ' +
+             'include whatever attendance was paid at the time.</p>');
+    }
     if (isImported) {
       h.push('<p class="crew-inc-note">These are the figures from the payout report for this period, ' +
              'imported once and never recalculated. The discount column in those reports measured ' +
@@ -2878,6 +2886,51 @@
            (label === 'Payroll' ? ' crew-inc-payh' : '') +
            '" style="width:' + incColW(i) + '">' + esc(label) + '</th>';
   }
+  /* ATTENDANCE, ON A CLOSED PERIOD AS WELL AS A LIVE ONE.
+     A closed period used to show an em dash for EVERYONE, because the frozen record has no
+     attendance column — HISTORY_HEADERS never carried one — and the imported payload never
+     included the inputs. So the fortnight Mike had just spent ticking read back as though nobody
+     had earned it. The engine now sends `inputs` for a closed period too, and this renders the
+     same ✓ the live view does.
+
+     THE GLYPHS ARE NOT NEW. The print stylesheet has always rendered the live checkbox as ✓ when
+     ticked and — when not (`.crew-inc-att::after`), so ✓/— is already what this column means on
+     paper. Reusing `crew-inc-hit` for the tick gets the same green (#0a7a3d, bold) on screen and
+     in the PDF, from rules that already exist and are already covered by print_css_test.js.
+
+     WHY — IS HONEST FOR BOTH "no" AND "no record", which is the one thing worth being careful
+     about here. On a CLOSED period the two have the same meaning: the bonus is frozen, and it was
+     computed by incCalcBud_ reading this same tab, where an absent row and an unticked one both
+     yield no attendance bonus. So — says "did not get the attendance bonus", which is true either
+     way, rather than making a claim about the person.
+     The case that would mislead is a period with NO attendance record at all — the 27 imported
+     from the payout PDFs, which DID pay attendance bonuses but recorded no per-person answer.
+     A column of dashes there reads as "nobody earned it". That is said out loud at period level
+     instead (see incAttUnrecorded), because it is a fact about the period, not about a person. */
+  function incAttCell(b, i, isImported, editable) {
+    if (!isImported) {
+      return incTd(7, '<input type="checkbox" class="crew-inc-att" data-k="' +
+                      esc(incKey(b)) + '"' + (i.att ? ' checked' : '') +
+                      (editable ? '' : ' disabled') + ' aria-label="100% attendance">', 'c');
+    }
+    return i.att
+      ? incTd(7, '<span title="100% attendance — earned the attendance bonus">✓</span>',
+              'c crew-inc-hit')
+      : incTd(7, '<span class="crew-inc-zero" title="No attendance bonus in this period\'s ' +
+                 'frozen figures">—</span>', 'c');
+  }
+
+  /* True when a closed period carries no per-person attendance answer at all — every one of the 27
+     imported from the payout PDFs. Deliberately "did anybody get a row", not "did anybody tick":
+     a period where the answer really was no for everyone HAS rows and must keep reading as a real
+     column of dashes, not as an unrecorded one. */
+  function incAttUnrecorded(d, isImported) {
+    if (!isImported) return false;
+    var inputs = (d && d.inputs) || {};
+    for (var k in inputs) if (Object.prototype.hasOwnProperty.call(inputs, k)) return false;
+    return true;
+  }
+
   function incTd(i, inner, cls) {
     return '<td class="' + (cls || '') + (INC_COLS[i].rule ? ' rule' : '') + '">' + inner + '</td>';
   }
@@ -3095,10 +3148,7 @@
       '<td colspan="2" class="' + (T ? incGoal(dp <= T.budtender.discountMaxPct) : '') + '">' +
         esc(pct2(dp)) + '</td>' +
       incTd(6, esc(m2(b.aov)), T ? incGoal(b.aov >= T.budtender.aovTarget) : '') +
-      incTd(7, isImported ? '<span class="crew-inc-zero">—</span>'
-                          : '<input type="checkbox" class="crew-inc-att" data-k="' +
-                            esc(incKey(b)) + '"' + (i.att ? ' checked' : '') +
-                            (editable ? '' : ' disabled') + ' aria-label="100% attendance">', 'c') +
+      incAttCell(b, i, isImported, editable) +
       incSpiffCell(b, c, editable, 8) +
       incTd(9, incDash(c.bonus)) +
       incHrCell(c, isImported ? null : b, T) +
