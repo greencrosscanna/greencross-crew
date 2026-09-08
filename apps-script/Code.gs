@@ -2810,6 +2810,36 @@ var MONTH_NAMES_ = ['January', 'February', 'March', 'April', 'May', 'June',
  *
  * A cfg.eom that cannot be read degrades to the bare reminder. The alternative — dropping the
  * block, or printing the error into an email — turns a GX Core hiccup into a missed month. */
+/* WHICH MONTH A REIGN STARTED IN, in store time — 'yyyy-MM', or '' if there is no usable date.
+   STORE TIME, not UTC, and that is the whole reason this is a function. cfg.eom stores an instant;
+   a pick made at 2026-10-01T02:00:00Z is September 30th, 7pm, in Salem — so comparing the raw ISO
+   string's month would file it under October and ask Sky to pick a month he had just picked. Same
+   rule as everywhere else here: a calendar day is Los Angeles, an instant is UTC. */
+function eomMonthOf_(iso) {
+  var t = String(iso || '').trim();
+  if (!t) return '';
+  var d = new Date(t);
+  if (isNaN(d.getTime())) return '';
+  return Utilities.formatDate(d, STORE_TZ, 'yyyy-MM');
+}
+
+/* The EoM block: either "pick this month's" or "this month's is already picked".
+ *
+ * IT USED TO ASK EVERY TIME, and it had the answer in hand the whole while. Sky picked Noah on
+ * 1 September and the first-Monday recap on the 7th still said "Pick September's Employee of the
+ * Month" — under a line reading "Noah Pinkerton has held it since last month", which was false
+ * twice over: the reign began that same month, and it was the CURRENT pick being described as the
+ * old one. cfg.eom carries `since`; nothing compared it to the month being asked about.
+ *
+ * IT STILL SHOWS THE BLOCK WHEN THE PICK IS IN, rather than going quiet. `since` records when the
+ * value was SET, not which month it is FOR, so a pick made late — on the 3rd, for the month before
+ * — is indistinguishable from a prompt one. Suppressing the block on that reading would replace
+ * "asks when it should not" with "silent when it should ask", which is the worse of the two: the
+ * month would simply go by. So the card states the fact and shows its evidence — who, and the date
+ * it was set — and a wrong one is visible at a glance instead of being decided here.
+ *
+ * A cfg.eom that cannot be read still degrades to the bare ask. A GX Core hiccup must not become a
+ * missed month. */
 function digestEom_(byId, today) {
   var cur = {};
   try { cur = eomCurrent_() || {}; } catch (e) { cur = { error: String((e && e.message) || e) }; }
@@ -2818,8 +2848,26 @@ function digestEom_(byId, today) {
     var row = byId[String(cur.employee_id)];
     holder = (row && displayNameOf_(row)) || String(cur.employee_id || '');
   }
+  var sinceMonth = cur.state === 'held' ? eomMonthOf_(cur.since) : '';
+  var thisMonth = Utilities.formatDate(today, STORE_TZ, 'yyyy-MM');
+  /* An unparseable or absent `since` reads as NOT picked. The reign is real but undatable, so the
+     honest answer is to ask — the cost of asking twice is an email line, the cost of not asking is
+     a month with no Employee of the Month. */
+  var picked = !!(cur.state === 'held' && sinceMonth && sinceMonth === thisMonth);
   return { month: MONTH_NAMES_[today.getMonth()], holder: holder,
-           state: cur.error ? 'unknown' : (cur.state || 'unset'), since: cur.since || '' };
+           state: cur.error ? 'unknown' : (cur.state || 'unset'),
+           since: cur.since || '', picked: picked,
+           /* Named rather than "last month": a holder from July is not last month's in September,
+              and the reminder said so every time. '' when there is no usable date. */
+           since_month: sinceMonth ? MONTH_NAMES_[Number(sinceMonth.slice(5, 7)) - 1] : '',
+           /* GUARDED ON sinceMonth, NOT ON cur.since BEING TRUTHY. Utilities.formatDate THROWS on
+              an Invalid Date, and digestEom_ runs inside digestData_ with nothing between it and
+              the send — so a junk `since` would have taken the whole Monday recap down rather than
+              printing an odd line. Worse than the bug this function was opened to fix, and found
+              only because the test fed it 'not a date'. sinceMonth is already the answer to "is
+              this parseable", so reusing it keeps one definition of usable. */
+           since_on: sinceMonth ? Utilities.formatDate(new Date(cur.since), STORE_TZ, 'MMM d') : '',
+           set_by: String(cur.set_by || '') };
 }
 
 function digestData_() {
@@ -2906,17 +2954,40 @@ function digestHtml_(d) {
      once-a-month ask with a deadline attached; under a long questions list it is the line
      somebody scrolls past, and then the month has no Employee of the Month. */
   if (d.eom) {
-    var eomLine = d.eom.state === 'held'
-      ? esc(d.eom.holder) + ' has held it since last month.'
-      : d.eom.state === 'unknown'
+    /* DONE reads green and asks nothing; OUTSTANDING keeps the gold that means somebody must act.
+       The color is the fastest thing read in an email, so it carries the difference before any
+       of the words do. */
+    var eomDone = !!d.eom.picked;
+    var eomAccent = eomDone ? GREEN : GOLD;
+    var eomHead = eomDone ? esc(d.eom.month) + '&rsquo;s Employee of the Month'
+                          : 'Pick ' + esc(d.eom.month) + '&rsquo;s Employee of the Month';
+    var eomLine;
+    if (eomDone) {
+      /* THE EVIDENCE, not just the verdict. `since` is when the value was set, not the month it
+         was set FOR, so this line has to let a wrong reading be spotted rather than assert it is
+         right: name who chose and when, and a late pick for the previous month gives itself away. */
+      eomLine = '<strong style="color:' + TXT + '">' + esc(d.eom.holder) + '</strong>' +
+                (d.eom.since_on ? ' &middot; picked ' + esc(d.eom.since_on) : '') +
+                (d.eom.set_by ? ' by ' + esc(d.eom.set_by) : '') +
+                '. Nothing to do.';
+    } else if (d.eom.state === 'held') {
+      /* NAMED, never "last month". A holder from July is not last month's in September, and this
+         line claimed otherwise every time it was not — including for a holder picked this month,
+         which is the pair of falsehoods that started this. */
+      eomLine = esc(d.eom.holder) + ' has held it since ' +
+                (d.eom.since_month ? esc(d.eom.since_month) : 'an earlier month') + '.';
+    } else {
+      eomLine = d.eom.state === 'unknown'
         ? 'Could not read the current holder just now.'
         : 'Nobody holds it at the moment.';
+    }
     h += '<div style="background:' + CARD + ';border:1px solid ' + LINE + ';border-left:3px solid ' +
-      GOLD + ';border-radius:9px;padding:14px 16px;margin:18px 0 0">' +
+      eomAccent + ';border-radius:9px;padding:14px 16px;margin:18px 0 0">' +
       '<div style="font:700 9.5px/1.4 Helvetica,Arial,sans-serif;letter-spacing:.9px;' +
-      'text-transform:uppercase;color:' + GOLD + '">First Monday</div>' +
+      'text-transform:uppercase;color:' + eomAccent + '">' +
+      (eomDone ? 'Already chosen' : 'First Monday') + '</div>' +
       '<div style="font:600 14px/1.4 Helvetica,Arial,sans-serif;color:' + TXT + ';padding:2px 0 4px">' +
-      'Pick ' + esc(d.eom.month) + '&rsquo;s Employee of the Month</div>' +
+      eomHead + '</div>' +
       '<div style="font:400 12.5px/1.5 Helvetica,Arial,sans-serif;color:' + DIM + '">' +
       eomLine + '</div></div>';
   }
@@ -3062,7 +3133,11 @@ function sendDigest_(p) {
      without one. Celebrations deliberately stay OUT of the subject — a birthday is not why
      somebody should open their email, and it would push the queue count out on most weeks. */
   var subject = 'GX Crew — ' +
-                (d.eom ? 'pick ' + d.eom.month + '\u2019s Employee of the Month \u00b7 ' : '') +
+                /* Only when it is actually OUTSTANDING. The subject exists to put the one line
+                   with a deadline in front of the queue count; a pick already made has no
+                   deadline, and nagging about it there is the loudest possible place to be wrong. */
+                (d.eom && !d.eom.picked
+                   ? 'pick ' + d.eom.month + '\u2019s Employee of the Month \u00b7 ' : '') +
                 (open ? open + ' open question' + (open === 1 ? '' : 's') : 'all clear') +
                 (d.expiring.length ? ', ' + d.expiring.length + ' permit' +
                  (d.expiring.length === 1 ? '' : 's') + ' inside 90 days' : '');
@@ -3074,7 +3149,9 @@ function sendDigest_(p) {
     return { ok: true, mode: 'preview', source: source, would_send_to: recipients, subject: subject,
              active: d.active, open_questions: open, expiring: d.expiring.length,
              gaps: d.gaps, new_here: d.fresh.length,
-             celebrations: d.celebrations.length, eom_reminder: !!d.eom,
+             celebrations: d.celebrations.length,
+                /* what was ASKED, not what was shown — the block also appears when the pick is in. */
+                eom_reminder: !!(d.eom && !d.eom.picked), eom_picked: !!(d.eom && d.eom.picked),
              /* WHO, not just how many. A preview that says "celebrations: 1" cannot be checked
                 against anything — the first cross-check against ?action=celebrations found a
                 count that disagreed, and the payload gave nothing to find the missing person
@@ -3110,7 +3187,9 @@ function sendDigest_(p) {
   return note({ ok: true, at: at, source: source, mode: 'sent', to: recipients, subject: subject,
                 remaining_daily_quota: quota,
                 open_questions: open, expiring: d.expiring.length, new_here: d.fresh.length,
-                celebrations: d.celebrations.length, eom_reminder: !!d.eom });
+                celebrations: d.celebrations.length,
+                   eom_reminder: !!(d.eom && !d.eom.picked),
+                   eom_picked: !!(d.eom && d.eom.picked) });
 }
 
 /* Trigger entry point, and the editor-runnable twin for the one-time mail authorization. */

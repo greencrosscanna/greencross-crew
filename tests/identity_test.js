@@ -246,7 +246,10 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
       { name: 'Wes Tanaka', store: 'portland-rd', type: 'anniversary', days_away: 3,
         when: 'Thursday', years: 1 }
     ],
-    eom: { month: 'September', holder: 'Shawn Todd', state: 'held', since: '2026-08-01' },
+    /* As digestEom_ now returns it. `picked` false is a holder from an EARLIER month, which is
+       the case that still asks. */
+    eom: { month: 'September', holder: 'Shawn Todd', state: 'held', since: '2026-08-01T18:00:00Z',
+           picked: false, since_month: 'August', since_on: 'Aug 1', set_by: 'sky' },
     byId: { shawn_todd: shawn },
     stores: { 'portland-rd': 'Portland', bend: 'Century' }
   });
@@ -275,7 +278,32 @@ console.log('\n2d. digestHtml_ — the email says who it is about');
   /* EoM: the ASK is the pick; the holder is context. Both have to be present. */
   eq(html.indexOf('Employee of the Month') >= 0, true, 'the first-Monday reminder is the ask');
   eq(html.indexOf('September') >= 0, true, 'and it names the month being picked');
-  eq(html.indexOf('has held it since last month') >= 0, true, 'the current holder is context');
+  eq(html.indexOf('Shawn Todd has held it since August.') >= 0, true,
+     'the current holder is context, and the month is NAMED');
+  /* This line used to read "has held it since last month", hardcoded — false whenever the holder
+     was not from last month, and false in the worst way when they were picked THIS month: the
+     current pick described as the old one, under a reminder to make it again. */
+  eq(html.indexOf('last month') >= 0, false, 'never the hardcoded "last month"');
+
+  /* THE PICK ALREADY MADE — rendered here rather than only asserted on digestEom_'s return value,
+     because this is the file that builds the actual HTML, and the complaint was about what the
+     email SAID. Sky picked Noah on 1 September and the 7th's recap still told him to pick one. */
+  const done = C.digestHtml_({
+    active: 43, gaps: 0, expiring: [], questions: [], fresh: [], celebrations: [],
+    eom: { month: 'September', holder: 'Noah Pinkerton', state: 'held',
+           since: '2026-09-01T19:43:19.774Z', picked: true, since_month: 'September',
+           since_on: 'Sep 1', set_by: 'mike' },
+    byId: {}, stores: {}
+  });
+  eq(done.indexOf('Pick September') >= 0, false, 'a pick already made is NOT asked for again');
+  eq(done.indexOf('Already chosen') >= 0, true, 'the card says it is settled');
+  eq(done.indexOf('Noah Pinkerton') >= 0, true, 'and names who holds it');
+  /* The evidence, so a late pick FOR THE MONTH BEFORE gives itself away instead of being
+     silently swallowed — `since` is when the value was set, not the month it was set for. */
+  eq(done.indexOf('Sep 1') >= 0, true, 'with the date it was set');
+  eq(done.indexOf('mike') >= 0, true, 'and by whom');
+  eq(done.indexOf('has held it since') >= 0, false,
+     'and never ALSO the outstanding wording — one card, one meaning');
 
   /* THE GENERAL GUARD. Every CSS color in this document is a hex literal; anything else means a
      value landed in a slot meant for a color, which is precisely how the name went invisible. */
