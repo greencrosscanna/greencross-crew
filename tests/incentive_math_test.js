@@ -562,7 +562,10 @@ console.log((admChecked === admTotal ? '  ✓' : '  ✗') +
    arithmetic does. Skips cleanly once the file is gone — which is the plan for it. */
 (function driftCheck() {
   const lbPath = __dirname + '/../../greencross-leaderboard/index.html';
-  if (!fs.existsSync(lbPath)) { console.log('  – drift check skipped (Leaderboard checkout not present)'); return; }
+  // "SKIP" at the start of the line (indented is fine) is the marker every GX repo's CI coverage
+  // step looks for. It used to read "– drift check skipped …", which no reporter could match, so a
+  // suite that skipped this check was listed as having run it.
+  if (!fs.existsSync(lbPath)) { console.log('  SKIP  drift check — Leaderboard checkout not present'); return; }
   const src = fs.readFileSync(lbPath, 'utf8');
   /* Comments are stripped before comparing: a reworded comment in Leaderboard is not a change to
      the money, and failing Crew's push over one would train people to bypass this check. */
