@@ -194,5 +194,43 @@ console.log('\nThe gate itself');
      [running, ended, pending].every(d => (M.incPayoutGate(d, false).why || '').length > 20));
 }
 
+console.log('\nThe approve button is named once, and drives ITSELF');
+{
+  /* Renamed from "Approve & Print PDF" (Sky, 2026-09-08): printing is now its own gated step, so a
+     combined label sitting beside a greyed-out "Print PDF" read as two prints, one of which was
+     broken. */
+  const h = M.incHeadActions(ended, false);
+  ok('the button reads just "Approve"', /id="incApprove"[^>]*>Approve</.test(h));
+  ok('and no longer claims to print', h.indexOf('Approve &amp; Print PDF') < 0 &&
+     h.indexOf('Approve & Print PDF') < 0);
+
+  const CREW = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
+  /* THE BUG THE RENAME UNCOVERED. The approve handler took getElementById('incPrint') and applied
+     its busy state and label restore to the PRINT button — a different control, and since the
+     steps became ordered, a disabled one. Its `finally` ran disabled = false on it, so a FAILED
+     approve left Print looking usable on an unapproved period, wearing the approve button's label.
+     Only looking usable: incPrintWithName checks the gate itself, which is the two-consumer rule
+     earning its keep. */
+  /* COMMENTS STRIPPED BEFORE ANY OF THIS IS READ. Twice now a check like these has failed on the
+     note EXPLAINING the old code rather than on the code — the comment above this very handler
+     quotes getElementById('incPrint') to say what was wrong with it. A test that cannot tell the
+     two apart forces the next person to delete the explanation to get a green gate. */
+  const code = t => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  const fn = code(CREW.slice(CREW.indexOf('async function incApproveAndPrint'),
+                             CREW.indexOf('async function incSendForApproval')));
+  ok('the approve handler drives the approve button', fn.indexOf("getElementById('incApprove')") > 0);
+  ok('…and never reaches for the print button', fn.indexOf("getElementById('incPrint')") < 0);
+  /* The RESTORE specifically — 'Approving…' is a legitimate transient label and must not be
+     confused for a second copy of the button's real name. */
+  ok('the label it restores is the one the renderer wrote — not a second literal',
+     /disabled = false;\s*btn\.textContent = INC_APPROVE_LABEL/.test(fn));
+  ok('…while the busy label stays a plain literal, which is all it needs to be',
+     fn.indexOf("textContent = 'Approving") > 0);
+  /* One definition, or the restore drifts from the render exactly as it just had. */
+  ok('the label exists in exactly one place',
+     (CREW.match(/INC_APPROVE_LABEL\s*=\s*'/g) || []).length === 1 &&
+     (CREW.match(/INC_APPROVE_LABEL/g) || []).length >= 3);
+}
+
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll good.\n');
 process.exit(fail ? 1 : 0);

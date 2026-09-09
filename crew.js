@@ -2767,6 +2767,10 @@
   /* A closed record has nothing left to approve — it was approved when it was written — and an
      open period cannot be approved yet. Both just print, so the button says what it will actually
      do rather than offering an action the engine will refuse. */
+  /* Named once. The renderer writes it and the approve handler restores it after a failed
+     attempt; two literals is how the button came back from an error with the old wording. */
+  var INC_APPROVE_LABEL = 'Approve';
+
   /* THE PAYOUT SEQUENCE: approve -> print / file to Drive -> export (Sky, 2026-09-08).
      "each button is disabled until the prior has been done".
 
@@ -2814,7 +2818,8 @@
       /* Waiting on the approver. The preparer sees who and when, and no action — the inputs are
          locked server-side too, so there is nothing here that would half-work. */
       if (d.can_approve) {
-        h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">Approve &amp; Print PDF</button>');
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">' +
+               esc(INC_APPROVE_LABEL) + '</button>');
         h.push('<button type="button" class="gx-btn" id="incReturn">Send back…</button>');
       } else {
         h.push('<span class="crew-inc-wait">Sent to the approver' +
@@ -2825,7 +2830,8 @@
       /* Ready to go up. The approver gets to approve directly — making Sky email himself would be
          ceremony, not a control. */
       if (d.can_approve) {
-        h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">Approve &amp; Print PDF</button>');
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">' +
+               esc(INC_APPROVE_LABEL) + '</button>');
       } else {
         h.push('<button type="button" class="gx-btn gx-btn-green" id="incSend">Send for approval</button>');
       }
@@ -3670,7 +3676,13 @@
       toast('This pay period is still running — it cannot be approved or printed until it ends.', true);
       return;
     }
-    var btn = document.getElementById('incPrint');
+    /* THE APPROVE BUTTON, NOT THE PRINT ONE. This read getElementById('incPrint'), so the busy
+       state and the label restore below were applied to Print — which is a different control, and
+       since the payout steps became ordered, a DISABLED one. On a failed approve the restore also
+       ran `disabled = false` on it, leaving Print looking usable on a period that had not been
+       approved, wearing the approve button's label. (Only looking: incPrintWithName checks the
+       gate itself, which is why the two-consumer rule is worth the duplication.) */
+    var btn = document.getElementById('incApprove');
     try {
       var appr = (inc.approveToken && inc.approvePp === pp) ? inc.approveToken : '';
       var pre = await Engine.jsonp('incentive_approve',
@@ -3697,7 +3709,10 @@
     } catch (e) {
       toast('Could not approve: ' + ((e && e.message) || 'unknown'), true);
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Approve & Print PDF'; }
+      /* Restored from ONE place with the label the renderer uses, so the two cannot drift — a
+         button that comes back from a failed attempt wearing a different name is how "Approve &
+         Print PDF" survived on screen after the row had stopped saying it. */
+      if (btn) { btn.disabled = false; btn.textContent = INC_APPROVE_LABEL; }
     }
   }
 
