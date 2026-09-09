@@ -4388,9 +4388,88 @@ function spiffProgressCacheClear_() {
   try { CacheService.getScriptCache().remove(SPIFF_PROGRESS_CACHE_KEY); } catch (e) {}
 }
 
-function spiffProgressFor_(ppStart, useCache) {
+/* How old a published SPIFF payload may be before the screen says so. Nothing recomputes on the
+   Core path — if SPIFF goes quiet the payload simply gets older and NOTHING throws anywhere, which
+   is the one new failure mode this source introduces (SPIFF's own words). A day is deliberately
+   loose: SPIFF publishes about hourly, so a tighter bar would cry wolf across any quiet night,
+   while the failure actually worth catching is the fortnight-old figure nobody noticed. */
+var SPIFF_PUBLISHED_STALE_MIN = 24 * 60;
+
+/* THE SCREEN READS GX CORE; THE MONEY PATHS READ SPIFF ITSELF.
+ *
+ * SPIFF publishes its finished per-employee sell-through to Core after every refresh (step 2 of the
+ * consolidation, live 2026-09-08), so painting the incentive screen no longer needs a whole extra
+ * Apps Script web-app round trip to another app. Verified against the live publications before this
+ * was switched: 2026-08-17 → 38 people / $181.50 and 2026-08-31 → 34 / $125.00, both reconciling
+ * with the programs' own stored actuals.
+ *
+ * incentiveApprove_ and incentiveSend_ deliberately DO NOT come here for it — they keep reading
+ * SPIFF live. That is not an oversight to be tidied away later: those two freeze vendor money into
+ * crew_incentive_history where it can never be recomputed, and a stale figure frozen there is
+ * silent and permanent, where a live read that fails is loud and recoverable in front of the person
+ * who just clicked Approve.
+ *
+ * CREW STILL DOES ITS OWN PERIOD MATCHING on whatever comes back, and that is worth keeping rather
+ * than trusting the scope. Core returns the rows SPIFF attributed to this fortnight; if SPIFF ever
+ * mis-scopes one, its window will not match the period it arrived under and applySpiffEarnings_
+ * reports it exactly as it always did. Filtering upstream did not remove the audit.
+ */
+function spiffProgressFromCore_(ppStart, cache) {
+  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+  if (!secret) return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script' };
+  var env;
+  try {
+    env = GXCore.publishedSpiffProgress(secret, String(ppStart || ''));
+  } catch (e) {
+    /* An unbound library, or a pin below v306 where this function does not exist, says so in its
+       own words. Otherwise it reads as "SPIFF earned nothing", which is the one thing a vendor
+       money column must never say when it does not know. */
+    return { ok: false, error: 'could not read published SPIFF from GX Core: ' +
+                               String((e && e.message) || e) };
+  }
+  if (!env || env.ok === false) {
+    return { ok: false, error: (env && env.error) || 'GX Core has no published SPIFF for this period' };
+  }
+  var d = env.payload;
+  if (!d || !d.rows) {
+    return { ok: false, error: 'GX Core returned a published SPIFF record with no rows' };
+  }
+  /* AGE IS RECOMPUTED FROM published_at, NEVER TAKEN FROM THE ENVELOPE, because this gets cached.
+     A cached age_minutes is frozen at the moment it was stored and would keep reporting "16 minutes"
+     for as long as the cache lives — a staleness check that itself goes stale is worse than none,
+     since it actively reassures. */
+  d.published_at = env.published_at || d.published_at || '';
+  d.published_by = env.published_by || d.published_by || '';
+  d.scope = env.scope || String(ppStart || '');
+  d.source = 'gxcore';
+  if (cache) {
+    try {
+      var body = JSON.stringify(d);
+      if (body.length < 95000) cache.put(SPIFF_PROGRESS_CACHE_KEY, body, SPIFF_PROGRESS_CACHE_S);
+    } catch (e) {}
+  }
+  d.from_cache = false;
+  return d;
+}
+
+/* Minutes since a publication, from its own timestamp. Returns null rather than 0 when there is
+   nothing usable — 0 would read as "just published", which is the reassuring answer and the wrong
+   one. */
+function spiffPublishedAgeMin_(publishedAt) {
+  var t = String(publishedAt || '').trim();
+  if (!t) return null;
+  /* SPIFF writes "2026-09-08 18:58:15" and Core's envelope writes ISO; accept both by giving the
+     space-separated form the T and Z it is missing rather than guessing a timezone per format. */
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(t)) t = t.replace(' ', 'T') + 'Z';
+  var d = new Date(t);
+  if (isNaN(d.getTime())) return null;
+  var mins = Math.round((new Date().getTime() - d.getTime()) / 60000);
+  return mins < 0 ? 0 : mins;          // clock skew is not the future
+}
+
+function spiffProgressFor_(ppStart, forScreen) {
   var cache = null;
-  if (useCache) {
+  if (forScreen) {
     try {
       cache = CacheService.getScriptCache();
       var hit = cache.get(SPIFF_PROGRESS_CACHE_KEY);
@@ -4398,6 +4477,9 @@ function spiffProgressFor_(ppStart, useCache) {
          Core's own incentive cache follows. */
       if (hit) { var c = JSON.parse(hit); c.from_cache = true; return c; }
     } catch (e) { cache = null; }
+    /* The screen's source. Everything below this line is the LIVE read, which approval, the send
+       preview and the probe still use. */
+    return spiffProgressFromCore_(ppStart, cache);
   }
   var base = '';
   try { base = String(GXCore.getKv('spiffProgress') || ''); } catch (e) {}
@@ -4849,7 +4931,19 @@ function applySpiffEarnings_(live, ppStart, useCache) {
        the thing this whole column exists to stop being missed. */
     if (!onBoard && (Number(e.earned) || 0) > 0) unmatched.push(e.name + ' ($' + e.earned + ')');
   });
+  /* AGE, ON EVERY READ. Nothing recomputes on the Core path — if SPIFF stops publishing the payload
+     just gets older and nothing throws, so an unchecked consumer renders a fortnight-old figure
+     with no error at all. Reported rather than refused: the figures are real, they are simply of a
+     date, and the screen can say so. Approval does not come through here — it reads SPIFF live. */
+  var ageMin = sp.source === 'gxcore' ? spiffPublishedAgeMin_(sp.published_at) : null;
   live.spiff = { ok: true, refreshed_at: sp.refreshed_at || '', from_cache: !!sp.from_cache,
+                 source: sp.source || 'spiff',
+                 published_at: sp.published_at || '', published_by: sp.published_by || '',
+                 age_minutes: ageMin,
+                 /* null age = no usable published_at, which is itself worth saying rather than
+                    letting it read as fresh. */
+                 stale: ageMin === null || ageMin > SPIFF_PUBLISHED_STALE_MIN,
+                 stale_after_min: SPIFF_PUBLISHED_STALE_MIN,
                  matched: matched,
                  unmatched: unmatched, people: (sp.by_employee || []).length,
                  rows_in_window: rows.length, rows_in_cache: (sp.rows || []).length,

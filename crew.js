@@ -2744,7 +2744,24 @@
         h.push('<p class="crew-inc-note crew-inc-warn">⚠️ SPIFF earnings could not be read (' +
                esc(sp.error) + '). The SPIFF column shows only what has been entered by hand.</p>');
       } else {
-        h.push('<p class="crew-inc-note">SPIFF earnings read from the SPIFF app' +
+        /* WHERE IT CAME FROM AND HOW OLD IT IS. The screen reads SPIFF's figures out of GX Core
+           now, and nothing on that path recomputes — if SPIFF stops publishing, the payload simply
+           gets older and nothing anywhere throws. So the age is stated, and a payload past the
+           engine's own threshold says so in the warning color rather than sitting there looking
+           current. Approval is unaffected: it reads SPIFF live, which is loud when it fails. */
+        var src = sp.source === 'gxcore' ? 'GX Core, published by SPIFF' : 'the SPIFF app';
+        var age = (sp.age_minutes == null) ? ''
+                : sp.age_minutes < 90 ? sp.age_minutes + ' min ago'
+                : sp.age_minutes < 60 * 48 ? Math.round(sp.age_minutes / 60) + ' hours ago'
+                : Math.round(sp.age_minutes / 1440) + ' days ago';
+        if (sp.stale) {
+          h.push('<p class="crew-inc-note crew-inc-warn">⚠️ These SPIFF earnings were published ' +
+                 (age || 'at an unknown time') + ' and nothing has refreshed them since. ' +
+                 'The figures are real but may be out of date — re-measure before relying on them. ' +
+                 'Approving reads SPIFF directly, so the frozen record will not use this copy.</p>');
+        }
+        h.push('<p class="crew-inc-note">SPIFF earnings read from ' + esc(src) +
+               (age ? ' ' + esc(age) : '') +
                (sp.refreshed_at ? ', last measured ' + esc(sp.refreshed_at) : '') + '. ' +
                esc(sp.matched) + ' of ' + esc(sp.people) + ' people matched.' + fresh +
                (sp.unmatched && sp.unmatched.length

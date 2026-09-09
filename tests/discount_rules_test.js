@@ -43,6 +43,13 @@ const LIB_SURFACE = [
   'gxUpsertEmployee', 'gxUpsertEmployees', 'gxUpsertUser',
   'getStores', 'resolveStore', 'getKv', 'setAvatar',
   'gxAddNote', 'gxIngestBug', 'dutchieEmployees',
+  /* gx_core.gs:3126, added in aec4bd7 which is BELOW the commit stamping GX_LIB_VERSION 306 —
+     so it really is in the snapshot appsscript.json pins, which is the only thing that matters.
+     Checked in the hub's own history rather than taken from the note announcing it: a library
+     call runs the version YOU pin, and "it is in gx_core.gs today" is the trap that guard exists
+     to catch. The incentive SCREEN reads SPIFF's published figures through it; approval and the
+     send preview still call SPIFF live, on purpose. */
+  'publishedSpiffProgress',
 ];
 
 let CALLS, LOGS, FETCHES, KV, KV_THROWS, LB_REPLY, LB_HTTP, USER, NOTE_RESULT, NOTE_THROWS;
