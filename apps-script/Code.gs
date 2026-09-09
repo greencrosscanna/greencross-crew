@@ -6369,6 +6369,29 @@ function incentiveSend_(p) {
     var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
     if (live.ok === false) return live;
     stampEmployeeIds_(live);
+    /* THE FLOATER FOLD, AND IT WAS MISSING HERE — the third time this exact omission has been
+       found, on the third of the three paths that shape these rows.
+
+       `incentiveApprove_` already carries the note: "Anything that shapes the ROWS has to run on
+       both paths or the two answers drift." There were never two paths. `getIncentive_` folds and
+       approval folds; this branch computed its own figures from the unfolded rows, so a floater
+       stayed split across the stores they covered — listed twice, counted toward two stores'
+       team-attendance headcounts, and paying two managers $25 each for one person showing up.
+
+       Caught 2026-09-09 on the practice period: this preview reported 39 people and $1,035 where
+       the record it is previewing froze 38 and $970. Drew Phillips, split Portland/River.
+
+       WHY IT MATTERS MORE THAN IT LOOKS, given this branch writes nothing. It is the ONLY way to
+       see the approval email before the fortnight it decides — that is the whole reason the route
+       is deploy-secret and allowed on an open period. This file's own argument for the shared body
+       builder is that "a preview that renders different HTML tests nothing"; a preview that renders
+       different NUMBERS is worse, because it looks like it worked. Same failure as the override
+       under-count on 2026-09-02, one line further up.
+
+       Ordered stamp → fold → SPIFF, matching both other paths exactly: an input is keyed on
+       employee_id and SPIFF folds onto whichever rows exist, so folding afterwards would mean
+       deciding which of two rows kept the vendor money. */
+    foldFloaters_(live);
     /* GX Core's scheme, the same one incentiveApprove_ will use. A preview computed against
        Leaderboard's copy would show a total the approval then does not produce. */
     var _sch = approvalThresholds_(live);

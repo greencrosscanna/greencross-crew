@@ -242,6 +242,29 @@ console.log('\nBoth paths fold');
      liveBranch.indexOf('applySpiffEarnings_') > liveBranch.indexOf('foldFloaters_'));
   ok('approval folds before it computes anybody',
      approve.indexOf('foldFloaters_') < approve.indexOf('incCalcBud_'));
+
+  /* THE THIRD PATH, and it was the one nobody checked. incentiveApprove_ carries the note
+     "Anything that shapes the ROWS has to run on both paths or the two answers drift" — written
+     when the fold was found missing from approval. There were never two paths: the deploy-secret
+     PREVIEW branch of incentive_send computes its own figures, and it did not fold, so a floater
+     stayed split across the stores they covered. It reported 39 people and $1,035 for a practice
+     period whose record froze 38 and $970 (Drew Phillips, Portland/River), on 2026-09-09.
+
+     It writes nothing, which is exactly why it went unnoticed and not at all why it is harmless:
+     it is the ONLY way to see the approval email before the fortnight it decides. This repo's
+     argument for the shared email builder is that a preview rendering different HTML tests
+     nothing — one rendering different NUMBERS is worse, because it looks like it worked. */
+  const send = body('incentiveSend_');
+  const previewBranch = send.slice(send.indexOf('if (preview) {'),
+                                   send.indexOf('} else {') + 1 || undefined);
+  ok('the send PREVIEW folds too — all three paths, not two',
+     previewBranch.indexOf('foldFloaters_') >= 0);
+  ok('…after stamping ids, so a fold has employee_ids to merge on',
+     previewBranch.indexOf('stampEmployeeIds_') < previewBranch.indexOf('foldFloaters_'));
+  ok('…and before SPIFF, so vendor money lands on one row not two',
+     previewBranch.indexOf('applySpiffEarnings_') > previewBranch.indexOf('foldFloaters_'));
+  ok('…and before anything is computed',
+     previewBranch.indexOf('foldFloaters_') < previewBranch.indexOf('incCalcBud_'));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nfloater fold: all passed');
