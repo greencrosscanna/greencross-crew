@@ -147,8 +147,22 @@
     try { remembered = localStorage.getItem(ENGINE_CACHE_KEY) || ''; } catch (e) {}
     if (remembered) {
       Engine = window.GXClient(remembered);
-      // Correct it for next time without making anyone wait for the answer.
-      GXCore.jsonp('config', { key: 'cfg.crewEngineUrl' }, { retries: 3, timeoutMs: 20000 })
+      /* Correct it for next time without making anyone wait for the answer — and WITHOUT RETRIES,
+         which is the part that was wrong.
+
+         `retries: 3, timeoutMs: 20000` on a background refresh means that when GX Core is slow —
+         the case this whole remembered-URL path exists for — this fires up to four requests over a
+         minute, each one queued against the SIX connections a browser will open to
+         script.google.com, and each one more work for the hub that is already behind. The user's
+         own data is in that same queue. Measured 2026-09-09 with GX Core's heavy routes at 36-90s:
+         15 of the page's 22 requests were to GX Core and most were retries of calls that had not
+         failed, only not answered yet.
+
+         Nothing here is worth that. It refreshes a value the app ALREADY HAS and is about to use
+         either way; if it does not answer, the remembered URL stays correct (it almost always is)
+         and the next load asks again. A long patient timeout and no retry is the right shape for
+         work nobody is waiting on: one connection, once, and it gets out of the way. */
+      GXCore.jsonp('config', { key: 'cfg.crewEngineUrl' }, { retries: 0, timeoutMs: 45000 })
         .then(function (r) {
           if (r && r.ok && r.value && String(r.value) !== remembered) {
             try { localStorage.setItem(ENGINE_CACHE_KEY, String(r.value)); } catch (e) {}
