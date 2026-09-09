@@ -2848,6 +2848,35 @@
   /* Named once. The renderer writes it and the approve handler restores it after a failed
      attempt; two literals is how the button came back from an error with the old wording. */
   var INC_APPROVE_LABEL = 'Approve';
+  /* Named for the same reason INC_APPROVE_LABEL is: the renderer and the busy-state restore below
+     both need this string, and two literals is exactly how a button comes back from a failed
+     attempt wearing a name the row had stopped using. */
+  var INC_SEND_LABEL = 'Send for approval';
+
+  /* ── THE WAIT BEFORE THE QUESTION ────────────────────────────────────────────────────────────
+   * Approve and Send both run a full server-side dry run BEFORE they show anything: it re-fetches
+   * the fortnight's performance, folds in SPIFF and totals it, so the confirm can say "38 people ·
+   * $475 to Capstone" instead of asking somebody to approve blind. That check is worth having and
+   * is staying. What was wrong is that neither button changed while it ran.
+   *
+   * Sky, 2026-09-09, on the practice period: "it takes 5-10sec for the pop-up confirm window to
+   * come up, the delay made me think it wasn't working." The busy state existed — it was just set
+   * AFTER the confirm, so the one moment feedback was needed was the one moment there was none.
+   *
+   * SEND IS THE WORSE OF THE TWO and it is MIKE's button. It had no busy state before its call at
+   * all: it disabled only on success, so through the whole wait the button stayed live and a second
+   * click was a second send. The route refuses a period that is already `pending`, so the second
+   * click's reward is an error about the work the first click was still doing.
+   *
+   * Restores what was there rather than a remembered default, so a caller cannot re-enable a button
+   * the renderer had deliberately disabled. */
+  function incBusy(btn, label) {
+    if (!btn) return function () {};
+    var wasText = btn.textContent, wasDisabled = btn.disabled;
+    btn.disabled = true;
+    btn.textContent = label;
+    return function () { btn.disabled = wasDisabled; btn.textContent = wasText; };
+  }
 
   /* THE PAYOUT SEQUENCE: approve -> print / file to Drive -> export (Sky, 2026-09-08).
      "each button is disabled until the prior has been done".
@@ -2911,7 +2940,8 @@
         h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">' +
                esc(INC_APPROVE_LABEL) + '</button>');
       } else {
-        h.push('<button type="button" class="gx-btn gx-btn-green" id="incSend">Send for approval</button>');
+        h.push('<button type="button" class="gx-btn gx-btn-green" id="incSend">' +
+               esc(INC_SEND_LABEL) + '</button>');
       }
     }
     /* PRINT AND EXPORT ARE THE TRAILING PAIR, IN EVERY STATE — emitted here rather than inside the
@@ -3808,8 +3838,15 @@
     var btn = document.getElementById('incApprove');
     try {
       var appr = (inc.approveToken && inc.approvePp === pp) ? inc.approveToken : '';
+      /* "Checking…", not "Approving…" — nothing has been approved yet and the next thing to happen
+         is a question, not a write. A button that says Approving before you have said yes is worse
+         than one that says nothing. */
+      var undoBusy = incBusy(btn, 'Checking…');
       var pre = await Engine.jsonp('incentive_approve',
         { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
+      /* Restored BEFORE the dialog, so cancelling leaves the row exactly as it was found — the
+         confirm is modal, so nothing can be clicked underneath it in the meantime. */
+      undoBusy();
       if (!pre || pre.ok === false) throw new Error((pre && pre.error) || 'could not approve');
       var msg = 'Approve ' + pp + '?\n\n' + pre.rows + ' people · $' +
                 Math.round(pre.payroll_total).toLocaleString('en-US') + ' to Capstone.\n\n' +
@@ -3843,6 +3880,7 @@
     var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
     var btn = document.getElementById('incSend');
     try {
+      incBusy(btn, 'Sending…');
       var r = await Engine.jsonp('incentive_send',
         { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send');
@@ -3854,7 +3892,11 @@
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not send: ' + ((e && e.message) || 'unknown'), true);
-    } finally { if (btn) btn.disabled = false; }
+    } finally {
+      /* The LABEL comes back too, from the one constant the renderer uses. Re-enabling without it
+         left the button reading "Sending…" for as long as the row stayed on screen. */
+      if (btn) { btn.disabled = false; btn.textContent = INC_SEND_LABEL; }
+    }
   }
 
   async function incSendBack(d) {
