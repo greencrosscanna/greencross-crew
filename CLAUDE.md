@@ -274,6 +274,14 @@ the sandbox and `METRC_USER_KEY` is unset, so `metrc_health` reports "Missing ke
 has ever come through it. Today its only consumer is `metrcAccessAudit_`, which answers "are retired
 staff still active in METRC?" — **names only, no writes**.
 
+> **API access is IN PROCESS — do not delete the connector (Sky, 2026-09-08).** The code sitting
+> unconnected looks exactly like the abandoned-connector habit this file warns about elsewhere, and
+> a future session reading the warnings without this line would reasonably propose ripping it out.
+> It is waiting on credentials, not on a decision. Leave it, and leave `METRC_BASE` pointed at the
+> sandbox until real keys arrive — a half-pointed connector is worse than an unpointed one.
+> **This is the opposite of the SwipeClock case below**, which was investigated and deliberately
+> abandoned; the two read alike from the code and are not alike at all.
+
 When production credentials land, METRC becomes the authority for:
 
 | Field | Notes |
