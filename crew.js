@@ -3651,21 +3651,41 @@
   /* Split out from the download so the file that reaches payroll can be asserted in a test rather
      than eyeballed once. Everything that decides an AMOUNT lives here.
 
-     THE SHAPE IS CAPSTONE'S, NOT OURS. It mirrors the sheet Capstone already keys off: an ADMIN
-     block, then one block per store in THEIR order, each sorted by surname, so a new starter at
-     River lands in the River block in the right alphabetical slot without anyone re-sorting it.
-     The section labels are Capstone's own words too — SOUTH for Commercial, BEND for what GX Core
-     calls Century, HILLSBORO for Baseline. That is deliberately NOT the store registry: it is a
-     third party's import format, and it must not drift when a store is renamed in Command Center.
-     Renaming a store is a GX decision; renaming a Capstone column is Capstone's. */
+     THE ORDER IS CAPSTONE'S. It mirrors the sheet Capstone already keys off: an ADMIN block, then
+     one block per store in THEIR order, each sorted by surname, so a new starter at River lands in
+     the River block in the right alphabetical slot without anyone re-sorting it. That has not
+     changed.
+
+     THE LABELS ARE OURS NOW — Sky, 2026-09-09: "the CSV export shows Commercial as SOUTH, it should
+     be Commercial", and all three when asked. SOUTH → Commercial, BEND → Century, HILLSBORO →
+     Baseline.
+
+     *This reverses what stood here, and the old reasoning is worth keeping because it was not
+     stupid.* It argued the labels were "Capstone's own words" and must not drift when a store is
+     renamed in Command Center — renaming a store is a GX decision, renaming a Capstone column is
+     Capstone's. The premise was that these strings were THEIRS. They are not: they are the names
+     GX used before the stores were renamed, frozen into this table and then justified after the
+     fact. Nobody at Capstone chose "SOUTH"; we did, years ago, and stopped using it everywhere
+     except here.
+
+     THE HAZARD THAT SURVIVES, and it is real: this column is the string a third party's import
+     matches on, so it is not ours to change casually — which is exactly why it was asked rather
+     than assumed. If a Capstone import ever rejects these rows, THIS is the change to look at
+     first, and reverting the three labels is the whole of the fix.
+
+     STILL NOT READ FROM THE STORE REGISTRY, deliberately. These are now the same strings
+     GXStores.name() would return, and it is tempting to derive them — don't. A payroll file that
+     silently re-labels itself the next time somebody renames a store in Command Center is the
+     failure the old comment was reaching for, and it stays worth preventing. A store rename should
+     make this table WRONG and visible, not correct-looking and different. */
   var CAPSTONE_SECTIONS = [
     { id: '',            label: 'ADMIN' },
-    { id: 'bend',        label: 'BEND' },
-    { id: 'hillsboro',   label: 'HILLSBORO' },
-    { id: 'river-rd',    label: 'RIVER' },
-    { id: 'center',      label: 'CENTER' },
-    { id: 'commercial',  label: 'SOUTH' },
-    { id: 'portland-rd', label: 'PORTLAND' }
+    { id: 'bend',        label: 'Century' },
+    { id: 'hillsboro',   label: 'Baseline' },
+    { id: 'river-rd',    label: 'River' },
+    { id: 'center',      label: 'Center' },
+    { id: 'commercial',  label: 'Commercial' },
+    { id: 'portland-rd', label: 'Portland' }
   ];
 
   /* "Kettler Mike C" — surname, first name, middle initial. Payroll matches on the legal name, so

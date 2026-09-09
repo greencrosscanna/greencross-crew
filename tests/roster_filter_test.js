@@ -293,8 +293,33 @@ eq('a single-store roster gets no pill row at all',
   const CREW = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
   const code = CREW.replace(/\/\*[\s\S]*?\*\//g, '');
   const REAL = ['Century', 'Baseline', 'Commercial', 'Portland', 'River'];
-  const planted = REAL.filter(n => new RegExp("['\"]" + n + "['\"]").test(code));
-  eq('no store display name is written into this app', planted, []);
+
+  /* ONE DELIBERATE EXCEPTION, CUT OUT BY NAME: the Capstone export's section table.
+   *
+   * Sky, 2026-09-09: "the CSV export shows Commercial as South, it should be Commercial" — and all
+   * three when asked, so the payroll file now carries Century / Baseline / Commercial rather than
+   * BEND / HILLSBORO / SOUTH. Those are registry display names, which is exactly what this check
+   * forbids, and forbidding them is still right EVERYWHERE ELSE.
+   *
+   * Why this one table is the opposite case. Every other label in this app is something a person
+   * reads on a screen, and a screen should follow the registry the moment a store is renamed in
+   * Command Center — that is the whole point of the rule. The Capstone labels are a THIRD PARTY'S
+   * IMPORT FORMAT: the string their system matches on. A payroll file that silently re-labels
+   * itself the next time somebody renames a store is not a screen catching up, it is a file that
+   * stops importing, and nobody would connect the two. A rename should make this table WRONG AND
+   * VISIBLE — a failing export somebody fixes on purpose — rather than different and plausible.
+   *
+   * So it is EXCISED, not exempted: the names are still banned in every other line of the file, and
+   * the assertion below pins that the table is the only thing excised. Deleting the exception
+   * without deleting the table brings the failure back, which is the correct outcome. */
+  const CAPSTONE = /var CAPSTONE_SECTIONS = \[[\s\S]*?\];/.exec(code);
+  eq('the Capstone table is still there to be excepted', !!CAPSTONE, true);
+  eq('and it is the table, not something that merely looks like it',
+     /label: 'Commercial'/.test(CAPSTONE ? CAPSTONE[0] : ''), true);
+  const scanned = code.replace(CAPSTONE ? CAPSTONE[0] : '', '');
+
+  const planted = REAL.filter(n => new RegExp("['\"]" + n + "['\"]").test(scanned));
+  eq('no store display name is written into this app, outside that one table', planted, []);
   eq('and none of them with an Rd suffix either',
      /Portland Rd|River Rd|Portland Road|River Road/.test(code), false);
   /* The one allowed local label, and why it is allowed. */

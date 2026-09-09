@@ -317,16 +317,44 @@ const big = M.incCsvRows({
     { full_name: 'Kristin Bailey',   store_id: 'river-rd',  payroll: 40 },
     { full_name: 'Zachary Babcock',  store_id: 'hillsboro', payroll: 40 },
     { full_name: 'Shane Styrt',      store_id: 'commercial', payroll: 25 },
+    /* ONE PERSON IN EVERY BLOCK, and Century/Center exist only for that. A fixture that skips a
+       store cannot see that store move: swapping Century and Baseline in CAPSTONE_SECTIONS left
+       this assertion green until 2026-09-09, because nobody in the fixture worked at Century. The
+       ORDER is the half of this format that is genuinely Capstone's, so it has to be the half a
+       reordering cannot slip past. */
+    { full_name: 'Chris Carney',     store_id: 'bend',      payroll: 100 },
+    { full_name: 'Tyson Farris',     store_id: 'center',    payroll: 20 },
+    { full_name: 'Amirah Montaner',  store_id: 'portland-rd', payroll: 25 },
     { full_name: 'Nobody Anywhere',  store_id: 'atlantis',  payroll: 10 },
   ], pp_start: '2026-08-03' }, true);
 const sections = big.slice(1).map(r => r[1]);
+/* THE ORDER IS STILL CAPSTONE'S — Baseline before River before Commercial is their sheet's order,
+   not alphabetical and not the registry's. Only the LABELS changed. */
 ok('ADMIN leads, then the stores in Capstone\'s order',
-   sections.join(',') === 'ADMIN,HILLSBORO,RIVER,RIVER,RIVER,SOUTH,UNASSIGNED');
-/* Commercial is SOUTH on their sheet, Baseline is HILLSBORO, Century is BEND. Deliberately NOT the
-   store registry — it is a third party's import format and must not move when a store is renamed
-   in Command Center. */
-ok('Commercial exports as SOUTH, their label not ours', sections.indexOf('SOUTH') > -1);
-const river = big.slice(1).filter(r => r[1] === 'RIVER').map(r => r[0]);
+   sections.join(',') ===
+     'ADMIN,Century,Baseline,River,River,River,Center,Commercial,Portland,UNASSIGNED');
+/* THE LABELS ARE OURS NOW (Sky, 2026-09-09): "the CSV export shows Commercial as SOUTH, it should
+   be Commercial", and all three when asked — SOUTH → Commercial, BEND → Century, HILLSBORO →
+   Baseline. The old comment here argued these were "Capstone's own words" and must not drift when a
+   store is renamed. They were never Capstone's: they are the names GX used before the stores were
+   renamed, frozen into the table and justified afterwards.
+   The hazard the old reasoning aimed at is still real — this column is what a third party's import
+   matches on — so if a Capstone import ever rejects these rows, this is the first thing to look at
+   and reverting the three labels is the whole fix. */
+ok('Commercial exports as Commercial, not SOUTH',
+   sections.indexOf('Commercial') > -1 && sections.indexOf('SOUTH') < 0);
+ok('Baseline exports as Baseline, not HILLSBORO',
+   sections.indexOf('Baseline') > -1 && sections.indexOf('HILLSBORO') < 0);
+/* NOT DERIVED FROM THE STORE REGISTRY, deliberately, even though these are now the same strings
+   GXStores.name() returns. A payroll file that silently re-labels itself the next time somebody
+   renames a store in Command Center is the failure the old comment was reaching for, and it stays
+   worth preventing: a rename should make this table WRONG and visible, not different and
+   plausible. */
+const CREWJS = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
+ok('the labels are a literal table, not read from the registry',
+   /var CAPSTONE_SECTIONS = \[[\s\S]{0,400}label: 'Commercial'/.test(CREWJS) &&
+   !/CAPSTONE_SECTIONS[\s\S]{0,400}GXStores\.name/.test(CREWJS));
+const river = big.slice(1).filter(r => r[1] === 'River').map(r => r[0]);
 ok('each block is sorted by surname, so a new starter lands in the right slot',
    river.join(' | ') === 'Bailey Kristin | Peterson Thomas | Pinkerton Noah');
 /* An unresolvable store would otherwise drop the person from the file entirely — a silent omission

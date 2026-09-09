@@ -1168,10 +1168,27 @@ never the pencil.
 
 ### The Capstone export is THEIR shape, not ours
 
-ADMIN, then one block per store in Capstone's order (BEND / HILLSBORO / RIVER / CENTER / SOUTH /
-PORTLAND), surname-sorted within each. Their labels — SOUTH is Commercial, BEND is Century —
-**deliberately not the store registry**, because it is a third party's import format and must not
-move when a store is renamed. Header column is `Bonus`; the value is payroll. Names are legal names,
+ADMIN, then one block per store in **Capstone's order** (Century / Baseline / River / Center /
+Commercial / Portland), surname-sorted within each. **The ORDER is theirs; the LABELS are ours.**
+
+*Corrected 2026-09-09.* This said the labels were Capstone's own words — SOUTH for Commercial, BEND
+for Century, HILLSBORO for Baseline — and were "deliberately not the store registry" because a
+third party's format must not move when a store is renamed. Sky: *"the CSV export shows Commercial
+as South, it should be Commercial"*, and all three when asked. **They were never Capstone's.** They
+are the names GX used before the stores were renamed, frozen into the table and justified
+afterwards; nobody at Capstone chose "SOUTH".
+
+The hazard the old note aimed at is still real, and is why this was asked rather than assumed: the
+label is the string a third party's import matches on. **If a Capstone import ever rejects these
+rows, this is the first thing to look at, and reverting the three labels is the whole fix.**
+
+**Still a literal table, deliberately NOT read from the registry** — even though these are now
+exactly what `GXStores.name()` returns. A payroll file that silently re-labels itself the next time
+somebody renames a store in Command Center is the real version of what the old note feared: a store
+rename should make this table *wrong and visible*, not different and plausible. Pinned, with the
+block order, by `tests/incentive_view_test.js` — whose fixture now puts a person in **every** block,
+because a store with nobody in it cannot be seen to move, and a Century/Baseline swap sat green
+until it did. Header column is `Bonus`; the value is payroll. Names are legal names,
 surname first, from `full_name` + the `middle_initial` roster field (backfilled for 36 of 39; three
 have none). Anyone whose store does not resolve exports under `UNASSIGNED` rather than vanishing.
 
