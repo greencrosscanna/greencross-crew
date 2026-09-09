@@ -2767,10 +2767,47 @@
   /* A closed record has nothing left to approve — it was approved when it was written — and an
      open period cannot be approved yet. Both just print, so the button says what it will actually
      do rather than offering an action the engine will refuse. */
+  /* THE PAYOUT SEQUENCE: approve -> print / file to Drive -> export (Sky, 2026-09-08).
+     "each button is disabled until the prior has been done".
+
+     ONE DEFINITION, TWO CONSUMERS — the renderer, to grey the button and say why, and the handler
+     itself, to refuse. A disabled attribute is a hint about a DOM node; the CSV is the file payroll
+     imports, so the refusal has to live somewhere a stale page cannot get past. Deciding it twice
+     is how the button and the action end up disagreeing.
+
+     APPROVAL IS THE ONLY GATE, and it is the only one with a real answer. Printing and exporting
+     are browser actions that leave no trace, so "has he printed yet" is not a question this app
+     can answer — gating Export on Print would mean inventing a state, and one that resets on
+     reload. Approval is recorded, irreversible without break glass, and is the moment the figures
+     stop moving. Both later steps hang off it.
+
+     The Drive copy is FILED BY THE APPROVAL ITSELF (filePayoutPdf_), so by the time Print lights up
+     the saved PDF already exists — Print is the paper copy, not the filing. */
+  function incPayoutGate(d, isImported) {
+    if (isImported) return { ok: true, why: '' };
+    if (d && d.payPeriod && d.payPeriod.current) {
+      return { ok: false, why: 'This pay period is still running — figures are not final until it ends.' };
+    }
+    var st = (d && d.workflow && d.workflow.status) || 'draft';
+    if (st === 'pending') {
+      return { ok: false, why: 'Waiting on the approver. Printing and exporting open up once the period is approved.' };
+    }
+    return { ok: false, why: 'Approve the period first — printing and exporting are the steps after it.' };
+  }
+
+  /* A button that is present but not yet its turn. Kept rendered rather than hidden: the row IS the
+     sequence, and a step that vanishes until it is due teaches nobody what comes next. */
+  function incStepBtn(id, label, cls, gate) {
+    return '<button type="button" class="gx-btn' + (cls ? ' ' + cls : '') + '" id="' + id + '"' +
+           (gate.ok ? '' : ' disabled title="' + esc(gate.why) + '"') + '>' + label + '</button>';
+  }
+
   function incHeadActions(d, isImported) {
     var wf = d.workflow || { status: 'draft' };
     var open = !!(d.payPeriod && d.payPeriod.current);
     var closed = !isImported && !open;              // ended, not yet a record
+    var gate = incPayoutGate(d, isImported);        // may Print / Export run yet?
+    var said = false;                               // has the row already said why it is grey?
     var h = ['<div class="crew-inc-actions">'];
 
     if (closed && wf.status === 'pending') {
@@ -2782,6 +2819,7 @@
       } else {
         h.push('<span class="crew-inc-wait">Sent to the approver' +
                (wf.sent_at ? ' ' + esc(wf.sent_at.slice(0, 10)) : '') + ' — locked until they decide</span>');
+        said = true;   // this already explains the grey buttons; a second line would only repeat it
       }
     } else if (closed) {
       /* Ready to go up. The approver gets to approve directly — making Sky email himself would be
@@ -2791,11 +2829,14 @@
       } else {
         h.push('<button type="button" class="gx-btn gx-btn-green" id="incSend">Send for approval</button>');
       }
-      h.push('<button type="button" class="gx-btn" id="incPrint">Print PDF</button>');
-    } else {
-      h.push('<button type="button" class="gx-btn gx-btn-green" id="incPrint">Print PDF</button>');
     }
-    h.push('<button type="button" class="gx-btn" id="incCsv">Export Payroll CSV (Capstone)</button>');
+    /* PRINT AND EXPORT ARE THE TRAILING PAIR, IN EVERY STATE — emitted here rather than inside the
+       branches, which is what makes the row read as the sequence. They used to be scattered: the
+       pending branch rendered no Print at all, so the step did not read as "not yet, and here is
+       why", it simply vanished and came back later. One place, one rule, and the branches above are
+       left to do the only thing that differs — whose turn it is to approve. */
+    h.push(incStepBtn('incPrint', 'Print PDF', gate.ok ? 'gx-btn-green' : '', gate));
+    h.push(incStepBtn('incCsv', 'Export Payroll CSV (Capstone)', '', gate));
     /* Gated on d.can_edit, which is the SAME flag the attendance ticks and SPIFF cells use — false
        on an imported period and false while one is locked pending approval. Deriving the button
        from it rather than re-deciding here is what stops the import offering a write the route
@@ -2822,6 +2863,11 @@
       h.push('<button type="button" class="crew-inc-glass" id="incReopen" ' +
              'title="Reopen this period so its figures can be corrected">Reopen…</button>');
     }
+    /* WHY THE ROW IS GREY, once, at the end — not only in a tooltip on each dead button, which is
+       invisible to anyone not hovering, and reads as a broken app. Suppressed when a branch above
+       has already explained itself: the preparer waiting on the approver is told exactly that, and
+       a second line repeating it in other words is noise on the screen Sky asked to be quieter. */
+    if (!gate.ok && !said) h.push('<span class="crew-inc-wait">' + esc(gate.why) + '</span>');
     h.push('</div>');
 
     /* A returned period carries the reason it came back. It sits with the buttons rather than in a
@@ -3399,6 +3445,11 @@
   /* Payroll only — SPIFF is vendor-funded and must never reach Capstone. Same four columns the
      Leaderboard export produced, so the file that lands in payroll does not change shape. */
   function incExportCsv(d, isImported) {
+    /* THE SAME GATE THE BUTTON READS, enforced where the file is actually made. `disabled` is a
+       property of one DOM node; this is the file payroll imports, and a page left open across an
+       un-approval, or any other route to this function, must not be able to produce it. */
+    var gate = incPayoutGate(d, isImported);
+    if (!gate.ok) { toast(gate.why, true); return; }
     var rows = incCsvRows(d, isImported);
     var csv = rows.map(function (r) {
       return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(',');
@@ -3589,7 +3640,18 @@
   if (window && typeof window.addEventListener === 'function') {
     window.addEventListener('beforeprint', syncDocTitle);
   }
-  function incPrintWithName(d) { window.print(); }
+  /* The BUTTON's print. Cmd+P is deliberately not intercepted — the browser's own print is the
+     user's, not the app's, and a page you are looking at should always be printable. What is gated
+     is this app OFFERING it as a step in the payout sequence. */
+  function incPrintWithName(d) {
+    /* Both halves read off the SAME object, so "which period" and "is it approved" cannot come
+       from two different places — the approve-then-print path hands in the freshly reloaded
+       record, and the button hands in what is on screen. */
+    var dat = d || inc.data || {};
+    var gate = incPayoutGate(dat, dat.source === 'imported');
+    if (!gate.ok) { toast(gate.why, true); return; }
+    window.print();
+  }
 
   /* APPROVE & PRINT.
      An already-closed record just prints — it was approved when it was written, and there is
@@ -3602,8 +3664,10 @@
     if (isImported) { incPrintWithName(d); return; }
     var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
     if (d.payPeriod && d.payPeriod.current) {
-      toast('This pay period is still open — sales bonuses are not final until it ends. Printing a draft.', true);
-      incPrintWithName(d);
+      /* Used to print a draft here. Draft printing went when the payout steps became ordered
+         (Sky, 2026-09-08) — so this says why rather than calling a print that would now refuse
+         and toast a second, different message on top of this one. */
+      toast('This pay period is still running — it cannot be approved or printed until it ends.', true);
       return;
     }
     var btn = document.getElementById('incPrint');
