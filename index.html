@@ -559,6 +559,16 @@
     .crew-inc-practice b { color: #ff9d9d; letter-spacing: .03em; }
     .crew-inc-dotlive { width: 6px; height: 6px; border-radius: 50%; background: var(--gx-green); }
     .crew-inc-sub { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    /* THE PRINT-ONLY TWIN, HIDDEN ON SCREEN — and this rule has to live out here.
+       It spent from v1.327 (2026-08-27) to 2026-09-09 nested one level too deep, inside the
+       @media print block, alongside a second nested `@media print` that revealed it again. Both
+       only ever applied while printing, so on screen NOTHING hid it: every period rendered the
+       plain-text period line beside the dropdown that already says the same thing. Harmless and
+       wrong, and invisible to the print stylesheet's own test, which only ever looks inside the
+       print block — which is exactly where the rule was not supposed to be.
+       Found 2026-09-09 while checking the practice period's banner, on a screen reading
+       "PRACTICE — Pay period 2026-08-17 → 2026-08-30" twice over. */
+    .crew-inc-printpp { display: none; }
     /* One bordered group: ‹ · select · › — the arrows step the same array the select holds. */
     .crew-inc-per { display: inline-flex; align-items: stretch; background: var(--gx-surface-2);
       border: 1px solid var(--gx-border); border-radius: var(--gx-radius-md, 8px); overflow: hidden; }
@@ -699,9 +709,9 @@
         color: #000 !important; }
       .crew-inc-sub { font-size: 11px; }
       /* The period has to be legible on paper — on screen it is a <select>, which prints as an
-         empty box, so a plain-text twin is revealed here and hidden on screen. */
-      .crew-inc-printpp { display: none; }
-      @media print { .crew-inc-printpp { display: inline !important; font-weight: 600; } }
+         empty box, so a plain-text twin is REVEALED here. It is hidden on screen by a rule in the
+         ordinary stylesheet, NOT by one in here — see that rule for why. */
+      .crew-inc-printpp { display: inline !important; font-weight: 600; }
       /* Tiles collapse to a plain row on paper — four bordered boxes are screen furniture. */
       .crew-inc-band { background: #fff !important; border-bottom: 1px solid #bbb !important;
         padding: 0 0 10px !important; }
@@ -1124,6 +1134,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.376"></script>
+  <script src="crew.js?v=1.377"></script>
 </body>
 </html>

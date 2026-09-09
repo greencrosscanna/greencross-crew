@@ -62,6 +62,27 @@ function printBlocks(src) {
 }
 const BLOCKS = printBlocks(CSS);
 
+/* The stylesheet with every @media print block CUT OUT — what the browser applies on screen.
+   Needed because "hidden on screen" cannot be checked by reading the print block: a rule that
+   drifts INTO one still greps as present while doing nothing on screen, which is exactly the bug
+   below. Built with the same brace matcher, so nested blocks come out whole. */
+function outsidePrint(src) {
+  let out = '', i = 0;
+  let j;
+  while ((j = src.indexOf('@media print', i)) >= 0) {
+    out += src.slice(i, j);
+    const open = src.indexOf('{', j);
+    let d = 0, end = src.length;
+    for (let k = open; k < src.length; k++) {
+      if (src[k] === '{') d++;
+      else if (src[k] === '}') { d--; if (!d) { end = k; break; } }
+    }
+    i = end + 1;
+  }
+  return out + src.slice(i);
+}
+const SCREEN = outsidePrint(CSS);
+
 console.log('\nNothing blanket-hides the document');
 {
   ok('there is at least one print block', BLOCKS.length > 0);
@@ -114,6 +135,16 @@ console.log('\nThe report survives to paper, the chrome does not');
   ok('the pay period has a plain-text twin that is shown in print',
      /crew-inc-printpp[^}]*\{[^}]*display\s*:\s*inline/.test(all));
   ok('…and the app actually renders that twin', /crew-inc-printpp/.test(APPJS));
+  /* AND IT IS HIDDEN ON SCREEN BY A RULE OUT HERE, which is the half this suite could not see.
+     From v1.327 to 2026-09-09 the hide rule sat INSIDE the print block, next to a nested
+     @media print that revealed it again — so both rules only ever applied while printing and
+     nothing hid the twin on screen. Every period rendered the period line twice: once in the
+     dropdown, once in plain text beside it. Harmless, wrong, and invisible to a test that only
+     ever reads the print block, which is precisely where the rule did not belong.
+     Asserted against the stylesheet with every @media print block CUT OUT, so a rule that drifts
+     back inside one fails here rather than reading as present. */
+  ok('the twin is hidden on SCREEN by a rule outside every print block',
+     /crew-inc-printpp\s*\{[^}]*display\s*:\s*none/.test(SCREEN));
 
   /* Money must not be hidden or dropped to a gray that vanishes on a laser printer. */
   ok('the payroll column is not hidden', !hides('crew-inc-pay'));
