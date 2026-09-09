@@ -2984,7 +2984,11 @@
        has never touched anything that paid anybody. It renders ONLY on a practice period, so the
        one button in this app that deletes rows cannot be reached from a screen where deleting rows
        would mean something. */
-    if (incIsPractice(d) && d.can_edit) {
+    /* `can_reset_practice`, not `can_edit`: resetting is a ROLE question and the route behind it
+       clears tabs rather than touching a pay period. Gated on can_edit the button disappeared the
+       moment practice was approved — which is precisely when somebody wants another run-through,
+       and would have left Reopen (approver-only) as the only way back for a preparer. */
+    if (incIsPractice(d) && d.can_reset_practice) {
       h.push('<button type="button" class="crew-inc-glass" id="incPracticeReset" ' +
              'title="Clear the practice period and start the run-through again">' +
              'Reset practice…</button>');
@@ -3212,7 +3216,15 @@
      through incPPDate, so a practice period reads as the fortnight it rehearses instead of as
      '' — which is what an un-stripped key produced, and it fails SILENTLY in exactly the place
      this app has already been bitten twice (a payroll document named after nothing). */
-  function incIsPractice(d) { return !!d && d.source === 'practice'; }
+  /* KEYED ON `practice`, NOT ON `source` — and that distinction is the fix of 2026-09-09.
+     `source` says where the figures come from ('live' or 'imported') and nothing else; `isImported`
+     is derived from it and guards every money path on this screen. Reading practice OFF it gave
+     that flag a third value the guards do not know, so an approved practice period was recomputed
+     by the live math over frozen rows with no target — $2,220 on screen against a record frozen at
+     $970, with Approve offered on a period already approved.
+     `practice` is set on BOTH shapes, so this answers "whose figures are these" without touching
+     the question of how to read them. */
+  function incIsPractice(d) { return !!(d && d.practice); }
   function incPPDate(pp) { return String(pp || '').replace(/^practice-/, ''); }
 
   var INC_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];

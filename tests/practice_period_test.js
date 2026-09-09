@@ -157,14 +157,49 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
      d.payPeriod.start === 'practice-2026-08-17');
   ok('the real fortnight is still carried, for the label and the dates',
      d.practice && d.practice.source_start === '2026-08-17' && d.payPeriod.end === '2026-08-30');
-  ok('and it is marked, so the screen can say so', d.source === 'practice');
+  /* `source` KEEPS ITS TWO VALUES. It answers one question — live computation or frozen record —
+     and `isImported` is derived from it in the browser, guarding every money path on the screen.
+     Giving it a third value is what let an APPROVED practice period be recomputed by the live math
+     over frozen rows that carry no target: $2,220 on screen against a record frozen at $970, and
+     Approve offered on a period already approved. Found 2026-09-09, an hour after shipping. */
+  ok('source still says only where the figures come from', d.source === 'live');
+  ok('and `practice` is the separate fact — whose figures they are', !!d.practice);
+  ok('resetting is offered on a role, not on the period being editable',
+     d.can_reset_practice === true);
   ok('a practice period is never treated as the current one', d.payPeriod.current === false);
 
   const r = run('2026-08-17');
   ok('an ordinary period is untouched by any of this',
      seen.fetched === '2026-08-17' && seen.spiff === '2026-08-17' &&
      seen.inputs === '2026-08-17' && seen.wf === '2026-08-17' &&
-     r.source === 'live' && !r.practice);
+     r.source === 'live' && !r.practice && r.can_reset_practice === undefined);
+}
+
+/* ── 3b. An APPROVED practice period is read as a frozen record, not recomputed ─────────────── */
+console.log('\nAn approved practice period is served like any other closed record');
+{
+  const G = decomment(fnSrc(GS, 'getIncentive_'));
+  const branch = G.slice(G.indexOf('if (isPracticePeriod_(want) &&'),
+                         G.indexOf("if (want && importedBy[want]) {"));
+  ok('it is served from its own history tab', /historyPeriods_\(want\)/.test(branch) &&
+     /incentiveHistory_\(/.test(branch));
+  /* THE BUG, stated as an absence. Setting source here is what bypassed every money guard in the
+     browser — `isImported` is derived from it, and the live calculators then ran over history rows
+     that have no `target`, scoring every manager against a missing goal. */
+  ok('it does NOT relabel `source` — the browser derives isImported from it',
+     !/\bph\.source\s*=/.test(branch));
+  ok('it is read-only', /ph\.can_edit = false/.test(branch));
+  ok('but still marked as practice', /ph\.practice = practiceInfo_/.test(branch));
+  ok('and still offers a reset, which is a role question not a period one',
+     /ph\.can_reset_practice = canEdit_\(auth\)/.test(branch));
+  /* The approver keeps break glass on it — reopening a practice period is part of the rehearsal. */
+  ok('the approver can still reopen it', /ph\.can_approve = canApprove_\(auth\)/.test(branch));
+
+  /* HISTORY_HEADERS has never carried a target, which is why recomputing a frozen row cannot work
+     and why this must be read, not calculated. Asserted so nobody "fixes" the symptom by adding a
+     target column instead. */
+  const H = GS.slice(GS.indexOf('var HISTORY_HEADERS'), GS.indexOf('];', GS.indexOf('var HISTORY_HEADERS')));
+  ok('frozen rows carry no target, so they can only ever be READ', !/'target'/.test(H));
 }
 
 /* ── 4. Approval: the same split, on the path that writes ───────────────────────────────────── */
@@ -289,6 +324,13 @@ console.log('\nThe screen says it where somebody about to approve will see it');
      /crew-inc-practice/.test(render));
   ok('the badge is its own state, not a shade of "as paid"',
      /is-practice">Practice/.test(render));
+  /* Keyed on `practice`, not on `source` — see above. This is the browser half of the same fix. */
+  ok('the browser reads practice off its own field, never off `source`',
+     /function incIsPractice\(d\) \{ return !!\(d && d\.practice\); \}/.test(render));
+  ok('isImported still derives from source alone, with its two values',
+     /var isImported = d\.source === 'imported';/.test(render));
+  ok('and the reset button hangs off the role flag, not the period being editable',
+     /incIsPractice\(d\) && d\.can_reset_practice/.test(render));
   /* Checked BEFORE `imported`: an approved practice period is served from a history tab, and
      "Imported" is the one word on this screen that means "this was paid". */
   const facts = decomment(fnSrc(JS, 'incFacts'));
@@ -326,7 +368,7 @@ console.log('\nReset is the one button here that deletes, and it cannot be point
   /* Rendered only on a practice period, so the one destructive control in this app cannot be
      reached from a screen where deleting rows would mean something. */
   ok('the button renders only on a practice period',
-     /if \(incIsPractice\(d\) && d\.can_edit\)/.test(btn));
+     /if \(incIsPractice\(d\) && d\.can_reset_practice\)/.test(btn));
   ok('and the route is registered', /case 'incentive_practice_reset'/.test(decomment(GS)));
 }
 

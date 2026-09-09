@@ -576,6 +576,26 @@ So: **fetch and score against `practiceSource_(pp)`, store against `pp`** — an
 so the screen and the record cannot disagree about which fortnight was scored.
 `tests/practice_period_test.js` pins both directions and the ordering.
 
+**`source` KEEPS ITS TWO VALUES — `live` and `imported` — and practice is a SEPARATE field.**
+`source` answers one question: is this a live computation or a frozen record. The browser derives
+`isImported` from it, and every money path on the screen hangs off that one flag — whether
+`budCalc`/`mgrCalc` recompute a row or return the stored one, whether `paidOf` reads the frozen
+payroll, whether the attendance cell is live, whether Approve renders at all.
+
+*Corrected 2026-09-09, an hour after shipping, and it is worth keeping because the mistake was so
+tidy.* The first cut set `source: 'practice'`, which reads as an obvious third case and is a third
+value the guards do not know. An **approved** practice period is served from its history tab, so it
+came back as frozen rows relabeled `practice`; `isImported` went false; the live math ran over
+rows that carry no `target` — `HISTORY_HEADERS` has never had one — every manager scored against a
+missing goal and hit the top tier, and the screen read **$2,220** against a record frozen at
+**$970**, offering Approve on a period already approved. Nothing errored.
+
+Whose figures they are is a different question from how to read them. Two facts, two fields:
+`d.practice` is set on both shapes and is the only thing `incIsPractice` reads. And
+`can_reset_practice` is its own flag for the same reason — resetting is a ROLE question, while
+`can_edit` is a fact about the period, so gating the button on `can_edit` made it vanish at exactly
+the moment somebody wants another run-through.
+
 **`payPeriod.start` is rewritten to the key, and that is what keeps the browser ignorant.** It
 already posts `payPeriod.start` on every save, send, approve and reopen, so one rewrite in the
 engine routes all of them. The browser learns exactly two things: `incPPDate` (a key is not a date —

@@ -5089,8 +5089,23 @@ function getIncentive_(p) {
     ph.can_edit = false;
     ph.can_approve = canApprove_(auth);
     ph.inputs = inputsFor_(want);
-    ph.source = 'practice';
+    /* `source` STAYS 'imported', and this is the whole correction of 2026-09-09.
+       It answers ONE question — where do these figures come from, a live computation or a frozen
+       record — and the browser's every money guard hangs off it: `isImported` decides whether
+       budCalc/mgrCalc recompute a row or return the stored one, whether paidOf reads the frozen
+       payroll, whether the attendance cell is live, and whether Approve renders at all.
+       Labelling this payload `practice` gave that flag a third value it does not know, so an
+       APPROVED practice period was recomputed by the live math over history rows that carry no
+       `target` (HISTORY_HEADERS has never had one) — every manager scored against a missing goal,
+       hit the top tier, and the screen read $2,220 against a record frozen at $970. It also
+       offered Approve on a period already approved.
+       WHOSE figures they are is a different question, and `practice` below is where it is
+       answered. Two facts, two fields; collapsing them is what broke it. */
     ph.practice = practiceInfo_(want, ph.pp_end || '');
+    /* Resetting is a ROLE question, not a period-state one — the route checks canEdit_ and clears
+       tabs, never a pay period. Without this the button vanishes the moment practice is approved,
+       which is exactly when somebody wants to run through it again. */
+    ph.can_reset_practice = canEdit_(auth);
     ph.why_read_only = 'Practice period, already approved — the figures as they were frozen. '
                      + 'Reopen it or reset practice to run through the close again.';
     return ph;
@@ -5164,9 +5179,11 @@ function getIncentive_(p) {
      and must not touch the real fortnight's rows. Rewriting payPeriod.start once, here, is what
      lets the browser stay entirely ignorant of practice keys: it already posts payPeriod.start. */
   if (isPracticePeriod_(want)) {
+    /* `source` stays 'live' — these figures ARE a live computation, and that is all `source`
+       claims. See the note on the frozen branch above for what happened when it said 'practice'. */
     live.practice = practiceInfo_(want, live.payPeriod.end);
     live.payPeriod = { start: want, end: live.payPeriod.end, current: false };
-    live.source = 'practice';
+    live.can_reset_practice = canEdit_(auth);
   }
 
   live.inputs = inputsFor_(live.payPeriod.start);
