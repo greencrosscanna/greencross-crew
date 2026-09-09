@@ -125,9 +125,16 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   employee × permission location — from turning one sheet read into hundreds. **v211** is the floor for the bug reporter:
   that is where `gxIngestBug` began self-installing the `bug_reports.context` header, and `gxWrite_`
   maps records onto the sheet's REAL header row — so on an older pin the state snapshot is dropped
-  **silently** and the report still saves and still returns ok. **v225** is the current pin
-  (2026-08-25) and the floor for the avatar write: `GXCore.setAvatar` does not exist below it, and
-  `roster_identity` calls it for an avatar-only save. (v219 fixed `getPeriodGoals`, which Crew does
+  **silently** and the report still saves and still returns ok. **v225** is the floor for the
+  avatar write: `GXCore.setAvatar` does not exist below it, and `roster_identity` calls it for an
+  avatar-only save. **v310** is the floor for the bug-filed email — below it `gxIngestBug` sends
+  nothing and Crew notifies nobody on a filing — and **v311** is the floor for that email carrying
+  the JS errors the page threw before submit, which is the field that took three reports to
+  diagnose a Sales bug. Crew already passes `context`, so it gets that line; Crew has never sent a
+  bug email of its own, so there is no duplicate send to remove here (the thing v310's note warns
+  inventory and performance about). *These are FLOORS — the sentence naming a CURRENT pin was
+  deleted 2026-09-09 rather than updated, because it had been wrong six times and this file already
+  says two lines up that the version is deliberately not written here.* (v219 fixed `getPeriodGoals`, which Crew does
   not call, added the `blocked` status to `brain_notes` and made deploy-secret errors say *missing*
   vs *bad*; v220 fixed a regression in that blocked-status write path.) The engine's `health` route
   reports the version the LIVE DEPLOYMENT runs (`lib`), which is the only pin that matters — a manifest
@@ -1372,7 +1379,10 @@ Core. Coordination is the **central brain-notes inbox** in GX Core: `/gxbrain` r
 SessionStart hook surfaces the same inbox.
 
 App-specific facts for the sync check: app key **`crew`** in GX Core; `appsscript.json` pins `GXCore`
-**v225** (this line has said **v179**, **v194**, **v203**, **v204**, **v211** and **v220** — check `health`, not prose);
+at a version this file no longer names — ask `?action=health` (the `lib` field) or `./gxpins.sh --live`.
+*(It used to name one, and was wrong seven times running: **v179**, **v194**, **v203**, **v204**,
+**v211**, **v220**, **v225**. A number nothing can contradict rots the moment somebody re-pins, which
+is exactly what happened on 2026-09-09 — the line still read v225 while the app ran 306.)*
 version recorded on deploy via the shared `deploy_version` endpoint (`deploy.sh`, reading `crew.js?v=N`)
 using the shared untracked `.gx_deploy_secret`.
 
