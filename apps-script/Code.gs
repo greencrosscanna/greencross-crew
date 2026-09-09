@@ -6683,6 +6683,12 @@ function incentiveSend_(p) {
                                          preview disagreeing is exactly the confusion a preview
                                          exists to remove. */
                                       overrides: pre.overrides || { rows: [], net: 0 },
+                                      /* Same rule as `overrides` above: the JSON has to say what
+                                         the email says. `would_block` alone reports that coverage
+                                         PASSED and cannot show that it RAN — and "no store is
+                                         missing" and "the check never happened" are the same empty
+                                         array. This is how a dry run proves the guard is live. */
+                                      coverage: pre.coverage || null,
                                       would_block: pre.would_block || [],
                                       unmatched: pre.unmatched || [],
                                       to: wfApproverEmails_(), html: html,
