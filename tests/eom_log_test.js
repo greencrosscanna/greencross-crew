@@ -27,7 +27,7 @@ const ok = (l, c) => c ? console.log('  ✓ ' + l) : (fail++, console.log('  ✗
 const M = (function () {
   let src = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
   const TAIL = '})();', cut = src.lastIndexOf(TAIL);
-  src = src.slice(0, cut) + '\n; return { eomMonth, eomWhen };\n' + src.slice(cut);
+  src = src.slice(0, cut) + '\n; return { eomMonth, eomWhen, eomFold };\n' + src.slice(cut);
   src = src.replace('(function () {', 'return (function () {');
   const mk = () => ({ className: '', innerHTML: '', style: { setProperty() {} },
     classList: { add() {}, remove() {} }, setAttribute() {}, getAttribute: () => null,
@@ -89,6 +89,95 @@ console.log('\nThe old span function is gone, not just unused');
   const code = CREW.replace(/\/\*[\s\S]*?\*\//g, '');
   ok('eomSpan no longer exists in the code', code.indexOf('eomSpan') < 0);
   ok('and the log row renders eomWhen', /crew-eomlog-when', esc\(eomWhen\(h\)\)/.test(code));
+}
+
+console.log('\nOne row per person per month — Noah appeared twice under Sep 2026');
+{
+  /* The log appends whenever cfg.eom's `since` changes, so re-picking the same person in the same
+     month (star toggled off and on, or the pick simply made again) wrote a second row. The engine
+     no longer creates those, but crew_eom_history is APPEND-ONLY and the ones already written are
+     still in it — so the screen folds them, or the fix would only reach months nobody has had yet.
+     Rows arrive NEWEST FIRST, which is what these fixtures reproduce. */
+  const noahLate  = { employee_id: 'noah_pinkerton', started_at: '2026-09-04T17:02:00Z', current: true };
+  const noahFirst = { employee_id: 'noah_pinkerton', started_at: '2026-09-01T19:43:19.774Z' };
+  const shawn     = { employee_id: 'shawn_todd',     started_at: '2026-08-01T18:00:00Z' };
+
+  const folded = M.eomFold([noahLate, noahFirst, shawn]);
+  ok('the two Noah rows become one', folded.length === 2);
+  ok('and it is still September', M.eomWhen(folded[0]) === 'Sep 2026');
+  /* The month is won when it is FIRST given; a re-pick does not restart it. */
+  ok('keeping the EARLIEST start, not the re-pick',
+     folded[0].started_at === '2026-09-01T19:43:19.774Z');
+  ok('and staying the current holder', folded[0].current === true);
+  ok('the month before is untouched', folded[1].employee_id === 'shawn_todd');
+
+  /* THE CARE IN IT: only consecutive runs fold. Somebody else holding it in between makes those
+     genuinely two reigns, and collapsing them would erase a real handover. */
+  const ayla = { employee_id: 'ayla_mcarthur', started_at: '2026-09-03T18:00:00Z' };
+  const sandwich = M.eomFold([noahLate, ayla, noahFirst]);
+  ok('a run broken by somebody else is NOT folded', sandwich.length === 3);
+
+  /* Same person, different months, is two awards. */
+  const noahAug = { employee_id: 'noah_pinkerton', started_at: '2026-08-02T18:00:00Z' };
+  ok('the same person in two months keeps both rows',
+     M.eomFold([noahFirst, noahAug]).length === 2);
+
+  /* A deliberate "nobody" is part of the record; two of them running together are still one gap,
+     and a nobody must never fold into a person. */
+  const nob1 = { employee_id: '', nobody: true, started_at: '2026-07-20T18:00:00Z' };
+  const nob2 = { employee_id: '', nobody: true, started_at: '2026-07-04T18:00:00Z' };
+  ok('two consecutive "nobody" rows in one month fold', M.eomFold([nob1, nob2]).length === 1);
+  ok('and a nobody never folds into a person',
+     M.eomFold([nob1, { employee_id: '', nobody: false, started_at: '2026-07-02T18:00:00Z' }]).length === 2);
+
+  /* Undatable rows must not all collapse onto each other — '—' is not a month. */
+  const junk1 = { employee_id: 'x', started_at: '' };
+  const junk2 = { employee_id: 'x', started_at: 'nope' };
+  ok('rows with no usable date are left alone rather than merged', M.eomFold([junk1, junk2]).length === 2);
+
+  ok('an empty log folds to nothing, without throwing', M.eomFold([]).length === 0);
+  ok('and a missing one too', M.eomFold(undefined).length === 0);
+
+  /* AND THE RENDERER ACTUALLY USES IT. Everything above drives eomFold directly, so all of it
+     passes just as happily with the call deleted from the list builder and the duplicate back on
+     screen — which is exactly what mutation-testing this file did. A function that is only ever
+     correct in its own test is not a fix. */
+  const code = fs.readFileSync(__dirname + '/../crew.js', 'utf8')
+                 .replace(/\/\*[\s\S]*?\*\//g, '');
+  ok('the log is built from the FOLDED list, not the raw one',
+     /eomFold\(state\.eomHistory\)\.forEach/.test(code));
+  ok('…and nothing iterates the raw history to build rows',
+     !/state\.eomHistory\.forEach/.test(code));
+}
+
+console.log('\nThe "set by" column is gone from the screen, not from the record');
+{
+  const CREW = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
+  const HTML = fs.readFileSync(__dirname + '/../index.html', 'utf8');
+  const code = CREW.replace(/\/\*[\s\S]*?\*\//g, '');
+  ok('the log row no longer renders it', code.indexOf('crew-eomlog-by') < 0);
+  ok('and its CSS went with it rather than being left orphaned',
+     HTML.indexOf('crew-eomlog-by') < 0);
+  /* The engine still WRITES set_by and source — losing the column is a screen decision, and the
+     provenance it carried (observed vs backfilled) is still on the sheet. */
+  const GS = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+  ok('the engine still records who set it', /EOM_HEADERS = \[[^\]]*'set_by'/.test(GS));
+  ok('…and whether it was observed or backfilled', /EOM_HEADERS = \[[^\]]*'source'/.test(GS));
+}
+
+console.log('\nThe ENGINE stops writing the duplicate in the first place');
+{
+  const GS = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+  const code = GS.replace(/\/\*[\s\S]*?\*\//g, '');
+  ok('eomSync_ dedups on the MONTH, not on the exact since value',
+     /eomSameMonth_\(last\.started_at, cur\.since\)/.test(code));
+  ok('…and no longer compares started_at to since exactly',
+     code.indexOf("String(last.started_at) === String(cur.since") < 0);
+  /* Month off the string here too — the same trap that had the log reporting August as July. */
+  ok('the engine reads the month off the string, never through Date',
+     /function eomMonthKey_[\s\S]{0,200}\/\^\(\\d\{4\}\)-\(\\d\{2\}\)\//.test(code));
+  ok('two unusable dates are NOT treated as the same month',
+     /return !!x && x === y;/.test(code));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll good.\n');

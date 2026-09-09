@@ -901,6 +901,30 @@
     return row ? displayName(row) : String(h.name || h.employee_id || '');
   }
 
+  /* Fold consecutive entries that are the same person in the same month down to one, keeping the
+     EARLIEST — the month is won when it is first given, and a re-pick does not restart it. The
+     list arrives newest-first, so the earliest of a run is the LAST of it. `current` is carried
+     across the run: if any of the folded rows is the live one, the row that survives is too. */
+  function eomFold(rows) {
+    var out = [];
+    (rows || []).forEach(function (h) {
+      var prev = out.length ? out[out.length - 1] : null;
+      var sameone = prev &&
+        String(prev.employee_id || '') === String(h.employee_id || '') &&
+        !!prev.nobody === !!h.nobody &&
+        eomMonth(prev.started_at) !== '—' &&
+        eomMonth(prev.started_at) === eomMonth(h.started_at);
+      if (!sameone) { out.push(h); return; }
+      /* Newest-first, so `h` is the older one — it carries the start we want to keep. */
+      var merged = {};
+      for (var k in prev) if (Object.prototype.hasOwnProperty.call(prev, k)) merged[k] = prev[k];
+      merged.started_at = h.started_at;
+      merged.current = !!(prev.current || h.current);
+      out[out.length - 1] = merged;
+    });
+    return out;
+  }
+
   function eomHistoryNodes() {
     if (state.eomHistory === undefined) return [el('p', 'crew-hint', 'Loading the reign log…')];
     if (state.eomHistoryErr) return [el('p', 'crew-hint', esc(state.eomHistoryErr))];
@@ -908,17 +932,28 @@
       return [el('p', 'crew-hint', 'Nobody has held it yet. Each pick is recorded here from now on.')];
     }
     var list = el('ol', 'crew-eomlog');
-    state.eomHistory.forEach(function (h) {
+    /* ONE ROW PER PERSON PER MONTH. Noah Pinkerton appeared twice under Sep 2026 (Sky,
+       2026-09-08): the log appends whenever cfg.eom's `since` changes, so re-picking the same
+       person in the same month — the star toggled off and on, or the pick simply made again —
+       wrote a second row. The engine no longer creates those, but the tab is APPEND-ONLY and the
+       ones already written are still in it, so the screen has to fold them or the fix would only
+       apply to months nobody has had yet.
+
+       CONSECUTIVE ONLY, and that is the whole care in it. Noah, then Ayla, then Noah again inside
+       one month really is two reigns and stays two rows; what folds is the same name repeating
+       with nothing in between. */
+    eomFold(state.eomHistory).forEach(function (h) {
       var li = el('li', 'crew-eomlog-row');
       /* A deliberate "nobody" is part of the record, not a gap in it — the same distinction
          Core draws by storing an empty value instead of deleting the key. */
       li.appendChild(el('span', 'crew-eomlog-name' + (h.nobody ? ' is-nobody' : ''),
         h.nobody ? 'Nobody held it' : esc(eomLogName(h))));
       li.appendChild(el('span', 'crew-eomlog-when', esc(eomWhen(h))));
-      /* Provenance, because the two are not the same claim. An observed reign is what GX Core
-         actually held; a backfilled one is somebody's memory of a month that predates the log. */
-      li.appendChild(el('span', 'crew-eomlog-by',
-        h.backfilled ? 'recorded' : (h.set_by ? 'set by ' + esc(h.set_by) : '')));
+      /* The "set by mike" / "recorded" column is gone (Sky, 2026-09-08). It carried real
+         provenance — an observed reign is what GX Core actually held, a backfilled one is
+         somebody's memory of a month predating the log — but this is a short list of who won, read
+         at a glance, and who typed it is not what anybody comes here for. Both are still on
+         `crew_eom_history` (set_by, source), so the record is unchanged; only the column is gone. */
       list.appendChild(li);
     });
     return [list];

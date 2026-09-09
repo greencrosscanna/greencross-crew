@@ -7819,6 +7819,18 @@ function eomCurrent_() {
  * else held it is a NEW reign and gets its own row, while re-reading an unchanged value appends
  * nothing however many times the tab is opened.
  */
+/* 'yyyy-MM' off the string, or '' when there is nothing usable. Two unparseable values are NOT
+   the same month — returning '' for both and comparing equal would silently merge reigns whose
+   dates are broken, which is the one case a human needs to see. */
+function eomMonthKey_(iso) {
+  var m = /^(\d{4})-(\d{2})/.exec(String(iso || ''));
+  return m ? m[1] + '-' + m[2] : '';
+}
+function eomSameMonth_(a, b) {
+  var x = eomMonthKey_(a), y = eomMonthKey_(b);
+  return !!x && x === y;
+}
+
 function eomSync_(names) {
   var rows = readTab_(EOM_TAB, EOM_HEADERS);
   var cur  = eomCurrent_();
@@ -7829,8 +7841,16 @@ function eomSync_(names) {
   /* A cleared award has no timestamp of its own — Core stores an empty VALUE, which cannot carry
      one — so a clear is deduped on "the log already ends in a clear" rather than on its time,
      and its recorded_at is when Crew first saw it rather than when it happened. */
+  /* ONE ROW PER PERSON PER MONTH, not per `since` value.
+     This compared started_at to cur.since exactly, so re-picking the SAME person in the same month
+     — the star toggled off and on, or the pick simply made again — wrote a SECOND row: Noah
+     Pinkerton twice under Sep 2026 (Sky, 2026-09-08). Employee of the Month is a monthly award, so
+     a second row for the same person in the same month is not a second reign, it is the same one
+     recorded twice. Month is compared off the STRING, never through `new Date` — a `since` on the
+     1st is UTC midnight and getMonth() answers local, which is the same trap that had the log
+     reporting August as July. */
   var same = last && String(last.employee_id) === wantId &&
-             (wantId === '' || String(last.started_at) === String(cur.since || ''));
+             (wantId === '' || eomSameMonth_(last.started_at, cur.since));
   if (same) return { rows: rows, error: '' };
 
   var now = new Date().toISOString();
