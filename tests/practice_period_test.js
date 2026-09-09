@@ -120,11 +120,14 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
     seen.history = [];
     const src =
       PREFIX + fnSrc(GS, 'isPracticePeriod_') + fnSrc(GS, 'practiceSource_') + fnSrc(GS, 'practiceInfo_') +
+      /* THE SHIPPED perfForWrite_, not a stub. The window/key split moved inside it, and it is the
+         thing under test here — a stub would answer whatever this file decided it should. */
+      fnSrc(GS, 'perfForWrite_') +
       fnSrc(GS, 'getIncentive_') + '; return getIncentive_;';
     const fn = new Function(
       'requireCrew_', 'historyPeriods_', 'incentiveHistory_', 'periodList_', 'canApprove_',
       'canEdit_', 'inputsFor_', 'fetchLivePerf_', 'incentiveThresholds_', 'stampEmployeeIds_',
-      'foldFloaters_', 'dualRoleRows_', 'applySpiffEarnings_', 'wfGet_', src)(
+      'foldFloaters_', 'dualRoleRows_', 'applySpiffEarnings_', 'wfGet_', 'rosterCoverage_', src)(
       () => ({ ok: true, user: 'mike', role: 'admin' }),
       (pp) => { seen.history.push(pp); return []; },
       () => ({ ok: true }),
@@ -137,7 +140,8 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       () => ({ ok: true, thresholds: { budtender: {} } }),
       () => {}, () => {}, () => {},
       (live, pp) => { seen.spiff = pp; },
-      (pp) => { seen.wf = pp; return null; });
+      (pp) => { seen.wf = pp; return null; },
+      () => ({ ok: true, checked: true, missing: [] }));
     return fn({ pp_start: want });
   };
 
@@ -208,8 +212,16 @@ console.log('\nincentiveApprove_ splits them the same way — and writes to the 
   const A = decomment(fnSrc(GS, 'incentiveApprove_'));
   /* Source-level, because running approval needs the whole scoring stack and a sheet. The claim is
      narrow and exact: the fetch consults practiceSource_, and the write does not. */
+  /* THE SPLIT MOVED INTO perfForWrite_ (2026-09-09) so approval and the send preview cannot shape
+     rows differently — they had disagreed three times. So this is now two claims, and both must
+     hold: approval delegates, and the thing it delegates to still asks for the WINDOW. Asserting
+     only the first would pass against a helper that fetched the key. */
+  const PFW = decomment(fnSrc(GS, 'perfForWrite_'));
+  ok('approval delegates the fetch to the one shared shaper', /perfForWrite_\(pp\)/.test(A));
   ok('the performance fetch asks for the source window',
-     /fetchLivePerf_\(isPracticePeriod_\(pp\) \? practiceSource_\(pp\) : pp\)/.test(A));
+     /fetchLivePerf_\(isPracticePeriod_\(pp\) \? practiceSource_\(pp\) : pp\)/.test(PFW));
+  /* And approval must not have kept a second copy that could drift back apart. */
+  ok('...and approval no longer fetches on its own', !/fetchLivePerf_\(/.test(A));
   ok('the frozen rows are keyed on pp — the practice key — not on the window',
      /rows\.push\(\[pp,/.test(A));
   ok('the history sheet is chosen by the same key', /historySheet_\(pp\)/.test(A));

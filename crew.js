@@ -2769,6 +2769,32 @@
            '<strong>Payroll</strong> is the company’s share — it excludes SPIFF, which vendors ' +
            'fund — and it is the only figure the Capstone export carries. Hover a payroll figure to ' +
            'see what makes it up.</p>');
+    /* A WHOLE STORE MISSING FROM THE FIGURES, said out loud on the screen the approver reads.
+       This is the one failure with no positive evidence anywhere: every person shown has plausible
+       numbers, no total looks short because the absent people never contributed to one, and the
+       only symptom is that some names are not there. Nobody spots an absence on a payroll screen,
+       so it has to be stated. The engine refuses the approval and the send outright; this is what
+       explains WHY before somebody clicks and gets a refusal they cannot account for. */
+    var cov = d.coverage;
+    if (!isImported && cov && cov.ok === false) {
+      if (cov.reason === 'registry_unreadable') {
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ The employee roster could not be read, ' +
+               'so we cannot confirm every store is represented in these figures. Approving is ' +
+               'blocked until it can be checked.</p>');
+      } else {
+        var missNames = (cov.missing || []).map(function (st) {
+          /* window-qualified: crew.js is required in Node by the test harnesses, which stub
+             `window` with only what the app reads at import time. A bare global here is a
+             ReferenceError there, not a falsy check. */
+          return (window.GXStores && window.GXStores.name) ? window.GXStores.name(st) : st;
+        });
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ <strong>No sellers at all from ' +
+               esc(missNames.join(', ')) + '.</strong> The roster shows staff active there for ' +
+               'this period, so these figures are almost certainly missing a store rather than ' +
+               'showing one that sold nothing. Everything else on this screen will look normal. ' +
+               'Reload before approving — approving is blocked until it is resolved.</p>');
+      }
+    }
     var sp = d.spiff;
     if (!isImported && sp) {
       var fresh = sp.refreshed_at ? ' <button type="button" class="crew-inc-refresh" id="incSpiffRefresh">' +

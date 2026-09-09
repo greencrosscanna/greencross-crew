@@ -944,6 +944,85 @@ checking something else. It has not yet occurred on a real period.
 
 Pinned by `tests/floater_fold_test.js`.
 
+### A missing store looks exactly like a store that sold nothing (2026-09-09)
+
+A blip in the sales feed does not throw. GX Core catches a per-store failure into `slice.errors`,
+carries on, and answers `ok:true` with that store's sellers simply absent — and `fetchLivePerfFromCore_`
+maps a short list as faithfully as a complete one, by design (field-by-field, so a renamed field
+cannot arrive as an undefined that reads downstream as a zero). `incentiveBlockers_` guarded exactly
+two things, an open period and an unreadable SPIFF, so **approval would freeze it into
+`crew_incentive_history`**, which nothing but break glass can edit.
+
+**THE DANGEROUS CASE IS ONE STORE, NOT ALL OF THEM,** and getting that backwards is why this took a
+cross-app conversation to see. Every store failing pays $0 to everybody — conspicuous, queried,
+never approved. **One** store failing gives a screen where every person shown has entirely plausible
+figures and one store's staff are simply not on it. No total looks short, because the absent people
+never contributed to one. The only evidence is an absence, and nobody spots an absence on a payroll
+screen. There is nothing downstream to catch it, which is the whole argument for gating at the source.
+
+**The guard for the smaller risk already existed, with this exact argument.** `spiff_unreadable`
+refuses because unreadable vendor money would freeze at $0 for everyone with no way to tell
+afterwards. But SPIFF **cancels out of `payroll`** on both sides and the Capstone export carries
+payroll only — while the seller list **decides** payroll. Crew guarded the figure that never reaches
+the payroll file and left the one that *is* the payroll file open.
+
+- **`store_id`, NEVER `storeSlug`.** `storeSlug` is LEADERBOARD's vocabulary (`baseline`, `century`,
+  `portland`, `river`); `home_store` on the registry is GX Core's (`hillsboro`, `bend`,
+  `portland-rd`, `river-rd`). Only `center` and `commercial` coincide. Comparing the wrong one
+  reports **four of six stores missing on a perfectly good period, every single time**, which is how
+  a guard gets switched off in its first week. `stampEmployeeIds_` already resolves `store_id`.
+- **ACTIVE staff only, and hire dates against the PERIOD.** A closed store's people are retired, so
+  it is never expected and never cries wolf. A store that opened *after* the fortnight has active
+  staff now and sold nothing then — a fact about the calendar, not a failed fetch — so `hire_date`
+  is compared against `payPeriod.end`. Read live every time; a headcount typed in once is how these
+  decay. (core-admin's caution, and it was right: the first sketch used a constant.)
+- **Corporate is not a store.** Sky, Mike and the floaters live there, and `foldFloaters_` books
+  every floater there. A store with no sellers is a signal; corporate with no sellers is Tuesday.
+- **An unreadable registry is not a clean one.** `stampEmployeeIds_` swallowed a failed
+  `GXCore.getEmployees()` into `emps = []`, which is harmless for stamping (nobody matches,
+  `unmatched` says so) and fatal here: an empty roster means "no store expected anybody", which
+  reads as **full coverage**. `roster_stores` is `null` on a failed read and `{}` only on a real
+  empty one, and the two produce different blockers.
+- **It is acknowledged, not bypassed** — `coverage_ok=yes`, same shape as `spiff_unavailable=yes`,
+  because a store really can sell nothing and payroll cannot be blocked forever on that. The
+  acknowledgement is **written into every row's note**, so the record says the figures were known to
+  be short rather than quietly claiming a store sold nothing. Neither ack clears the other.
+- **The screen reports it; only the write paths refuse.** A period missing a store is still worth
+  *preparing*, as long as it says so.
+
+**DO NOT DELETE THIS WHEN GX Core's `stores_failed` ARRIVES.** They cover different failures and the
+overlap is partial. `stores_failed` reports a store that **errored**. This reports a store that
+returned nobody **for any reason** — a credential that authenticates and hands back an empty set, a
+200 with nothing in it — which raises nothing anywhere and is the failure neither app can currently
+see. It also holds when `cfg.incentiveEngine` selects Leaderboard, which sends no `stores_failed` at
+all; a guard covering one of two engines is one somebody will trust in the wrong configuration.
+
+### `perfForWrite_` — the row shape, in one place
+
+`incentiveApprove_` freezes the history rows; the send preview computes the total that goes in the
+approval email, and `sent_total` binds the approval token to it. So the two must produce identical
+rows — and they did it from two hand-kept copies of the same four steps.
+
+**They have disagreed three times, by three different mechanisms**: the floater fold missing on
+approval (2026-09-02), the same fold missing on the preview (2026-09-09), and the preview summing
+the *computed* payroll where approval sums the figure a human recorded (2026-09-02). Three breaks by
+three routes is not a run of bad luck; it is two call sites that agree only while somebody remembers
+to edit both. `perfForWrite_(pp)` does the fetch (with the practice window/key split), the stamp and
+the fold, and `getIncentive_` calls it too — the screen is not a write path, but it is what the
+approver *looks* at.
+
+**What is deliberately NOT in it:** the SPIFF fold, the threshold read and the practice remap. All
+three are ordered differently on purpose — approval refuses an open period *before* paying for a
+SPIFF round trip, and the preview is allowed on an open period at all. Folding them in would mean
+reproducing those differences behind a flag, which is the two-copies problem wearing a parameter.
+This is the row **shape**, which is the thing that broke.
+
+`incentiveProbe_` still calls `fetchLivePerf_` directly, on purpose: it reports the raw stages so a
+broken join can be told apart from a broken fetch.
+
+Both pinned by `tests/roster_coverage_test.js`, which also asserts neither write path fetches,
+stamps or folds on its own.
+
 ### "Send for approval" never worked, and it was not the email (2026-09-02)
 
 Sky: *"not getting the approval email, tested by me clicking and by Mike clicking, it worked

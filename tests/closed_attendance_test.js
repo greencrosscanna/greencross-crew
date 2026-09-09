@@ -179,7 +179,10 @@ console.log('\nThe ENGINE half — the closed branch actually sends the inputs')
      return. Reading just that slice keeps this from passing on the LIVE branch's own assignment
      further down, which has always been there. */
   const from = GS.indexOf('if (want && importedBy[want])', i);
-  const to = GS.indexOf('var live = fetchLivePerf_', from);
+  /* The live branch used to open `var live = fetchLivePerf_(...)`; the fetch, the stamp and the
+     floater fold moved into perfForWrite_ so approval and the send preview cannot shape rows
+     differently. The anchor moved with it. */
+  const to = GS.indexOf('var live = perfForWrite_', from);
   const branch = GS.slice(from, to);
   ok('the closed-period branch is found', from > 0 && to > from);
   ok('…and it attaches the inputs, or the check mark has no data',

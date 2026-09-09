@@ -220,9 +220,26 @@ console.log('\nBoth paths fold');
     throw new Error('unterminated ' + name);
   }
   const screen = body('getIncentive_'), approve = body('incentiveApprove_');
-  ok('the screen folds floaters', /foldFloaters_\s*\(/.test(screen));
+
+  /* ALL THREE PATHS NOW FOLD THROUGH ONE FUNCTION (perfForWrite_, 2026-09-09). This block used to
+     assert that each path called foldFloaters_ itself, which was the honest test of an arrangement
+     where each path DID fold itself — and which broke three times, because three hand-kept copies
+     of four steps agree only while somebody remembers to edit all three.
+
+     So the claim is stronger now, not weaker: the fold has to happen, it has to happen in the
+     shared shaper, and no path may keep a private copy that could drift back apart. Asserting only
+     "the shaper folds" would pass against a path that had stopped calling the shaper at all, so
+     both halves are checked for every path. */
+  const shaper = body('perfForWrite_');
+  ok('the one shared shaper folds floaters', /foldFloaters_\s*\(/.test(shaper));
+  ok('…after stamping ids, so a fold has employee_ids to merge on',
+     shaper.indexOf('stampEmployeeIds_') >= 0 &&
+     shaper.indexOf('stampEmployeeIds_') < shaper.indexOf('foldFloaters_'));
+  ok('the screen folds floaters, through the shaper', /perfForWrite_\s*\(/.test(screen));
   ok('and so does approval — the record and the screen must agree',
-     /foldFloaters_\s*\(/.test(approve));
+     /perfForWrite_\s*\(/.test(approve));
+  ok('neither keeps a private fold that could drift back apart',
+     !/foldFloaters_\s*\(/.test(screen) && !/foldFloaters_\s*\(/.test(approve));
   /* Order matters as much as presence: fold BEFORE the inputs and SPIFF are attached, or an
      attendance tick and the vendor money land on whichever of two rows is about to disappear.
 
@@ -233,15 +250,17 @@ console.log('\nBoth paths fold');
      "the fold happens after the inputs" and failed, while the ordering it exists to protect was
      never touched. Nothing folds on the closed branch: those rows were folded when they were
      approved, and a frozen period is not recomputed. */
-  const liveBranch = screen.slice(screen.indexOf('var live = fetchLivePerf_'));
+  const liveBranch = screen.slice(screen.indexOf('var live = perfForWrite_'));
   ok('the live branch is where the fold and the inputs meet', liveBranch.length > 0);
+  /* The fold is now the LAST thing perfForWrite_ does, so "folded before X" is "the shaper ran
+     before X" — structurally first on every path rather than merely earlier in the listing. */
   ok('the screen folds before it reads the inputs',
-     liveBranch.indexOf('foldFloaters_') >= 0 &&
-     liveBranch.indexOf('inputsFor_') > liveBranch.indexOf('foldFloaters_'));
+     liveBranch.indexOf('perfForWrite_') >= 0 &&
+     liveBranch.indexOf('inputsFor_') > liveBranch.indexOf('perfForWrite_'));
   ok('and before SPIFF earnings are folded on',
-     liveBranch.indexOf('applySpiffEarnings_') > liveBranch.indexOf('foldFloaters_'));
+     liveBranch.indexOf('applySpiffEarnings_') > liveBranch.indexOf('perfForWrite_'));
   ok('approval folds before it computes anybody',
-     approve.indexOf('foldFloaters_') < approve.indexOf('incCalcBud_'));
+     approve.indexOf('perfForWrite_') < approve.indexOf('incCalcBud_'));
 
   /* THE THIRD PATH, and it was the one nobody checked. incentiveApprove_ carries the note
      "Anything that shapes the ROWS has to run on both paths or the two answers drift" — written
@@ -258,13 +277,13 @@ console.log('\nBoth paths fold');
   const previewBranch = send.slice(send.indexOf('if (preview) {'),
                                    send.indexOf('} else {') + 1 || undefined);
   ok('the send PREVIEW folds too — all three paths, not two',
-     previewBranch.indexOf('foldFloaters_') >= 0);
-  ok('…after stamping ids, so a fold has employee_ids to merge on',
-     previewBranch.indexOf('stampEmployeeIds_') < previewBranch.indexOf('foldFloaters_'));
+     previewBranch.indexOf('perfForWrite_') >= 0);
+  ok('…and keeps no private fold of its own',
+     previewBranch.indexOf('foldFloaters_') < 0 && previewBranch.indexOf('stampEmployeeIds_') < 0);
   ok('…and before SPIFF, so vendor money lands on one row not two',
-     previewBranch.indexOf('applySpiffEarnings_') > previewBranch.indexOf('foldFloaters_'));
+     previewBranch.indexOf('applySpiffEarnings_') > previewBranch.indexOf('perfForWrite_'));
   ok('…and before anything is computed',
-     previewBranch.indexOf('foldFloaters_') < previewBranch.indexOf('incCalcBud_'));
+     previewBranch.indexOf('perfForWrite_') < previewBranch.indexOf('incCalcBud_'));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nfloater fold: all passed');

@@ -108,6 +108,11 @@ function load(sheet) {
     ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
     ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('stampEmployeeIds_')}
     ${grab('thresholdProblems_')}
+    /* stampEmployeeIds_ publishes roster_stores for the coverage guard, and filters it on
+       hire_date against the period end, so it needs the real date normalizer. Stubbing it would
+       let a Date object through here and pass, while the shipped code compares text.
+       NO BACKTICKS IN THIS COMMENT - it is inside a template literal. */
+    ${grab('normDate_')}
     var NICKNAMES = Object.create(null);
     return { incentiveImport_: incentiveImport_, incentiveHistory_: incentiveHistory_,
              incentiveRelink_: incentiveRelink_, historyPeriods_: historyPeriods_,

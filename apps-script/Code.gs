@@ -4184,7 +4184,12 @@ function fetchLivePerfLeaderboard_(ppStart) {
  * render, and it simply cannot hold an input until somebody is matched to it. */
 function stampEmployeeIds_(live) {
   var emps = [];
-  try { emps = GXCore.getEmployees() || []; } catch (e) { emps = []; }
+  /* A FAILED READ IS NOT AN EMPTY ROSTER, and the difference is invisible three lines later. The
+     stamping below is happy either way — nobody matches, and `unmatched` says so. `rosterCoverage_`
+     is not: an empty roster means "no store expected anybody", which reads as full coverage and is
+     the exact silent-pass this guard exists to prevent. So the failure is carried, not swallowed. */
+  var _rosterRead = true;
+  try { emps = GXCore.getEmployees() || []; } catch (e) { emps = []; _rosterRead = false; }
   /* A MERGED record is a tombstone GX Core keeps so the old employee_id still resolves for
      Leaderboard and SPIFF joins. It is still returned here and still matches on name, so without
      this filter a live row can be stamped with an id nothing renders — and an input saved against
@@ -4273,6 +4278,36 @@ function stampEmployeeIds_(live) {
   (live.managers || []).forEach(function (r) { stamp(r); stampStore(r); });
   if (live.admin) stamp(live.admin);
   live.unmatched = unmatched;
+
+  /* WHICH STORES HAD SOMEBODY TO SELL, published here because this function has already paid for
+     the registry read and the incentive screen was taking 20-30s before anyone started adding
+     round trips to it. `rosterCoverage_` consumes it AFTER the floater fold, which is the reason
+     this is the expected side only and not the whole answer: folding moves a floater to corporate,
+     so a `seen` set computed here would credit a store with a seller it is about to lose.
+
+     ACTIVE ONLY, and that is what keeps a CLOSED store from crying wolf every fortnight: its people
+     are retired, so it is never expected. Retired staff are still stamped above — they really did
+     work past periods — they simply do not make their old store mandatory today.
+
+     HIRE DATE AGAINST THE PERIOD, NOT AGAINST TODAY. A store that opened after the fortnight being
+     approved has active staff now and sold nothing then, which is a fact about the calendar and not
+     a failed fetch. Dates are TEXT here, so the comparison is a string compare and stays correct. */
+  live.roster_stores = null;
+  if (_rosterRead) {
+    var end = normDate_((live.payPeriod || {}).end || '');
+    var byStore = Object.create(null);
+    roster.forEach(function (e) {
+      if (String(e.status || '').toLowerCase() === 'retired') return;
+      /* Corporate is not a selling floor — Sky, Mike and the floaters live there. A store with no
+         sellers is a signal; corporate with no sellers is Tuesday. */
+      var slug = String(e.home_store || '').trim().toLowerCase();
+      if (!slug || slug === 'corporate') return;
+      var hired = normDate_(e.hire_date || '');
+      if (hired && end && hired > end) return;
+      byStore[slug] = (byStore[slug] || 0) + 1;
+    });
+    live.roster_stores = byStore;
+  }
 }
 
 /* ══ Floaters — one person, one row ══════════════════════════════════════════════════════════════
@@ -5138,9 +5173,10 @@ function getIncentive_(p) {
     return h;
   }
 
-  /* THE WINDOW IS NOT THE KEY. A practice period rehearses a real fortnight, so the performance
-     fetch asks for that fortnight — `want` itself is a key GX Core has never heard of. */
-  var live = fetchLivePerf_(isPracticePeriod_(want) ? practiceSource_(want) : want);
+  /* Shared with both write paths — the fetch (with the practice window split), the stamp and the
+     floater fold. See `perfForWrite_`. The screen is not a write path, but it is the thing the
+     approver LOOKS at, so it must be shaped by the same code that shapes what gets frozen. */
+  var live = perfForWrite_(want);
   if (live.ok === false) return live;
   live.source = 'live';
   /* GX Core is the source of truth for the scheme. Leaderboard sends its own read of the same kv
@@ -5156,15 +5192,18 @@ function getIncentive_(p) {
                  + 'read from there and no longer travels in the performance payload.' };
   }
   live.thresholds = coreT.thresholds;
-  stampEmployeeIds_(live);
-  /* BEFORE the inputs and before SPIFF: an input is keyed on employee_id, and SPIFF folds onto
-     whichever rows exist, so merging afterwards would mean deciding which of two rows kept the
-     attendance tick and which kept the vendor money. Fold first and there is only ever one row to
-     attach either to. */
-  foldFloaters_(live);
+  /* The stamp and the floater fold already ran inside `perfForWrite_`, in that order and for the
+     reasons recorded there: an input is keyed on employee_id and SPIFF folds onto whichever rows
+     exist, so merging afterwards would mean deciding which of two rows kept the attendance tick
+     and which kept the vendor money. */
   /* AFTER the fold, so a floater's own two budtender rows are already one and the only thing left
      to report is a genuine cross-section clash rather than the split this just repaired. */
   dualRoleRows_(live);
+  /* REPORTED HERE, NOT ENFORCED — this route paints a screen and writes nothing, and a period that
+     is missing a store is still worth preparing as long as it SAYS it is missing a store. The
+     refusal lives on the two paths that write. Also runs after the fold: a floater is booked to
+     corporate there, so a store's coverage has to be judged on the rows as they will be frozen. */
+  rosterCoverage_(live);
   /* THE ONLY CACHED SPIFF READ IN THE ENGINE. This route paints a screen; it writes nothing, and
      the round trip it saves is ~4s of a load that was taking 20-30. Approval and the send preview
      deliberately do NOT pass this.
@@ -5573,22 +5612,18 @@ function incentiveApprove_(p) {
     return { ok: false, error: pp + ' is already a closed record and cannot be approved again' };
   }
 
-  /* THE SOURCE WINDOW, NOT THE KEY — same split as getIncentive_, and the stakes are higher here:
-     this is the path that writes. `pp` is where the rows go; `practiceSource_(pp)` is the fortnight
-     whose numbers they are. */
-  var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
+  /* THE SOURCE WINDOW, NOT THE KEY — `pp` is where the rows go; `practiceSource_(pp)` is the
+     fortnight whose numbers they are. That split, the stamp and the floater fold are all inside
+     `perfForWrite_` now, which the send preview calls too: the two paths used to keep hand-copies
+     of these four steps and have disagreed three times. */
+  var live = perfForWrite_(pp);
   if (live.ok === false) return live;
-  stampEmployeeIds_(live);
-  /* THE SAME FOLD THE SCREEN DOES, and it was missing here — which is the exact divergence this
-     file keeps warning about. getIncentive_ folded a floater's per-store rows into one Corporate
-     row; approval did not, so the screen showed Drew Phillips once and the frozen record kept him
-     twice, under Portland and River, which is precisely what the floater work existed to stop.
-     No money moved (both his rows compute $0), but the permanent record disagreed with the screen
-     that authorised it — and a record that cannot be reconciled with what the approver saw is the
-     thing approval exists to produce.
-     Anything that shapes the ROWS has to run on both paths or the two answers drift. */
-  foldFloaters_(live);
-  var _open = incentiveBlockers_(live, false, false);
+  /* Read once, used by both blocker calls below. A store missing from the figures is worth
+     refusing for the same reason unreadable SPIFF is, and it is acknowledged the same way — the
+     acknowledgement is recorded on every row written, so the record says the figures were known to
+     be short rather than quietly claiming a store sold nothing. */
+  var coverageAck = String(p.coverage_ok || '') === 'yes';
+  var _open = incentiveBlockers_(live, false, false, coverageAck);
   if (_open.length) return { ok: false, error: _open[0].message };
 
   /* FOLD SPIFF IN BEFORE COMPUTING. This was missing until 2026-08-31: approval computed from
@@ -5616,11 +5651,21 @@ function incentiveApprove_(p) {
      successful read with no programs is NOT a failure and needs no acknowledgement. */
   var spiffFailed = !!(live.spiff && live.spiff.ok === false);
   var spiffAck = String(p.spiff_unavailable || '') === 'yes';
-  var _blocked = incentiveBlockers_(live, spiffFailed, spiffAck);
+  var _blocked = incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck);
   if (_blocked.length) {
-    return { ok: false, error: _blocked[0].message + ' Fix the SPIFF connection and approve ' +
-             'again, or re-send with spiff_unavailable=yes to approve without them and say so ' +
-             'on the record.' };
+    /* The remedy names the flag for the blocker that actually fired. It used to say
+       `spiff_unavailable=yes` whatever had gone wrong, so a coverage refusal would send whoever
+       read it to set a flag that does not clear it. */
+    var _b = _blocked[0];
+    var _fix = _b.code === 'spiff_unreadable'
+      ? ' Fix the SPIFF connection and approve again, or re-send with spiff_unavailable=yes to '
+        + 'approve without them and say so on the record.'
+      : (_b.code === 'store_missing' || _b.code === 'coverage_unknown')
+        ? ' Reload the period and approve again once the figures are complete, or re-send with '
+          + 'coverage_ok=yes if you have confirmed the store really did sell nothing — that '
+          + 'confirmation is written onto every row.'
+        : '';
+    return { ok: false, error: _b.message + _fix };
   }
 
   var scheme = approvalThresholds_(live);
@@ -5630,7 +5675,11 @@ function incentiveApprove_(p) {
   var T = scheme.T, inputs = inputsFor_(pp), rows = [];
   var now = new Date().toISOString();
   var by  = String(auth.user || '');
-  var noteTxt = 'approved by ' + by + (spiffFailed ? ' — SPIFF unreadable, vendor amounts not included' : '');
+  var _cov = rosterCoverage_(live);
+  var noteTxt = 'approved by ' + by + (spiffFailed ? ' — SPIFF unreadable, vendor amounts not included' : '')
+    + (_cov.ok ? '' : (_cov.reason === 'registry_unreadable'
+        ? ' — store coverage unverified, approved anyway'
+        : ' — no sellers from ' + _cov.missing.join(', ') + ', approved anyway'));
   function push(section, r, c, extra) {
     var computed = c.payroll == null ? c.bonus : c.payroll;
     var i = inputs[r.employee_id] || {};
@@ -6333,7 +6382,109 @@ function incentiveSpiffReport_(live, failed, ack, total) {
  * and it is deliberately allowed on an OPEN period so the email can be dry-run before the first
  * real fortnight closes — but it must SAY the same things, or "the preview looked fine" means
  * nothing. Same predicates, one list, two dispositions. */
-function incentiveBlockers_(live, spiffFailed, spiffAck) {
+/**
+ * THE ROWS THAT GET WRITTEN, SHAPED ONCE.
+ *
+ * `incentiveApprove_` freezes `crew_incentive_history`; the send preview computes the total that
+ * goes in the approval email, and `sent_total` binds the approval token to it. So the two must
+ * produce identical rows, and until now they produced them from two hand-kept copies of the same
+ * four steps.
+ *
+ * THEY HAVE DISAGREED THREE TIMES, BY THREE DIFFERENT MECHANISMS: the floater fold was missing on
+ * approval (2026-09-02), then missing on the preview (2026-09-09), and the preview summed the
+ * COMPUTED payroll where approval sums the figure a human recorded (2026-09-02). Three breaks by
+ * three routes is not bad luck; it is two call sites that agree only as long as somebody remembers
+ * to edit both. This converts "they agree" into "they cannot disagree".
+ *
+ * THE WINDOW IS NOT THE KEY — a practice period rehearses a real fortnight, so the fetch asks for
+ * that fortnight while the rows are stored under the practice key. That split lives here now, in
+ * one place, rather than being re-derived correctly at each call site.
+ *
+ * WHAT IS DELIBERATELY *NOT* IN HERE: the SPIFF fold, the threshold read and the practice remap.
+ * All three are ordered differently on purpose — approval refuses an open period BEFORE paying for
+ * a SPIFF round trip, and the preview is allowed on an open period at all. Folding them in would
+ * have to reproduce those differences behind a flag, which is the same two-copies problem wearing
+ * a parameter. This is the row SHAPE, which is the thing that broke.
+ */
+function perfForWrite_(pp) {
+  var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
+  if (live.ok === false) return live;
+  stampEmployeeIds_(live);
+  foldFloaters_(live);
+  return live;
+}
+
+/**
+ * DID A WHOLE STORE GO MISSING FROM THESE FIGURES?
+ *
+ * A blip in the sales feed does not throw. GX Core catches a per-store failure, carries on, and
+ * answers ok:true with that store's sellers simply absent — and Crew's mapping is field-by-field,
+ * so it maps a short list as faithfully as a complete one. Nothing anywhere says a store is gone.
+ *
+ * THE DANGEROUS CASE IS ONE STORE, NOT ALL OF THEM. Every store failing gives $0 for everybody,
+ * which is conspicuous — somebody queries it and nobody approves it. ONE store failing gives a
+ * screen where every person shown has entirely plausible figures and one store's staff are just not
+ * there. There is no short total to notice, because the absent people never contributed one. The
+ * only evidence is an absence, which is why this has to be caught at the source: there is nothing
+ * downstream for a human to spot.
+ *
+ * WHY THIS IS NOT MADE REDUNDANT BY GX Core's `stores_failed`, and PLEASE DO NOT DELETE IT WHEN
+ * THAT ARRIVES. They cover different failures. `stores_failed` reports a store that ERRORED. This
+ * reports a store that returned nobody for ANY reason — including a credential that authenticates
+ * fine and hands back an empty set, or a 200 with nothing in it, which raises nothing anywhere and
+ * is the failure neither app can currently see. This one also holds when `cfg.incentiveEngine`
+ * selects Leaderboard, which sends no `stores_failed` at all; a guard covering one of two engines
+ * is a guard somebody will trust in the wrong configuration.
+ *
+ * RUN IT AFTER `foldFloaters_`. A floater is booked to corporate by the fold, so a `seen` set built
+ * before it credits a store with a seller it is about to lose.
+ */
+function rosterCoverage_(live) {
+  if (live && live.coverage) return live.coverage;
+  var out = { ok: true, checked: false, reason: '', expected: [], seen: [], missing: [], staff: {} };
+
+  var expected = live && live.roster_stores;
+  if (!expected) {
+    /* UNREADABLE IS NOT CLEAN. Same rule as the SPIFF read and the nightly Dutchie scan: a source
+       that could not be consulted must not report as a source that found nothing wrong. */
+    out.ok = false;
+    out.reason = 'registry_unreadable';
+    if (live) live.coverage = out;
+    return out;
+  }
+
+  var seen = Object.create(null);
+  (live.budtenders || []).concat(live.managers || []).forEach(function (r) {
+    /* store_id, NOT storeSlug. `storeSlug` is LEADERBOARD's vocabulary (baseline / century /
+       portland / river) and `home_store` is the REGISTRY's (hillsboro / bend / portland-rd /
+       river-rd) — only `center` and `commercial` coincide. Comparing the wrong one reports four of
+       six stores missing on a perfectly good period, every single time. */
+    var slug = String((r && r.store_id) || '').trim().toLowerCase();
+    if (slug) seen[slug] = (seen[slug] || 0) + 1;
+  });
+
+  out.checked  = true;
+  out.staff    = expected;
+  out.expected = Object.keys(expected).sort();
+  out.seen     = Object.keys(seen).sort();
+  out.missing  = out.expected.filter(function (st) { return !seen[st]; });
+  if (out.missing.length) { out.ok = false; out.reason = 'store_missing'; }
+  if (live) live.coverage = out;
+  return out;
+}
+
+/** The store's own name where GX Core knows it, so a refusal names a place rather than a slug. */
+function coverageStoreNames_(slugs) {
+  var names = {};
+  try {
+    (GXCore.getStores() || []).forEach(function (x) {
+      names[String(x.store_id || '').toLowerCase()] = x.display_name || x.store_id;
+    });
+  } catch (e) {}
+  return (slugs || []).map(function (st) { return names[st] || st; });
+}
+
+function incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck) {
   var out = [];
   if (live.payPeriod && live.payPeriod.current) {
     out.push({ code: 'period_open', message: 'this pay period is still open (' +
@@ -6344,6 +6495,29 @@ function incentiveBlockers_(live, spiffFailed, spiffAck) {
     out.push({ code: 'spiff_unreadable', message: 'SPIFF could not be read (' +
       ((live.spiff && live.spiff.error) || 'unknown') + '), so vendor amounts would freeze at $0 ' +
       'for everyone and this record cannot be edited afterwards.' });
+  }
+  /* THE SAME ARGUMENT AS `spiff_unreadable` ONE LINE UP, APPLIED TO THE LARGER NUMBER. That blocker
+     exists because unreadable vendor money would freeze at $0 for everyone with no way to tell
+     afterwards. But SPIFF cancels out of `payroll` entirely and the Capstone export carries payroll
+     ONLY — while the seller list DECIDES payroll. Crew guarded the figure that never reaches the
+     payroll file and left the one that IS the payroll file unguarded. */
+  var cov = rosterCoverage_(live);
+  if (!cov.ok && !coverageAck) {
+    if (cov.reason === 'registry_unreadable') {
+      out.push({ code: 'coverage_unknown', message: 'the employee registry could not be read, so ' +
+        'Crew cannot tell whether a whole store is missing from these figures — and that check ' +
+        'is the only thing standing between a feed blip and a frozen record that pays a store ' +
+        'nothing.' });
+    } else {
+      var _named = coverageStoreNames_(cov.missing);
+      var _heads = cov.missing.map(function (st) { return cov.staff[st]; });
+      out.push({ code: 'store_missing', message: 'these figures contain no sellers at all from ' +
+        _named.join(', ') + ' — the roster shows ' + _heads.join(' and ') +
+        ' active there for this period. A store whose sales failed to load looks exactly like a ' +
+        'store that sold nothing: every other figure on the screen stays plausible and no total ' +
+        'looks short, because the missing people never contributed to one. This record cannot be ' +
+        'edited afterwards.' });
+    }
   }
   return out;
 }
@@ -6382,10 +6556,11 @@ function incentiveSend_(p) {
   if (preview) {
     /* incentiveApprove_ refuses an open period, which is correct for approving and useless for
        previewing. Compute the same figures directly instead of loosening that guard. */
-    /* The source window, not the key — see incentiveApprove_. */
-    var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
+    /* THE SAME SHAPE APPROVAL WILL FREEZE — fetch (with the practice window split), stamp, fold —
+       from the one function that does it, because this branch keeping its own copy is how the
+       floater fold went missing here for a week after it was fixed on the approval path. */
+    var live = perfForWrite_(pp);
     if (live.ok === false) return live;
-    stampEmployeeIds_(live);
     /* THE FLOATER FOLD, AND IT WAS MISSING HERE — the third time this exact omission has been
        found, on the third of the three paths that shape these rows.
 
@@ -6407,8 +6582,8 @@ function incentiveSend_(p) {
 
        Ordered stamp → fold → SPIFF, matching both other paths exactly: an input is keyed on
        employee_id and SPIFF folds onto whichever rows exist, so folding afterwards would mean
-       deciding which of two rows kept the vendor money. */
-    foldFloaters_(live);
+       deciding which of two rows kept the vendor money. The first two of those three now come from
+       `perfForWrite_` above rather than from a copy kept here. */
     /* GX Core's scheme, the same one incentiveApprove_ will use. A preview computed against
        Leaderboard's copy would show a total the approval then does not produce. */
     var _sch = approvalThresholds_(live);
@@ -6419,6 +6594,7 @@ function incentiveSend_(p) {
        doubted is worse than none, because it is trusted. */
     var _spiffFailed = false, _spiffTotal = 0;
     var _ack = String(p.spiff_unavailable || '') === 'yes';
+    var _covAck = String(p.coverage_ok || '') === 'yes';
     applySpiffEarnings_(live, (live.payPeriod || {}).start || pp);
     _spiffFailed = !!(live.spiff && live.spiff.ok === false);
 
@@ -6468,7 +6644,8 @@ function incentiveSend_(p) {
             spiff: incentiveSpiffReport_(live, _spiffFailed, _ack, _spiffTotal),
             thresholds: { source: _sch.source, leaderboard_agrees: _sch.lb_agrees,
                           leaderboard_check: _sch.lb_check },
-            would_block: incentiveBlockers_(live, _spiffFailed, _ack) };
+            coverage: rosterCoverage_(live),
+            would_block: incentiveBlockers_(live, _spiffFailed, _ack, _covAck) };
   } else {
     pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
     if (pre.ok === false) return pre;
