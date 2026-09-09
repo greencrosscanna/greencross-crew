@@ -11,7 +11,7 @@
  * fact about when the next pick happened rather than about the award. Employee of the Month is a
  * monthly award, so the month it was given for is the whole answer — a second month in the row only
  * ever meant "nobody got round to picking in April", which the log of who won should not report as
- * though it were part of the honour.
+ * though it were part of the honor.
  *
  * AND THE BUG THAT MUST NOT COME BACK WITH IT. The month is read off the ISO string, never through
  * `new Date`. `new Date('2026-08-01')` parses as UTC midnight and getMonth() answers in LOCAL time,

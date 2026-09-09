@@ -877,7 +877,7 @@
      about when the next pick happened rather than about the award — and Employee of the Month is a
      monthly award, so the month it was given for is the whole answer. A second month appearing in
      the row only ever meant "nobody got round to picking in April", which is not something the log
-     of who won should be reporting as if it were part of the honour.
+     of who won should be reporting as if it were part of the honor.
 
      `ended_at` is untouched and still recorded; it is simply not what this line is for. Renamed
      from eomSpan, because a function called span that returns one month is a name that lies. */
