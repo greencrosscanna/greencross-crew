@@ -97,6 +97,11 @@ function load(sheet) {
         return o;
       });
     }
+    /* The tab-routing helpers: historySheet_ and historyPeriods_ both ask incTab_ which sheet a
+       period belongs to. Real here in every case — nothing in this suite is a practice period —
+       which is the point: these assertions prove the import path still reads and writes the REAL
+       history tab now that a second one exists. */
+    ${grab('isPracticePeriod_')} ${grab('practiceSource_')} ${grab('incTab_')}
     ${grab('historyStoreId_')} ${grab('historySheet_')} ${grab('historyPeriods_')}
     ${grab('schemeFor_')} ${grab('freezeScheme_')}
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}

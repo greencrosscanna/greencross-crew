@@ -57,6 +57,10 @@ const rows = [
 
 const M = new Function(
   'wfMoney_', 'GXCore',
+  /* The practice helpers travel with them: payoutFileName_ and payoutHtml_ both ask whether the
+     period is a rehearsal before they name or head the document. Pulled in rather than stubbed, so
+     these assertions keep running against the SHIPPED rule for what counts as a practice key. */
+  fnSrc('isPracticePeriod_') + '\n' + fnSrc('practiceSource_') + '\n' +
   fnSrc('payoutMMDDYY_') + '\n' + fnSrc('payoutFileName_') + '\n' + fnSrc('payoutHtml_') + '\n' +
   'var PAYOUT_FOLDER_ID = "SEED";\n' + fnSrc('payoutFolderId_') + '\n' +
   '; return { mmddyy: payoutMMDDYY_, fileName: payoutFileName_, html: payoutHtml_, folder: payoutFolderId_ };'
@@ -148,8 +152,12 @@ console.log('\nThe backfill can only ever file a record that already exists');
   ok('it is deploy-secret gated', /deploySecretOk_/.test(F));
   ok('it REFUSES a period that is not in history',
      /is not an approved period/.test(F));
+  /* The tab is now chosen by incTab_ (a practice period has its own history), so the literal
+     `HISTORY_TAB` argument moved inside that call. The CLAIM is unchanged and is the half that
+     matters: this route reads frozen rows out of a history tab and computes nothing. */
   ok('it reads the frozen rows, it does not recompute',
-     /readTab_\(HISTORY_TAB, HISTORY_HEADERS\)/.test(F) && !/incCalcBud_|fetchLivePerf_/.test(F));
+     /readTab_\(incTab_\(HISTORY_TAB, pp\), HISTORY_HEADERS\)/.test(F) &&
+     !/incCalcBud_|fetchLivePerf_/.test(F));
   ok('rows go back into HISTORY_HEADERS order, since payoutHtml_ reads BY INDEX',
      /HISTORY_HEADERS\.map/.test(F));
   ok('the paid figure is column 14 and computed 18, as everywhere else',

@@ -546,6 +546,17 @@
       text-transform: uppercase; letter-spacing: .06em; }
     .crew-inc-badge.is-live { background: #14251c; color: var(--gx-green); border: 1px solid #24503a; }
     .crew-inc-badge.is-imported { background: #2a2118; color: #e0a458; border: 1px solid #4a3a24; }
+    /* RED, and the only red badge on this screen. Amber already means "as paid" here and gold means
+       "a person decided this", so a practice period borrowing either would read as a shade of the
+       real thing. It is not one. */
+    .crew-inc-badge.is-practice { background: #3a1414; color: #ff9d9d; border: 1px solid #6d2626; }
+    /* THE BANNER. Full width, above the title, and not dismissible — it is the difference between
+       a rehearsal and payroll, and every other cue on this screen is one somebody has to be looking
+       for. The stripes are decoration; the WORDS are what carries on a grayscale printout. */
+    .crew-inc-practice { margin: 0 0 14px; padding: 10px 14px; border-radius: 8px;
+      background: repeating-linear-gradient(135deg, #3a1414 0 14px, #341212 14px 28px);
+      border: 1px solid #6d2626; color: #ffd9d9; font-size: 12.5px; line-height: 1.5; }
+    .crew-inc-practice b { color: #ff9d9d; letter-spacing: .03em; }
     .crew-inc-dotlive { width: 6px; height: 6px; border-radius: 50%; background: var(--gx-green); }
     .crew-inc-sub { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     /* One bordered group: ‹ · select · › — the arrows step the same array the select holds. */
@@ -738,6 +749,17 @@
         border: 1px solid #c9a05a !important; }
       .crew-inc-badge.is-live { background: #fff !important; color: #0a7a3d !important;
         border: 1px solid #7ab98f !important; }
+      /* THE ONE THING ON THIS SCREEN THAT MUST SURVIVE PRINTING. Everything else in this block is
+         about making a payroll record look like a payroll record; this is about making sure a
+         rehearsal never does. Deliberately NOT in the hide list above — a practice PDF that prints
+         identically to a real one is the failure mode this whole feature exists to avoid, and it
+         is filed and read on paper where no badge color helps. Borders and black text only, so it
+         carries through a grayscale printer. */
+      .crew-inc-practice { background: #fff !important; color: #000 !important;
+        border: 2px solid #000 !important; font-weight: 700; margin-bottom: 10px !important; }
+      .crew-inc-practice b { color: #000 !important; }
+      .crew-inc-badge.is-practice { background: #fff !important; color: #000 !important;
+        border: 1.5px solid #000 !important; }
     }
 
 
@@ -942,8 +964,8 @@
        AMBER, deliberately — not green and not red. A figure a human overruled is neither good news
        nor an error, it is a DECISION, and the suite already reads gold as "a person did this and
        you should know". Green would say it passed something; red would say it is broken.
-       The diamond is there for the same reason the colour is not enough on its own: this is a
-       payroll figure, and someone reading a printout in greyscale still has to see that it was set
+       The diamond is there for the same reason the color is not enough on its own: this is a
+       payroll figure, and someone reading a printout in grayscale still has to see that it was set
        by hand rather than computed. */
 .crew-inc-pay.crew-inc-over { color: var(--gx-gold, #d4a847) !important;
   background: rgba(212,168,71,.08); }
@@ -976,7 +998,7 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
 
     /* ── Break glass ──────────────────────────────────────────────────────────────
        Reopening an approved period is not part of the fortnightly rhythm, so it does not get to
-       look like the buttons that are. A quiet outline that only commits to a colour on hover:
+       look like the buttons that are. A quiet outline that only commits to a color on hover:
        findable when you are looking for it, and never the thing your eye lands on first. */
 .crew-inc-glass { background: none; border: 1px solid var(--gx-border); color: var(--gx-text-mute);
   border-radius: var(--gx-radius, 6px); padding: 7px 13px; font-size: 12.5px; cursor: pointer;
@@ -1102,6 +1124,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.375"></script>
+  <script src="crew.js?v=1.376"></script>
 </body>
 </html>

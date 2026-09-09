@@ -50,6 +50,7 @@ function fnSrc(src, name) {
   throw new Error('unbalanced ' + name);
 }
 const engineName = new Function(
+  fnSrc(GS, 'isPracticePeriod_') + '\n' + fnSrc(GS, 'practiceSource_') + '\n' +
   fnSrc(GS, 'payoutMMDDYY_') + '\n' + fnSrc(GS, 'payoutFileName_') +
   '\n; return payoutFileName_;'
 )();

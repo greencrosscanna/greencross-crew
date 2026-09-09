@@ -495,6 +495,7 @@ function route_(e) {
       // Approve a CLOSED period: compute it here and write it into history, after which it is a
       // record like the imported ones and can never be recomputed.
       case 'incentive_approve': return json_(incentiveApprove_(p), p.callback);
+      case 'incentive_practice_reset': return json_(incentivePracticeReset_(p), p.callback);
       /* Is Drive actually authorized? The route to reach for when a period is approved
          and no PDF appears in the folder. Writes a real file and removes it. */
       case 'pdf_check':         return json_(pdfCheck_(p), p.callback);
@@ -3480,6 +3481,88 @@ function samePerson_(fullA, fullB) {
  * reports who predate the roster, and pdf_name then carries the only record of who was paid. Same
  * arrangement as the EoM reign log, and for the same reason: a name that can no longer be looked
  * up is not a reason to drop the row. */
+/* ══ THE PRACTICE PAY PERIOD ═════════════════════════════════════════════════════════════════════
+ *
+ * A pay period that behaves exactly like a real one — pick it, tick attendance, type a SPIFF
+ * figure, send it for approval, approve it, file the PDF, export the CSV — and touches no real
+ * pay at any point.
+ *
+ * WHY IT EXISTS. Two things needed it and neither could be had safely before. Changes to the
+ * payroll path could only be verified against a real period, and the last step of that path is an
+ * immutable write; and "rehearse the whole close with Mike, start to finish" is on the build order
+ * directly below this, with no way to rehearse the ONE step that matters most. Approving a real
+ * fortnight to see whether the button works pays people.
+ *
+ * THE ISOLATION IS THE TAB, NOT A FLAG. Every piece of incentive state — inputs, history, the
+ * workflow row, the frozen scheme, the void log — is keyed on `pp_start`, so the temptation is to
+ * give practice its own key and leave the rows where they are. That is one deleted filter away
+ * from practice money in a real total, and `crew_incentive_history` is the tab somebody sums when
+ * they want to know what the company paid. So a practice period writes to a PARALLEL TAB in every
+ * case: `crew_incentive_history_practice`, `crew_incentive_inputs_practice`, and so on. A reader
+ * that does not know practice exists cannot see it — which is every reader that matters, including
+ * `historyPeriods_()`, the Capstone export, the digest and the payout backfill.
+ *
+ * ONE FUNCTION DECIDES. `incTab_(BASE, pp)` is the only place the suffix is written, so a caller
+ * cannot forget it in one branch and remember it in another. Pass the STORAGE key, always.
+ *
+ * THE STORAGE KEY AND THE PERFORMANCE WINDOW ARE DIFFERENT THINGS, and confusing them is the one
+ * bug this feature can have that moves real money. `practice-2026-08-17` is where the rows go;
+ * `2026-08-17` is the fortnight Leaderboard/GX Core is asked about, because a practice period is a
+ * real window's numbers wearing a different key — that is what makes it a rehearsal rather than a
+ * toy. So: fetch and score against `practiceSource_(pp)`, store against `pp`. Every call that has
+ * to tell them apart is commented at the call site, and `tests/practice_period_test.js` pins the
+ * separation both ways.
+ *
+ * WHY A REAL WINDOW'S REAL PEOPLE. Fake staff and invented figures would rehearse nothing: the
+ * close is a judgement about whether the numbers look right, and nobody can make that judgement
+ * about names they do not recognize. The practice period mirrors the last COMPLETED fortnight by
+ * default (`cfg.crewPracticePeriod` pins a different one) — precisely the period Mike would be
+ * closing — so the rehearsal and the real thing differ in exactly one respect: where the rows land.
+ */
+var PRACTICE_PREFIX = 'practice-';
+
+/* STRICT, and strict on purpose. Anything that merely STARTS with the word would let a real
+   pp_start be talked into the practice tabs by a crafted parameter — and, far likelier, would send
+   a typo somewhere silent instead of failing. A practice key is the prefix plus a real date, or it
+   is not one. */
+function isPracticePeriod_(pp) { return /^practice-\d{4}-\d{2}-\d{2}$/.test(String(pp || '')); }
+
+/* The real fortnight whose performance this rehearses. '' for anything that is not a practice key,
+   so a caller that forgets the guard gets an empty window and an obvious failure rather than a
+   quiet fetch of the wrong period. */
+function practiceSource_(pp) {
+  return isPracticePeriod_(pp) ? String(pp).slice(PRACTICE_PREFIX.length) : '';
+}
+function practiceKeyFor_(srcStart) { return PRACTICE_PREFIX + String(srcStart || ''); }
+
+/* THE ONLY PLACE THE SUFFIX IS WRITTEN. Give it the storage key. */
+function incTab_(base, pp) { return isPracticePeriod_(pp) ? base + '_practice' : base; }
+
+/* What the SCREEN needs to say so nobody can mistake this for payroll. The dates are the real
+   fortnight's, because the whole rehearsal is about those numbers; `label` is what the period
+   picker and the print filename read, and it carries the word rather than relying on a color a
+   grayscale printout will not have. */
+function practiceInfo_(pp, srcEnd) {
+  var src = practiceSource_(pp);
+  return { source_start: src, source_end: String(srcEnd || ''),
+           label: 'PRACTICE',
+           note: 'A rehearsal of ' + src + '. Nothing here reaches payroll, the payout archive or '
+               + 'any real record — every row is written to a separate practice tab.' };
+}
+
+/* Which real fortnight the practice period mirrors: the most recent COMPLETED one, unless Sky has
+   pinned another in GX Core kv. Deliberately not the running period — a period still collecting
+   sales moves under you mid-rehearsal, and the close is a thing you do to a fortnight that has
+   ENDED. A failed kv read is not an error here; it just means the default. */
+function practiceSourceStart_() {
+  var pinned = '';
+  try { pinned = String(GXCore.getKv('cfg.crewPracticePeriod') || ''); } catch (e) {}
+  if (/^\d{4}-\d{2}-\d{2}$/.test(pinned)) return pinned;
+  var computed = computedPeriods_(2);
+  for (var i = 0; i < computed.length; i++) if (!computed[i].current) return computed[i].start;
+  return '';
+}
+
 var HISTORY_TAB = 'crew_incentive_history';
 var HISTORY_HEADERS = ['pp_start', 'pp_end', 'section', 'employee_id', 'pdf_name', 'store_label',
                        'store_id', 'txn', 'sales', 'discount_pct', 'aov', 'spiff', 'bonus',
@@ -3512,8 +3595,10 @@ function historyStoreId_(label) {
    would never reach a sheet that already exists — reads would then map by index onto a short row.
    This appends what is missing, and only ever appends: readTab_ pairs headers to columns by
    POSITION, so reordering HISTORY_HEADERS would silently re-attribute every figure in the tab. */
-function historySheet_() {
-  var sh = sheetOf_(HISTORY_TAB, HISTORY_HEADERS);
+/* `pp` selects the tab, nothing else — omit it and you get the real one, which is what the import
+   path wants and what every caller written before practice existed already passes (nothing). */
+function historySheet_(pp) {
+  var sh = sheetOf_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS);
   var width = Math.max(1, sh.getLastColumn());
   var have = sh.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h).trim(); });
   var missing = HISTORY_HEADERS.filter(function (h) { return have.indexOf(h) < 0; });
@@ -3524,9 +3609,13 @@ function historySheet_() {
 }
 
 /** Which pay periods are already imported. Read once; the import checks against it. */
-function historyPeriods_() {
+/* `pp` selects the tab. Called with nothing — which is every caller that enumerates what the
+   company has actually closed — it reads the REAL history and practice is invisible to it. Called
+   with a key, it answers "is THIS period already a frozen record", which is the question the
+   approve/send/save guards ask and the only one that has to know about practice. */
+function historyPeriods_(pp) {
   var seen = Object.create(null);
-  readTab_(HISTORY_TAB, HISTORY_HEADERS).forEach(function (r) {
+  readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS).forEach(function (r) {
     if (!r.pp_start) return;
     var e = seen[r.pp_start] || (seen[r.pp_start] = { pp_start: r.pp_start, pp_end: r.pp_end,
                                                       rows: 0, bonus: 0, imported_at: r.imported_at,
@@ -3699,7 +3788,7 @@ function incentiveHistory_(p) {
   if (p.__internal !== true && !deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var want = String(p.pp_start || '');
   if (!want) return { ok: true, periods: historyPeriods_() };
-  var rows = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
+  var rows = readTab_(incTab_(HISTORY_TAB, want), HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
   if (!rows.length) return { ok: false, error: 'no imported history for ' + want };
   /* Imported rows store the name the REPORT printed, which is what the document said and what the
      screen shows. The export needs the legal name, so the registry is joined in here rather than
@@ -3784,7 +3873,7 @@ var INPUTS_HEADERS = ['pp_start', 'employee_id', 'att', 'spiff', 'hours', 'updat
  * schema migration and no recompute of any period already closed. */
 function inputsFor_(ppStart) {
   var out = Object.create(null);
-  readTab_(INPUTS_TAB, INPUTS_HEADERS).forEach(function (r) {
+  readTab_(incTab_(INPUTS_TAB, ppStart), INPUTS_HEADERS).forEach(function (r) {
     if (r.pp_start !== ppStart || !r.employee_id) return;
     /* A BLANK SPIFF CELL IS NOT A ZERO. `null` means "nobody typed anything", which is what lets
        the measured figure from SPIFF's progress cache stand; a real 0 is Mike deliberately zeroing
@@ -4987,6 +5076,26 @@ function getIncentive_(p) {
   imported.forEach(function (h) { importedBy[h.pp_start] = h; });
 
   var want = String(p.pp_start || '');
+
+  /* A practice period that has been APPROVED is a frozen record too — of a rehearsal. It is served
+     the same way a closed period is, from its own history tab, so the read-only "as paid" screen
+     and the break-glass reopen are both part of what gets rehearsed. `importedBy` is the REAL
+     history and deliberately does not contain it; asking the practice tab directly is what keeps
+     practice out of every enumeration of what the company actually closed. */
+  if (isPracticePeriod_(want) &&
+      historyPeriods_(want).some(function (h) { return h.pp_start === want; })) {
+    var ph = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
+    ph.periods = periodList_(imported, null);
+    ph.can_edit = false;
+    ph.can_approve = canApprove_(auth);
+    ph.inputs = inputsFor_(want);
+    ph.source = 'practice';
+    ph.practice = practiceInfo_(want, ph.pp_end || '');
+    ph.why_read_only = 'Practice period, already approved — the figures as they were frozen. '
+                     + 'Reopen it or reset practice to run through the close again.';
+    return ph;
+  }
+
   if (want && importedBy[want]) {
     var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
     h.periods = periodList_(imported, null);
@@ -5014,7 +5123,9 @@ function getIncentive_(p) {
     return h;
   }
 
-  var live = fetchLivePerf_(want);
+  /* THE WINDOW IS NOT THE KEY. A practice period rehearses a real fortnight, so the performance
+     fetch asks for that fortnight — `want` itself is a key GX Core has never heard of. */
+  var live = fetchLivePerf_(isPracticePeriod_(want) ? practiceSource_(want) : want);
   if (live.ok === false) return live;
   live.source = 'live';
   /* GX Core is the source of truth for the scheme. Leaderboard sends its own read of the same kv
@@ -5039,11 +5150,26 @@ function getIncentive_(p) {
   /* AFTER the fold, so a floater's own two budtender rows are already one and the only thing left
      to report is a genuine cross-section clash rather than the split this just repaired. */
   dualRoleRows_(live);
-  live.inputs = inputsFor_(live.payPeriod.start);
   /* THE ONLY CACHED SPIFF READ IN THE ENGINE. This route paints a screen; it writes nothing, and
      the round trip it saves is ~4s of a load that was taking 20-30. Approval and the send preview
-     deliberately do NOT pass this. */
+     deliberately do NOT pass this.
+     RUNS BEFORE THE PRACTICE REMAP, on the real window: a vendor program is attributed by its dates
+     against the fortnight it was actually sold in, and `practice-2026-08-17` matches no program's
+     dates at all — it would silently score every SPIFF at zero, which is the exact shape of failure
+     this file spends a section warning about. */
   applySpiffEarnings_(live, live.payPeriod.start, true);
+
+  /* FROM HERE DOWN THE PERIOD IS THE PRACTICE ONE. Everything above needed the real window;
+     everything below is STORAGE — inputs, workflow, the key the browser posts back on every save —
+     and must not touch the real fortnight's rows. Rewriting payPeriod.start once, here, is what
+     lets the browser stay entirely ignorant of practice keys: it already posts payPeriod.start. */
+  if (isPracticePeriod_(want)) {
+    live.practice = practiceInfo_(want, live.payPeriod.end);
+    live.payPeriod = { start: want, end: live.payPeriod.end, current: false };
+    live.source = 'practice';
+  }
+
+  live.inputs = inputsFor_(live.payPeriod.start);
   var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
   live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
                     decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',
@@ -5124,6 +5250,23 @@ function periodList_(imported, livePeriods) {
     out.push({ pp_start: h.pp_start, pp_end: h.pp_end, current: false, source: 'imported' });
   });
   out.sort(function (a, b) { return a.pp_start < b.pp_start ? 1 : a.pp_start > b.pp_start ? -1 : 0; });
+
+  /* THE PRACTICE PERIOD SITS AT THE BOTTOM, ALWAYS OFFERED AND NEVER FIRST.
+     Always, because the value of a rehearsal surface is that it is there the moment you want it —
+     one behind a setting is one nobody turns on, and the two things asking for this (verifying a
+     payroll change, walking Mike through a close) both start with somebody opening the screen.
+     Last, because the list is sorted newest-first and a practice entry at the top is the one a
+     hurried click lands on. It is appended AFTER the sort so its position cannot drift into the
+     real periods as dates move.
+     It is dropped rather than shown broken when there is no completed fortnight to mirror — a
+     brand-new deployment, or an anchor that has not been set. */
+  var practiceSrc = practiceSourceStart_();
+  if (practiceSrc) {
+    var srcEnd = '';
+    for (var pi = 0; pi < out.length; pi++) if (out[pi].pp_start === practiceSrc) { srcEnd = out[pi].pp_end; break; }
+    out.push({ pp_start: practiceKeyFor_(practiceSrc), pp_end: srcEnd, current: false,
+               source: 'practice', practice_of: practiceSrc });
+  }
   return out;
 }
 
@@ -5145,7 +5288,7 @@ function saveIncentiveInput_(p) {
   var pp  = String(p.pp_start || '').trim();
   var eid = String(p.employee_id || '').trim();
   if (!pp || !eid) return { ok: false, error: 'pp_start and employee_id required' };
-  if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+  if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
     return { ok: false, error: pp + ' is an imported (closed) period — its figures are what was paid and cannot be edited' };
   }
   /* LOCKED WHILE AWAITING APPROVAL. Otherwise the numbers being approved are not the ones that
@@ -5204,8 +5347,8 @@ function saveIncentiveInput_(p) {
     }
   }
 
-  var sh = sheetOf_(INPUTS_TAB, INPUTS_HEADERS);
-  var rows = readTab_(INPUTS_TAB, INPUTS_HEADERS);
+  var sh = sheetOf_(incTab_(INPUTS_TAB, pp), INPUTS_HEADERS);
+  var rows = readTab_(incTab_(INPUTS_TAB, pp), INPUTS_HEADERS);
   var idx = -1;
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].pp_start === pp && rows[i].employee_id === eid) { idx = i; break; }
@@ -5409,11 +5552,14 @@ function incentiveApprove_(p) {
 
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
-  if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+  if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
     return { ok: false, error: pp + ' is already a closed record and cannot be approved again' };
   }
 
-  var live = fetchLivePerf_(pp);
+  /* THE SOURCE WINDOW, NOT THE KEY — same split as getIncentive_, and the stakes are higher here:
+     this is the path that writes. `pp` is where the rows go; `practiceSource_(pp)` is the fortnight
+     whose numbers they are. */
+  var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
   if (live.ok === false) return live;
   stampEmployeeIds_(live);
   /* THE SAME FOLD THE SCREEN DOES, and it was missing here — which is the exact divergence this
@@ -5435,6 +5581,14 @@ function incentiveApprove_(p) {
      history` is what every later view reads and it is immutable. Ordered after the open-period
      refusal so a period that cannot be approved does not pay for a cross-app round trip. */
   applySpiffEarnings_(live, live.payPeriod.start);
+
+  /* AFTER the SPIFF fold, exactly as getIncentive_ does it and for the same reason: vendor money is
+     attributed on the real dates, and everything from here on is the record being written. Both
+     paths remap in the same place so a practice approval and the practice screen cannot disagree
+     about which fortnight was scored. */
+  if (isPracticePeriod_(pp)) {
+    live.payPeriod = { start: pp, end: live.payPeriod.end, current: false };
+  }
 
   /* A FAILED SPIFF READ IS NOT AN EMPTY ONE, and approval is the one write that cannot be taken
      back. Same rule as the nightly Dutchie scan and the Core read behind the discount rules:
@@ -5556,7 +5710,7 @@ function incentiveApprove_(p) {
     }
   }
 
-  var sh = historySheet_();
+  var sh = historySheet_(pp);
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
   freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
@@ -5612,8 +5766,25 @@ function payoutMMDDYY_(iso) {
   return m ? m[2] + m[3] + m[1].slice(2) : '';
 }
 function payoutFileName_(ppStart, ppEnd) {
-  var a = payoutMMDDYY_(ppStart), b = payoutMMDDYY_(ppEnd);
-  return (a && b) ? 'Incentive Dashboard - ' + a + '-' + b : '';
+  /* A practice key is not a date, so payoutMMDDYY_ returns '' for it and the whole name collapses
+     to '' — which used to be the "could not build a filename" refusal and would have failed the
+     filing silently-ish on every rehearsal. The rehearsed fortnight is the name; the prefix is what
+     stops the file being mistaken for the record, INCLUDING on paper and in a folder listing sorted
+     by name, where a color or a banner is no help at all. */
+  var prac = isPracticePeriod_(ppStart);
+  var a = payoutMMDDYY_(prac ? practiceSource_(ppStart) : ppStart), b = payoutMMDDYY_(ppEnd);
+  return (a && b) ? (prac ? 'PRACTICE - ' : '') + 'Incentive Dashboard - ' + a + '-' + b : '';
+}
+
+/* WHERE A PRACTICE PAYOUT PDF GOES: a `Practice` subfolder of the archive, created the first time
+   one is filed. Not the archive itself — Sky has 28 fortnights of payout reports in there and a
+   rehearsal must not land beside them, whatever it is called. Not a separate top-level folder
+   either: the point of filing it at all is to prove the Drive write works, and proving it against
+   a different parent proves less. A failure to make the subfolder is a failure to file, reported
+   like any other; it must never fall back to the real folder. */
+function practiceFolder_(parent) {
+  var it = parent.getFoldersByName('Practice');
+  return it.hasNext() ? it.next() : parent.createFolder('Practice');
 }
 
 /* The report itself, built from the frozen rows. Deliberately plain and light: this is a document
@@ -5655,7 +5826,7 @@ function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo
   }
   /* The paid figure is column 14 and carries any override; 18 is what the math produced. A row where
      they differ is marked, so the paper says which numbers a person decided — the same claim the
-     approval email makes, and the reason a payroll printout in greyscale still has to show it. */
+     approval email makes, and the reason a payroll printout in grayscale still has to show it. */
   /* '' AND 0 ARE DIFFERENT CLAIMS, and on a payroll document the difference is the whole point.
      The oldest imported report (`gen1`, 2025-08-04) has NO payroll column at all — all 37 rows carry
      an empty payroll with real bonus figures beside them. Rendering that through `Number(x) || 0`
@@ -5689,9 +5860,20 @@ function payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo
     { h: 'Payroll', v: paidCell, r: 1 }
   ];
 
+  /* ON THE PAGE ITSELF, not only in the filename. A PDF gets detached from its folder the moment
+     somebody emails it or prints it, and this document's whole job is to look like the authoritative
+     record of what was paid. The band survives grayscale because it is a word, not a color — the
+     same argument the override diamond is here for. */
+  var isPrac = isPracticePeriod_(pp);
+  var ppLabel = isPrac ? practiceSource_(pp) : pp;
   return '<html><body style="font-family:Arial,Helvetica,sans-serif;color:#111;margin:0">' +
-    '<h1 style="margin:0 0 2px;font-size:19px">Incentive Dashboard</h1>' +
-    '<p style="margin:0 0 2px;font-size:12px;color:#444">Pay period <strong>' + esc(pp) +
+    (isPrac ? '<p style="margin:0 0 8px;padding:7px 10px;background:#7f1d1d;color:#fff;' +
+       'font-size:12px;font-weight:bold;letter-spacing:.04em">PRACTICE &mdash; NOT A PAYROLL ' +
+       'RECORD. A rehearsal of the ' + esc(ppLabel) + ' pay period. Nobody was paid from this ' +
+       'document.</p>' : '') +
+    '<h1 style="margin:0 0 2px;font-size:19px">Incentive Dashboard' +
+      (isPrac ? ' <span style="font-size:13px;color:#7f1d1d">(practice)</span>' : '') + '</h1>' +
+    '<p style="margin:0 0 2px;font-size:12px;color:#444">Pay period <strong>' + esc(ppLabel) +
       '</strong> &rarr; <strong>' + esc(ppEnd) + '</strong></p>' +
     '<p style="margin:0 0 14px;font-size:11px;color:#666">Approved by ' + esc(by) +
       ' on ' + esc(String(at).slice(0, 10)) + ' &middot; ' + rows.length + ' people</p>' +
@@ -5747,6 +5929,7 @@ function filePayoutPdf_(pp, ppEnd, rows, split, total, by, at, overrides, spiffI
   if (!name) return { ok: false, error: 'could not build a filename from ' + pp + '/' + ppEnd };
   try {
     var folder = DriveApp.getFolderById(payoutFolderId_());
+    if (isPracticePeriod_(pp)) folder = practiceFolder_(folder);
     var html = payoutHtml_(pp, ppEnd, rows, split, total, by, at, overrides, spiffInfo);
     var blob = Utilities.newBlob(html, 'text/html', name + '.html').getAs('application/pdf');
     /* A RE-APPROVAL DOES NOT OVERWRITE THE ORIGINAL. Reopening a period and approving it again
@@ -5821,7 +6004,7 @@ function pdfFile_(p) {
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
 
-  var all = readTab_(HISTORY_TAB, HISTORY_HEADERS).filter(function (r) { return r.pp_start === pp; });
+  var all = readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS).filter(function (r) { return r.pp_start === pp; });
   if (!all.length) {
     return { ok: false, error: pp + ' is not an approved period — there is no frozen record to file. ' +
                                 'This route only ever files a record that already exists.' };
@@ -5921,22 +6104,86 @@ function pdfSelfTest() {
  *
  * The accident this guards against is a mis-click, and a mis-click cannot produce a sentence
  * explaining why the period is being reopened. */
+
+/**
+ * ?action=incentive_practice_reset&confirm=yes — wipe the rehearsal and start again.
+ *
+ * WITHOUT THIS THE PRACTICE PERIOD IS SINGLE-USE. Approving it freezes it, exactly as approving a
+ * real period does, and from then on it is a read-only record — so the second time anybody wanted
+ * to rehearse a close there would be nothing to rehearse it on. Reopening (break glass) is part of
+ * what is being rehearsed and deliberately does NOT clear it: a voided period is a real state with
+ * its own screen, and collapsing "reopen" into "reset" would remove the one thing break glass has
+ * to be practiced on.
+ *
+ * IT CANNOT REACH A REAL TAB, and that is structural rather than careful. The names it clears are
+ * built by `incTab_` from this file's own constants with a key it constructs itself; nothing the
+ * caller sends chooses a sheet. A request naming a real period does not clear that period — it
+ * clears the practice tabs, because that is the only thing this function can name.
+ *
+ * DELETES THE SHEETS RATHER THAN THE ROWS. `sheetOf_` recreates them with correct headers on next
+ * use, so a reset also repairs a practice tab whose headers drifted — and there is no partial state
+ * where some rows survive a half-finished delete. Gone is gone; nothing here is a record.
+ *
+ * Editor-level, not approver-level, on purpose: preparing is Mike's job and so is rehearsing it,
+ * and nothing this touches has ever paid anybody. It is still confirm-gated so it cannot happen on
+ * a stray page load.
+ */
+function incentivePracticeReset_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+
+  /* The key is built here, from the configured source window — never taken from the request. */
+  var src = practiceSourceStart_();
+  if (!src) return { ok: false, error: 'there is no completed pay period to practice on yet' };
+  var key = practiceKeyFor_(src);
+
+  var ss = crewSheet_().getParent();
+  var names = [HISTORY_TAB, INPUTS_TAB, WF_TAB, VOID_TAB, SCHEME_TAB].map(function (t) {
+    return incTab_(t, key);
+  });
+  /* BELT AND BRACES, and cheap: every name must carry the suffix. incTab_ already guarantees it —
+     this is what makes the guarantee survive somebody later adding a sixth tab to the list above
+     and passing the wrong key by accident. A refusal here is a bug, not a user error, so it says so. */
+  var wrong = names.filter(function (n) { return !/_practice$/.test(n); });
+  if (wrong.length) {
+    return { ok: false, error: 'refusing to clear ' + wrong.join(', ') + ' — not a practice tab. '
+           + 'This is a bug in incentive_practice_reset, not something you did.' };
+  }
+
+  var found = names.filter(function (n) { return !!ss.getSheetByName(n); });
+  if (String(p.confirm || '') !== 'yes') {
+    return { ok: true, dry_run: true, pp_start: key, practice_of: src, tabs: found,
+             note: found.length ? 'nothing cleared — re-send with confirm=yes'
+                                : 'nothing to clear; the practice period has never been used' };
+  }
+
+  var cleared = [];
+  found.forEach(function (n) {
+    var sh = ss.getSheetByName(n);
+    if (sh) { ss.deleteSheet(sh); cleared.push(n); }
+  });
+  return { ok: true, pp_start: key, practice_of: src, cleared: cleared,
+           note: cleared.length ? 'the practice period is empty again — it reopens as a fresh draft'
+                                : 'it was already empty' };
+}
+
 var WF_TAB = 'crew_incentive_workflow';
 var WF_HEADERS = ['pp_start', 'status', 'sent_by', 'sent_at', 'decided_by', 'decided_at',
                   'note', 'token', 'token_expires', 'sent_total'];
 var VOID_TAB = 'crew_incentive_voided';
 
-function wfSheet_() { return sheetOf_(WF_TAB, WF_HEADERS); }
+function wfSheet_(pp) { return sheetOf_(incTab_(WF_TAB, pp), WF_HEADERS); }
 
 function wfGet_(pp) {
-  var rows = readTab_(WF_TAB, WF_HEADERS);
+  var rows = readTab_(incTab_(WF_TAB, pp), WF_HEADERS);
   for (var i = 0; i < rows.length; i++) if (rows[i].pp_start === pp) return rows[i];
   return null;
 }
 
 function wfSet_(pp, patch) {
-  var sh = wfSheet_();
-  var rows = readTab_(WF_TAB, WF_HEADERS);
+  var sh = wfSheet_(pp);
+  var rows = readTab_(incTab_(WF_TAB, pp), WF_HEADERS);
   var idx = -1;
   for (var i = 0; i < rows.length; i++) if (rows[i].pp_start === pp) { idx = i; break; }
   var cur = idx >= 0 ? rows[idx] : { pp_start: pp, status: 'draft' };
@@ -6105,7 +6352,7 @@ function incentiveSend_(p) {
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
   if (!preview) {
-    if (historyPeriods_().some(function (h) { return h.pp_start === pp; })) {
+    if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
       return { ok: false, error: pp + ' is already a closed record' };
     }
     var wfPrev = wfGet_(pp);
@@ -6118,7 +6365,8 @@ function incentiveSend_(p) {
   if (preview) {
     /* incentiveApprove_ refuses an open period, which is correct for approving and useless for
        previewing. Compute the same figures directly instead of loosening that guard. */
-    var live = fetchLivePerf_(pp);
+    /* The source window, not the key — see incentiveApprove_. */
+    var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
     if (live.ok === false) return live;
     stampEmployeeIds_(live);
     /* GX Core's scheme, the same one incentiveApprove_ will use. A preview computed against
@@ -6226,8 +6474,15 @@ function incentiveSend_(p) {
   var mailed = [];
   if (to.length) {
     try {
+      /* THE PRACTICE MARKER GOES IN THE SUBJECT, not only in the body. This email exists to be
+         acted on from an inbox, sometimes on a phone, and the one thing its reader must never do is
+         approve a rehearsal believing it is payroll — or ignore a real one believing it is a drill.
+         A body banner is read after the decision to open; a subject prefix is read before it.
+         Practice is announced FIRST because it is the stronger claim: a practice preview is still,
+         above all, not real. */
       MailApp.sendEmail({ to: to.join(','), name: 'GX Crew', htmlBody: html,
-        subject: (preview ? '[PREVIEW] ' : '') + 'Approve incentive — ' + pp });
+        subject: (isPracticePeriod_(pp) ? '[PRACTICE] ' : '') + (preview ? '[PREVIEW] ' : '') +
+                 'Approve incentive — ' + (isPracticePeriod_(pp) ? practiceSource_(pp) : pp) });
       mailed = to;
     } catch (e) {
       /* A SEND THAT REACHED NOBODY IS NOT A SEND, so it must not leave the period `pending`.
@@ -6267,15 +6522,30 @@ function incentiveSend_(p) {
 function wfApprovalEmail_(pp, pre, sender, token, preview) {
   var link = CREW_URL + '#incentive/' + encodeURIComponent(pp);
   var approveLink = CREW_URL + '#approve/' + encodeURIComponent(pp) + '/' + token;
+  var isPrac = isPracticePeriod_(pp);
+  /* The period as a HUMAN reads it. `practice-2026-08-17` is a storage key and means nothing to
+     the approver; the fortnight it rehearses means everything, because that is the shape of the
+     numbers below. The banner says which it is; the dates say which fortnight. */
+  var ppLabel = isPrac ? practiceSource_(pp) : pp;
   return '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:560px">' +
+    /* RED, AND FIRST. Everything else in this email is designed to be trusted at a glance, which is
+       exactly why a rehearsal has to interrupt before the figures are read rather than explain
+       itself after them. It is louder than the preview banner below it on purpose: a preview is a
+       real period not yet sent, a practice is not a real period at all. */
+    (isPrac ? '<p style="background:#7f1d1d;color:#fff;padding:10px 12px;border-radius:6px;' +
+       'margin:0 0 16px;font-size:13px"><strong>PRACTICE — this is not payroll.</strong> ' +
+       'A rehearsal of the ' + ppLabel + ' pay period. Approving it pays nobody, files nothing to ' +
+       'the payout archive and changes no record. The real ' + ppLabel + ' period is untouched.' +
+       '</p>' : '') +
     (preview ? '<p style="background:#fde68a;color:#4a3208;padding:8px 12px;border-radius:6px;' +
        'margin:0 0 16px;font-size:13px"><strong>Preview.</strong> Nothing was sent for approval and ' +
        'the button below will not approve anything' +
        (pre.still_open ? ' — this pay period is still open, so these figures are not final.' : '.') +
        '</p>' : '') +
     '<h2 style="margin:0 0 4px">Incentive ready for approval</h2>' +
-    '<p style="margin:0 0 16px;color:#555">Pay period <strong>' + pp + ' → ' +
-      (pre.pp_end || '') + '</strong>, prepared by ' + sender + '.</p>' +
+    '<p style="margin:0 0 16px;color:#555">Pay period <strong>' + ppLabel + ' → ' +
+      (pre.pp_end || '') + '</strong>' + (isPrac ? ' <em>(practice)</em>' : '') +
+      ', prepared by ' + sender + '.</p>' +
     /* The same breakdown, in the same order, as the header of the screen this links to. Reading
        one figure in the email and four on the page invites a decision made on a number that was
        never compared — and the split is where a wrong SPIFF or a missed attendance shows up. */
@@ -6415,7 +6685,7 @@ function incentiveUnapprove_(p) {
              'it is the only record of this afterwards' };
   }
 
-  var sh = historySheet_();
+  var sh = historySheet_(pp);
   var all = sh.getDataRange().getValues();
   var hit = [];
   for (var i = 1; i < all.length; i++) if (String(all[i][0]) === pp) hit.push(i);
@@ -6430,7 +6700,7 @@ function incentiveUnapprove_(p) {
 
   var now = new Date().toISOString();
   var vh = VOID_HEADERS();
-  var vsh = sheetOf_(VOID_TAB, vh);
+  var vsh = sheetOf_(incTab_(VOID_TAB, pp), vh);
   /* WHO is folded into the stored reason rather than added as a column: VOID_HEADERS is
      HISTORY_HEADERS + two, and widening it would silently shift every existing voided row one
      column left the next time sheetOf_ reconciles the header. The rows already carry the approver
@@ -6489,7 +6759,9 @@ function incentiveVoided_(p) {
 
   var vh = VOID_HEADERS();
   var rows;
-  try { rows = readTab_(VOID_TAB, vh); }
+  /* The void log follows the period it belongs to: reopening a practice period is part of the
+     rehearsal, and its trail must not appear in the audit of what the company actually un-paid. */
+  try { rows = readTab_(incTab_(VOID_TAB, String(p.pp_start || '').trim()), vh); }
   catch (e) { return { ok: true, periods: [], rows: [], note: 'nothing has ever been voided' }; }
 
   /* COMPARED THROUGH normDate_, not as raw strings. Rows written before the fix above hold a real
@@ -7035,7 +7307,7 @@ var SCHEME_TAB = 'crew_incentive_schemes';
 var SCHEME_HEADERS = ['pp_start', 'thresholds_json', 'frozen_at', 'frozen_by'];
 
 function schemeFor_(pp) {
-  var rows = readTab_(SCHEME_TAB, SCHEME_HEADERS);
+  var rows = readTab_(incTab_(SCHEME_TAB, pp), SCHEME_HEADERS);
   for (var i = 0; i < rows.length; i++) {
     if (rows[i].pp_start !== pp) continue;
     try { return JSON.parse(rows[i].thresholds_json || 'null'); } catch (e) { return null; }
@@ -7046,7 +7318,7 @@ function schemeFor_(pp) {
 function freezeScheme_(pp, thresholds, by) {
   if (!thresholds) return;
   if (schemeFor_(pp)) return;            // written once, like everything else about a closed period
-  var sh = sheetOf_(SCHEME_TAB, SCHEME_HEADERS);
+  var sh = sheetOf_(incTab_(SCHEME_TAB, pp), SCHEME_HEADERS);
   sh.getRange(sh.getLastRow() + 1, 1, 1, SCHEME_HEADERS.length).setValues([[
     pp, JSON.stringify(thresholds), new Date().toISOString(), String(by || '')
   ]]);

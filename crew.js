@@ -2703,10 +2703,29 @@
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (paidOf(d.admin, adm) || 0) : 0;
 
+    var isPractice = incIsPractice(d);
+
+    /* THE BANNER IS FIRST AND IT PRINTS. Every other signal on this screen — the badge, the option
+       text, the button labels — is read by somebody who is already looking for it. This one has to
+       reach the person who opened the wrong period and is about to approve it, so it goes above the
+       title, spans the width, and is not styled as a dismissible notice. It survives print because
+       a practice payout printed and filed by hand is precisely the mix-up nothing downstream could
+       catch. */
+    if (isPractice) {
+      var prc = d.practice || {};
+      h.push('<div class="crew-inc-practice"><b>PRACTICE — this is not payroll.</b> ' +
+             'A rehearsal of ' + esc(incPeriodLabel(prc.source_start || '', prc.source_end || '')) +
+             '. Everything here works for real — ticking attendance, sending for approval, ' +
+             'approving, the PDF, the export — but every row is written to a separate practice ' +
+             'tab. Nobody is paid, and the real period is untouched.</div>');
+    }
+
     h.push('<div class="crew-inc-band"><div class="crew-inc-head"><div class="crew-inc-headl">');
     h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive</span>' +
-           '<span class="crew-inc-badge ' + (isImported ? 'is-imported">As paid'
-                                                        : 'is-live"><span class="crew-inc-dotlive"></span>Live') +
+           '<span class="crew-inc-badge ' +
+             (isPractice ? 'is-practice">Practice'
+            : isImported ? 'is-imported">As paid'
+                         : 'is-live"><span class="crew-inc-dotlive"></span>Live') +
            '</span></div>');
     h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
            '<span class="crew-inc-facts">' + esc(incFacts(d, buds, mgrs)) + '</span></div>');
@@ -2928,6 +2947,18 @@
       h.push('<button type="button" class="crew-inc-glass" id="incReopen" ' +
              'title="Reopen this period so its figures can be corrected">Reopen…</button>');
     }
+    /* START THE REHEARSAL AGAIN. Without it the practice period is single-use: approving freezes
+       it exactly as approving a real one does, and the second person to want a run-through would
+       find a closed record and nothing to practice on.
+       Editor-level, not approver-level — preparing is Mike's job and so is rehearsing it, and this
+       has never touched anything that paid anybody. It renders ONLY on a practice period, so the
+       one button in this app that deletes rows cannot be reached from a screen where deleting rows
+       would mean something. */
+    if (incIsPractice(d) && d.can_edit) {
+      h.push('<button type="button" class="crew-inc-glass" id="incPracticeReset" ' +
+             'title="Clear the practice period and start the run-through again">' +
+             'Reset practice…</button>');
+    }
     /* WHY THE ROW IS GREY, once, at the end — not only in a tooltip on each dead button, which is
        invisible to anyone not hovering, and reads as a broken app. Suppressed when a branch above
        has already explained itself: the preparer waiting on the approver is told exactly that, and
@@ -3123,6 +3154,9 @@
     var n = (buds || []).length + (mgrs || []).length + (d.admin ? 1 : 0);
     var people = n + (n === 1 ? ' person' : ' people');
     var pp = d.payPeriod || {};
+    /* Checked BEFORE `imported`: an approved practice period is served from a history tab and would
+       otherwise read "Imported", which is the one word on this screen that means "this was paid". */
+    if (incIsPractice(d)) return 'Practice · ' + people;
     if (d.source === 'imported') return 'Imported · ' + people;
     if (!pp.current) return 'Closed period · ' + people;
     var end = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(pp.end || ''));
@@ -3138,10 +3172,24 @@
 
   function incInputs() { return (inc.data && inc.data.inputs) || {}; }
 
+  /* ── The practice pay period, from the browser's side ───────────────────────────────────────
+     The engine hands back a period whose `pp_start` is a KEY ('practice-2026-08-17'), not a date,
+     and rewrites payPeriod.start to it — which is what lets every save, send, approve and reopen
+     path here keep posting `payPeriod.start` without knowing practice exists.
+
+     What the browser DOES have to know is that a key is not a date. Two things read pay-period
+     strings as dates: the human label in the picker, and the print/export filenames. Both go
+     through incPPDate, so a practice period reads as the fortnight it rehearses instead of as
+     '' — which is what an un-stripped key produced, and it fails SILENTLY in exactly the place
+     this app has already been bitten twice (a payroll document named after nothing). */
+  function incIsPractice(d) { return !!d && d.source === 'practice'; }
+  function incPPDate(pp) { return String(pp || '').replace(/^practice-/, ''); }
+
   var INC_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   /* "Aug 17 – Aug 30, 2026" rather than "2026-08-17 → 2026-08-30". The ISO form is what the
      engine speaks; this is what a person reads. The print-only twin keeps the plain text. */
   function incPeriodLabel(a, b) {
+    a = incPPDate(a);
     var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(a || '')),
         n = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(b || ''));
     if (!m || !n) return (a || '') + ' → ' + (b || '');
@@ -3152,7 +3200,8 @@
   function incPeriodSelect(d) {
     var opts = (d.periods || []).map(function (p) {
       var lbl = incPeriodLabel(p.pp_start, p.pp_end) +
-                (p.source === 'imported' ? '  · as paid' : '');
+                (p.source === 'imported' ? '  · as paid'
+               : p.source === 'practice' ? '  · PRACTICE — not real pay' : '');
       return '<option value="' + esc(p.pp_start) + '"' +
              (p.pp_start === (d.pp_start || (d.payPeriod && d.payPeriod.start)) ? ' selected' : '') +
              '>' + esc(lbl) + '</option>';
@@ -3169,7 +3218,8 @@
       '<select id="incPeriod" aria-label="Pay period">' + opts + '</select>' +
       '<button type="button" class="crew-inc-nav r" id="incNext"' +
         (at <= 0 ? ' disabled' : '') + ' aria-label="Newer period">›</button></span>' +
-      '<span class="crew-inc-printpp">Pay period ' + esc(cur) + ' → ' + esc(end) + '</span>';
+      '<span class="crew-inc-printpp">' + (incIsPractice(d) ? 'PRACTICE — ' : '') +
+        'Pay period ' + esc(incPPDate(cur)) + ' → ' + esc(end) + '</span>';
   }
 
   function incSecHead(label, n, extra) {
@@ -3371,6 +3421,8 @@
     if (ai) ai.addEventListener('click', function () { attImport(d); });
     var rp = host.querySelector('#incReopen');
     if (rp) rp.addEventListener('click', function () { incReopen(d); });
+    var pr = host.querySelector('#incPracticeReset');
+    if (pr) pr.addEventListener('click', function () { incPracticeReset(d); });
     var vd = host.querySelector('#incVoided');
     if (vd) vd.addEventListener('click', function () { incVoidedPanel(d); });
     /* Wired BEFORE the `if (!editable) return` below, like the other approver controls: the pencil
@@ -3522,7 +3574,12 @@
     var pp = d.payPeriod ? d.payPeriod.start : d.pp_start;
     var a = document.createElement('a');
     a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
-    a.download = 'incentive-payroll-' + pp + '.csv';
+    /* THE FILENAME IS THE ONLY THING THAT TRAVELS. This file leaves the app and is opened next to
+       the real one, by somebody who is importing it into Capstone — its contents are a column of
+       names and dollars either way, and nothing inside it says which fortnight it is a rehearsal
+       of. So practice is announced in the name, and the name still carries the real dates so it
+       files itself sensibly. */
+    a.download = (incIsPractice(d) ? 'PRACTICE-' : '') + 'incentive-payroll-' + incPPDate(pp) + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     /* WHO WAS LEFT OUT IS SAID OUT LOUD, and deliberately NOT in the file — Capstone parses it, so
        a footer row would be a row they try to import. The count belongs to the person pressing the
@@ -3672,9 +3729,16 @@
   function incDocName() {
     if (!ui || !ui.inc || ui.inc.style.display === 'none') return '';
     var d = inc.data; if (!d) return '';
-    var a = incMMDDYY(d.pp_start || (d.payPeriod && d.payPeriod.start));
+    /* incMMDDYY parses a DATE; the practice period's start is a key, so it is stripped first —
+       without that both halves come back '' and the document silently reverts to being called
+       "GX Crew", which is the exact bug the whole of the comment above this describes.
+       The engine's payoutFileName_ builds the same string with the same prefix; the two agree by
+       following the same rule, and tests/pdf_name_agreement_test.js is what holds them to it. */
+    var src = d.payPeriod && d.payPeriod.start;
+    var a = incMMDDYY(incPPDate(d.pp_start || src));
     var b = incMMDDYY(d.pp_end   || (d.payPeriod && d.payPeriod.end));
-    return (a && b) ? 'Incentive Dashboard - ' + a + '-' + b : '';
+    if (!a || !b) return '';
+    return (incIsPractice(d) ? 'PRACTICE - ' : '') + 'Incentive Dashboard - ' + a + '-' + b;
   }
   /* THE TITLE IS SET WHEN THE VIEW PAINTS, NOT WHEN PRINTING STARTS — and that is the second
      attempt at this. Doing it on `beforeprint` was still too late in practice: Sky printed the
@@ -4205,6 +4269,39 @@
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not reopen: ' + ((e && e.message) || 'unknown'), true);
+    }
+  }
+
+  /* CLEAR THE REHEARSAL AND GO AGAIN.
+   *
+   * The counterpart to Reopen, and deliberately the opposite in tone. Reopening asks for a typed
+   * sentence because it un-pays people; this asks for one click of confirmation because it destroys
+   * a rehearsal — over-guarding it would make running through the close twice feel like an incident,
+   * which is the exact friction that stops anybody rehearsing at all.
+   *
+   * The engine builds the tab names itself and can only ever name practice ones, so there is no
+   * period id to get wrong here and nothing this can be pointed at by mistake. */
+  async function incPracticeReset(d) {
+    var prc = d.practice || {};
+    var label = incPeriodLabel(prc.source_start || '', prc.source_end || '');
+    if (!window.confirm(
+        'Reset the practice period?\n\n' +
+        'Everything in the run-through of ' + label + ' is deleted — the attendance ticks, the ' +
+        'SPIFF figures, the approval and its frozen rows — and it reopens as a fresh draft.\n\n' +
+        'No real pay period is touched. Practice PDFs already filed to Drive are left alone.')) return;
+    try {
+      var r = await Engine.jsonp('incentive_practice_reset',
+                { token: token(), confirm: 'yes' }, { timeoutMs: 45000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not reset');
+      toast(r.cleared && r.cleared.length
+        ? 'Practice period reset — start the run-through again'
+        : 'The practice period was already empty');
+      /* Reload by the key the ENGINE just told us it cleared, not the one on screen: a reset that
+         lands while the configured source fortnight has rolled over would otherwise reload a key
+         that no longer exists and strand the screen on an error. */
+      await loadIncentive(r.pp_start || (d.payPeriod && d.payPeriod.start) || '');
+    } catch (e) {
+      toast('Could not reset practice: ' + ((e && e.message) || 'unknown'), true);
     }
   }
 

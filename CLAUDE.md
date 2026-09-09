@@ -514,6 +514,11 @@ people against it. Pinned by `tests/threshold_agreement_test.js`.
 - **`live`** — LB's slice plus Crew's inputs, with the math running in the browser so a tick
   re-scores instantly.
 
+*A third exists since 2026-09-09 — **`practice`**, a rehearsal of a real fortnight stored under its
+own key in parallel tabs. It is served like a live period, or like an imported one once it has been
+approved, and never appears in any enumeration of what the company actually closed. See the practice
+pay period section below.*
+
 Where the two overlap the **import wins** — LB offers its last 8 periods regardless, and serving one
 live would re-derive a paid fortnight against today's thresholds.
 
@@ -532,6 +537,74 @@ above — a doc asserting a value nothing can contradict. Read `budtender.discou
 tray, never from this paragraph.*
 Leaderboard still has this bug in miniature: its performance figures freeze but its thresholds do
 not, so editing the discount goal re-scores every period it already paid.
+
+### The practice pay period — rehearse the close without paying anybody (2026-09-09)
+
+Approving is immutable, so until now the only way to find out whether the payroll path worked was
+to run it on a real fortnight and pay people. That blocked two things at once: verifying a change
+end to end, and *"rehearse the whole pay period close with Mike, start to finish"*, which sits
+directly below this on the build order.
+
+**It is a real pay period wearing a different key.** `practice-2026-08-17` is where the rows go;
+`2026-08-17` is the fortnight whose performance is fetched and scored. Real staff, real numbers,
+real buttons — tick attendance, import Mike's list, type a SPIFF figure, send for approval, get the
+email, approve, file the PDF, export the CSV, reopen it with break glass. The only difference is
+where the rows land. **Fake staff and invented figures would rehearse nothing**: the close is a
+judgement about whether the numbers look right, and nobody can make that judgement about names they
+do not recognize.
+
+**The isolation is the TAB, not a filter.** Every one of the five incentive tabs has a parallel
+twin — `crew_incentive_history_practice`, `crew_incentive_inputs_practice`, and so on — chosen by
+`incTab_(BASE, pp)`, the one place the suffix is ever written. The tempting version keeps the rows
+where they are and filters them out on the way past, which is one deleted line away from practice
+money inside `crew_incentive_history`: the tab somebody sums when they want to know what the company
+paid. A reader that does not know practice exists **cannot** see it, and that is every reader that
+matters — `historyPeriods_()`, the Capstone export, the digest, the payout backfill.
+
+**THE ONE WAY THIS GOES CATASTROPHICALLY WRONG is confusing the storage key with the performance
+window, and nothing about that failure is visible.** Both strings are valid period identifiers, both
+find rows, both paint a complete-looking screen.
+
+- Storage key where the window belongs → SPIFF matches no program's dates and scores **$0 for
+  everybody**, which looks exactly like a quiet fortnight for vendor money.
+- Window where the storage key belongs → a rehearsal writes attendance ticks, frozen history rows
+  and an **approval into the real pay period**. That is not a rehearsal; it is an unreviewed
+  approval nobody knows happened.
+
+So: **fetch and score against `practiceSource_(pp)`, store against `pp`** — and the SPIFF fold runs
+*before* the key is swapped in, on both `getIncentive_` and `incentiveApprove_`, in the same place,
+so the screen and the record cannot disagree about which fortnight was scored.
+`tests/practice_period_test.js` pins both directions and the ordering.
+
+**`payPeriod.start` is rewritten to the key, and that is what keeps the browser ignorant.** It
+already posts `payPeriod.start` on every save, send, approve and reopen, so one rewrite in the
+engine routes all of them. The browser learns exactly two things: `incPPDate` (a key is not a date —
+the picker label and the print/export filenames parse it, and an unstripped key yields `''`, which
+is the "GX Crew.pdf" bug this file already has a section about) and `incIsPractice`.
+
+**Everything that leaves the app says PRACTICE on it**, because a document detaches from its context
+the moment somebody prints or emails it: the payout PDF's filename *and* its first line, the CSV
+filename, the email **subject** (read before the body), and a banner above the figures on screen
+that is deliberately **not** in the print stylesheet's hide list — black on white with a border, so
+a grayscale printer keeps it. The badge is red; amber already means "as paid" here and gold means "a
+person decided this", and a practice period is not a shade of either. Practice PDFs file to a
+`Practice` subfolder of the payout archive — filing them proves the Drive write works, filing them
+*beside* 28 fortnights of real payout reports does not.
+
+**Reset is the reason it is not single-use.** Approving freezes a practice period exactly as it
+freezes a real one, so without `incentive_practice_reset` the second person wanting a run-through
+would find a closed record. It deletes the practice tabs (`sheetOf_` recreates them, so a reset also
+repairs drifted headers) and **cannot be pointed anywhere else**: it builds the key itself from
+`cfg.crewPracticePeriod`, takes no period from the request, and refuses outright if any name it is
+about to clear does not end `_practice`. Editor-level, not approver-level — preparing is Mike's job
+and so is rehearsing it, and nothing here has ever paid anybody. **Reopening does not reset**: break
+glass is part of what is being rehearsed.
+
+**It mirrors the last COMPLETED fortnight** (`cfg.crewPracticePeriod` pins another) and is offered
+**last** in the picker, appended after the sort — the list is newest-first and an entry at the top
+is the one a hurried click lands on. It is always there rather than behind a flag: a rehearsal
+surface one setting away is one nobody turns on, and both things that asked for this start with
+somebody opening the screen.
 
 ### There are TWO implementations of the bonus math, on purpose
 
