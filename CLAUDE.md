@@ -990,12 +990,31 @@ the payroll file and left the one that *is* the payroll file open.
 - **The screen reports it; only the write paths refuse.** A period missing a store is still worth
   *preparing*, as long as it says so.
 
-**DO NOT DELETE THIS WHEN GX Core's `stores_failed` ARRIVES.** They cover different failures and the
-overlap is partial. `stores_failed` reports a store that **errored**. This reports a store that
-returned nobody **for any reason** — a credential that authenticates and hands back an empty set, a
-200 with nothing in it — which raises nothing anywhere and is the failure neither app can currently
-see. It also holds when `cfg.incentiveEngine` selects Leaderboard, which sends no `stores_failed` at
-all; a guard covering one of two engines is one somebody will trust in the wrong configuration.
+**DO NOT DELETE THIS WHEN GX Core's `stores_failed` ARRIVES.** Three reasons, **ordered by how often
+they bite** — which is not the order they were found in, and the first is the whole argument:
+
+1. **A cache hit is the ORDINARY case.** GX Core caches a closed period for six hours, so most calls
+   all day are served from a stored payload — and **a stored payload can be older than the field**.
+   It carries no version stamp, so a consumer cannot tell whether it is reading today's answer or
+   one written before `stores_failed` existed. Measured live 2026-09-09: same period, minutes apart,
+   with the field on a fresh compute and without it from a pre-v313 cache entry. That window reopens
+   for six hours after **every** future GX Core cut — right after a release, the worst moment for a
+   payroll guard to quietly stop running. A check that only works on a cache **miss** is one that
+   mostly does not run, and it looks fine in every test and every dry run.
+2. **`cfg.incentiveEngine` can select Leaderboard**, which sends no `stores_failed` at all.
+3. **`stores_failed` reports a store that ERRORED.** This reports a store that returned nobody for
+   **any** reason — a credential that authenticates and hands back an empty set, a 200 with nothing
+   in it — which raises nothing anywhere.
+
+The roster check reads the registry itself and counts who arrived, so it depends on none of: the
+producer telling the truth, the producer having been asked recently, or the answer being newer than
+the field.
+
+**When `stores_failed` IS wired in beside it, read it as THREE states, never for truthiness** —
+`undefined` (not reported, or the payload predates the field) / `0` (checked, clean) / `>0` (refuse).
+Same rule this repo already paid for with `lb_agrees`, where `null` coerced to `false` made "no
+scheme arrived" and "Leaderboard disagrees" one claim for two days. GX Core's own field list carries
+this note as of v314.
 
 ### `perfForWrite_` — the row shape, in one place
 

@@ -178,6 +178,15 @@ console.log('\nA genuinely empty roster is different from an unreadable one');
   const c = E.cov(live);
   ok('it reports as checked', c.checked === true);
   ok('and passes, because no store had anybody to sell', c.ok === true);
+  /* THAT PASS IS SATISFIED BY A PAYLOAD WHERE NOTHING WAS MISSING ANYWAY, so on its own it would
+     also be satisfied by a check that never ran — which is the "cleared by coincidence" shape this
+     whole feature spent a day on. Discriminating is the real claim: the SAME short payload passes
+     against an empty roster and fails against a populated one. */
+  const short = FULL().filter(r => r.store_id !== 'river-rd');
+  const empty = E.cov(period(short, { roster_stores: {} }));
+  const full  = E.cov(period(short.map(r => Object.assign({}, r))));
+  ok('...and the same short payload FAILS once the roster expects that store',
+     empty.ok === true && full.ok === false && full.missing[0] === 'river-rd');
 }
 
 console.log('\nManagers count as sellers for coverage');
@@ -202,6 +211,14 @@ console.log('\nCorporate is not a store');
   const c = E.cov(live);
   ok('corporate is never expected', c.expected.indexOf('corporate') < 0);
   ok('and a corporate row does not break coverage', c.ok === true);
+  /* Same weakness as above: a pass here is also what a dead check looks like. The claim with teeth
+     is that a corporate row cannot COVER FOR a missing store — which is exactly what a folded
+     floater is, since the fold moves them off the store they actually worked. */
+  const noRiver = FULL().filter(r => r.store_id !== 'river-rd');
+  noRiver.push(seller('Floater', 'corporate', 'corporate'));
+  const c2 = E.cov(period(noRiver));
+  ok('...and a corporate row does not stand in for the store that is missing',
+     c2.ok === false && c2.missing.length === 1 && c2.missing[0] === 'river-rd');
 }
 
 console.log('\nThe answer is computed once per payload');

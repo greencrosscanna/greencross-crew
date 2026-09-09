@@ -6429,12 +6429,33 @@ function perfForWrite_(pp) {
  * downstream for a human to spot.
  *
  * WHY THIS IS NOT MADE REDUNDANT BY GX Core's `stores_failed`, and PLEASE DO NOT DELETE IT WHEN
- * THAT ARRIVES. They cover different failures. `stores_failed` reports a store that ERRORED. This
- * reports a store that returned nobody for ANY reason — including a credential that authenticates
- * fine and hands back an empty set, or a 200 with nothing in it, which raises nothing anywhere and
- * is the failure neither app can currently see. This one also holds when `cfg.incentiveEngine`
- * selects Leaderboard, which sends no `stores_failed` at all; a guard covering one of two engines
- * is a guard somebody will trust in the wrong configuration.
+ * THAT ARRIVES. Three reasons, ORDERED BY HOW OFTEN THEY BITE — which is not the order they were
+ * found in, and the first one is the whole argument:
+ *
+ *   1. A CACHE HIT IS THE ORDINARY CASE. GX Core caches a closed period for six hours, so most
+ *      calls all day are served from a stored payload — and a stored payload can be OLDER THAN THE
+ *      FIELD. It carries no version stamp, so a consumer cannot tell whether it is reading today's
+ *      answer or one written before `stores_failed` existed. Measured live on 2026-09-09: the same
+ *      period, minutes apart, answered with the field on a fresh compute and without it from a
+ *      pre-v313 cache entry. That window reopens for six hours after EVERY future GX Core cut,
+ *      which is to say right after a release — the worst possible moment for a payroll guard to
+ *      quietly stop running. A check that only works on a cache MISS is a check that mostly does
+ *      not run, and it would look fine in every test and every dry run.
+ *   2. `cfg.incentiveEngine` can select Leaderboard, which sends no `stores_failed` at all. A guard
+ *      covering one of two engines is one somebody will trust in the wrong configuration.
+ *   3. `stores_failed` reports a store that ERRORED. This reports a store that returned nobody for
+ *      ANY reason — a credential that authenticates fine and hands back an empty set, a 200 with
+ *      nothing in it — which raises nothing anywhere and is the failure neither app can see.
+ *
+ * This check reads the roster itself and counts who arrived. It does not depend on the producer
+ * telling the truth, on the producer having been asked recently, or on the answer being newer than
+ * the field. That is the property to protect.
+ *
+ * AND WHEN `stores_failed` IS WIRED IN BESIDE THIS: read it as THREE states, never for truthiness.
+ * `undefined` = not reported (or the payload predates the field), `0` = checked and clean, `>0` =
+ * refuse. Crew has already paid for this exact mistake once — `lb_agrees` coerced `null` to
+ * `false`, so "no scheme arrived" and "Leaderboard disagrees" became one claim, and every dry run
+ * for two days reported a disagreement with an app Crew no longer asks.
  *
  * RUN IT AFTER `foldFloaters_`. A floater is booked to corporate by the fold, so a `seen` set built
  * before it credits a store with a seller it is about to lose.
