@@ -869,13 +869,20 @@
     if (mi < 0 || mi > 11) return '—';
     return MONTHS[mi] + ' ' + m[1];
   }
-  /* "Aug 2026 — present" while it runs, one month if it began and ended in the same one, a
-     range otherwise. Reading "Mar 2026 – Mar 2026" tells you nothing the single month does not. */
-  function eomSpan(h) {
-    var from = eomMonth(h.started_at);
-    if (h.current) return from + ' — present';
-    var to = eomMonth(h.ended_at);
-    return from === to ? from : from + ' – ' + to;
+  /* THE MONTH THEY WERE NAMED FOR, and nothing else (Sky, 2026-09-08: "just show the Month Year
+     in roster page, not the range").
+
+     It used to read "Aug 2026 — present" while a reign ran, and "Mar 2026 – Apr 2026" where a pick
+     had not been changed promptly. Both describe how long somebody HELD the star, which is a fact
+     about when the next pick happened rather than about the award — and Employee of the Month is a
+     monthly award, so the month it was given for is the whole answer. A second month appearing in
+     the row only ever meant "nobody got round to picking in April", which is not something the log
+     of who won should be reporting as if it were part of the honour.
+
+     `ended_at` is untouched and still recorded; it is simply not what this line is for. Renamed
+     from eomSpan, because a function called span that returns one month is a name that lies. */
+  function eomWhen(h) {
+    return eomMonth(h.started_at);
   }
 
   /* The reign log. The face comes from the roster where they are still on it, but the NAME comes
@@ -907,7 +914,7 @@
          Core draws by storing an empty value instead of deleting the key. */
       li.appendChild(el('span', 'crew-eomlog-name' + (h.nobody ? ' is-nobody' : ''),
         h.nobody ? 'Nobody held it' : esc(eomLogName(h))));
-      li.appendChild(el('span', 'crew-eomlog-when', esc(eomSpan(h))));
+      li.appendChild(el('span', 'crew-eomlog-when', esc(eomWhen(h))));
       /* Provenance, because the two are not the same claim. An observed reign is what GX Core
          actually held; a backfilled one is somebody's memory of a month that predates the log. */
       li.appendChild(el('span', 'crew-eomlog-by',

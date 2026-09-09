@@ -277,5 +277,30 @@ M.state.rows = [{ store: 'bend' }, { store: 'bend' }];
 eq('a single-store roster gets no pill row at all',
    M.storePills(M.state.rows), null);
 
+/* ── Pill labels come from the REGISTRY, never from a table in here ──────────────────────────
+ * Sky reported the sub-nav pills reading "Portland Rd" and "River Rd" and asked for the "Rd"
+ * dropped. By the time it was looked at, GX Core's registry already said "Portland" and "River" and
+ * the pills were correct — nothing in this app or in gx-theme adds the suffix, and GXStores' cache
+ * expires in six hours, so the stale reading had aged out on its own. Nothing to fix, so nothing
+ * was changed.
+ *
+ * What IS worth holding is the reason it fixed itself: the label is whatever the registry says.
+ * A local map — added to "correct" a name, or as an offline fallback that quietly rots — is how a
+ * store gets renamed in the Command Center and keeps its old name here, which is the shape of the
+ * original complaint. `storeName` may read state.stores (filled from GXStores) and PSEUDO_STORES,
+ * which exists only because `corporate` is deliberately not a shop and so is absent upstream. */
+{
+  const CREW = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
+  const code = CREW.replace(/\/\*[\s\S]*?\*\//g, '');
+  const REAL = ['Century', 'Baseline', 'Commercial', 'Portland', 'River'];
+  const planted = REAL.filter(n => new RegExp("['\"]" + n + "['\"]").test(code));
+  eq('no store display name is written into this app', planted, []);
+  eq('and none of them with an Rd suffix either',
+     /Portland Rd|River Rd|Portland Road|River Road/.test(code), false);
+  /* The one allowed local label, and why it is allowed. */
+  eq('corporate is still labeled here, since the registry has no row for it',
+     /PSEUDO_STORES = \{ corporate: 'Corporate' \}/.test(CREW), true);
+}
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nroster filter: all passed');
 process.exit(fail ? 1 : 0);
