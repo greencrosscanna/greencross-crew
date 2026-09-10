@@ -130,9 +130,14 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   avatar-only save. **v310** is the floor for the bug-filed email — below it `gxIngestBug` sends
   nothing and Crew notifies nobody on a filing — and **v311** is the floor for that email carrying
   the JS errors the page threw before submit, which is the field that took three reports to
-  diagnose a Sales bug. Crew already passes `context`, so it gets that line; Crew has never sent a
-  bug email of its own, so there is no duplicate send to remove here (the thing v310's note warns
-  inventory and performance about). *These are FLOORS — the sentence naming a CURRENT pin was
+  diagnose a Sales bug. Crew already passes `context`, so it gets that line. **v312** is the floor
+  for `mailed` / `mail_error` / `mail_skipped`, which Crew now reads — see the bug-fallback section
+  below.
+
+  *Corrected 2026-09-09.* This used to add "Crew has never sent a bug email of its own, so there is
+  no duplicate send to remove here". True when written and true of the SUCCESS path still — Core
+  owns that send and Crew must never add a second — but Crew does now send on the two failure
+  paths, and a flat "Crew never mails about bugs" is how somebody deletes them as a stray. *These are FLOORS — the sentence naming a CURRENT pin was
   deleted 2026-09-09 rather than updated, because it had been wrong six times and this file already
   says two lines up that the version is deliberately not written here.* (v219 fixed `getPeriodGoals`, which Crew does
   not call, added the `blocked` status to `brain_notes` and made deploy-secret errors say *missing*
@@ -146,6 +151,38 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   + what they were looking at) and the `bugreport` route in `Code.gs`, which forwards to
   `GXCore.gxIngestBug`. The action name is **`bugreport`**, matching Inventory and Leaderboard; Sales
   spells it `reportbug` and Price Cards `reportBug`, so do not copy a route from those two.
+  **A bug that files but whose email dies is not silent any more (2026-09-09).** Core swallows its
+  own mail failure on purpose — a report that reached the sheet has succeeded, and mail must never
+  be what stops it — so before this, nothing anywhere recorded that nobody was told: not the inbox,
+  not the row, not a log. `reportBug_` reads the v312 fields and mails Sky itself in two cases,
+  and the two say OPPOSITE things, which is why they carry **separate de-dupe keys**: *not on the
+  board, re-file it* and *on the board, do NOT re-file it, here is the id*. A shared key would let
+  the first suppress the second and leave the wrong instruction standing.
+
+  Three things about it a future session will otherwise undo:
+
+  - **A REFUSAL IS NOT A THROW.** `gxIngestBug` answers `{ok:false, error}` without throwing when it
+    will not take a report. The v310/v312 re-pin notes said to fall back "only when it THROWS";
+    core-admin corrected that wording on 2026-09-09. Crew never had the bug — it has always read the
+    return — but a fallback keyed on the exception would miss the case it exists for.
+  - **A DEDUPED REPEAT CARRIES NO MAIL FIELD AT ALL**, because Core returns at `priorBug` above its
+    send. That is the only reason "no `mailed`" is safe to read as a failure: Crew's `/exec` has the
+    ~6% second-hop flake and a redirect chain has been measured re-running one request three times,
+    which would otherwise read as three separate mail failures — the three-emails bug rebuilt
+    through its own fix. It is Core's property, not Crew's, so it is pinned by the test rather than
+    re-guarded here.
+  - **Crew still tells the REPORTER on a refusal, and that is where it parts company with
+    Leaderboard.** Leaderboard answers ok either way and lets the email carry the whole load. Telling
+    Sky is not a substitute for telling the person at the screen, who is the only one who can re-type
+    what they just lost — so the unfiled notice also carries the report text, which is otherwise the
+    only copy of it, and says the reporter already knows. Copying Leaderboard's wording ("the
+    reporter believes it went through") would send Sky after somebody who does not need chasing.
+
+  No new OAuth scope: the Monday digest already uses `MailApp`. That is load-bearing, not trivia —
+  Apps Script does not re-prompt for a scope added to an authorized project, so a first `MailApp`
+  call would have needed the revoke-and-reconsent dance, with the engine down between the two steps.
+  Pinned by `tests/bug_mail_fallback_test.js` (32 assertions).
+
   **The snapshot deliberately omits the search box contents** — `bug_reports` is a shared table
   rendered in the Command Center cockpit, and Crew is the app holding the PII, so a report must not
   carry an employee's name out of here. `searchActive` says a filter was on; that is the reproducible
