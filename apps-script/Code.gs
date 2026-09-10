@@ -1907,10 +1907,22 @@ function reportBug_(p) {
  * two steps — that this file already has a section about.
  *
  * WHETHER THIS CAN SUCCEED WHERE CORE'S SEND FAILED is not guaranteed, and the honest answer shapes
- * what it is for. A library call runs in the CALLING project, so gxIngestBug's own MailApp send
- * spent CREW's quota; an exhausted quota refuses this one too. What it does cover is everything
- * else: a missing or bad recipient (all of `mail_skipped`), a transient failure, a Core-side config
- * problem, and every case where Core was never reached at all.
+ * what it is for. gxIngestBug's own MailApp send already drew on the same allowance this one does,
+ * so an exhausted quota refuses this too. What it does cover is everything else: a missing or bad
+ * recipient (all of `mail_skipped`), a transient failure, a Core-side config problem, and every
+ * case where Core was never reached at all.
+ *
+ * *Corrected 2026-09-09, hours after shipping.* This said the library call "spent CREW's quota",
+ * which reads as a per-project allowance and is wrong in a way that matters. MailApp meters per
+ * GOOGLE ACCOUNT, and every engine in the suite is `executeAs: USER_DEPLOYING` under the same one
+ * — so there is ONE daily allowance shared across all seven apps, and Crew, with more MailApp call
+ * sites than any other spoke, is plausibly its largest single draw. Verified rather than inherited:
+ * `?action=mail_check` on Crew's deployment read 1313 remaining at the same moment Leaderboard's
+ * own diagnostic read 1313 from a DIFFERENT project, and Crew's effective user is
+ * sky@greencrosscanna.com. Two projects, one counter.
+ * The consequence for reading a failure here: an exhausted quota is not evidence Crew sent
+ * anything. The Monday digest, a payout-approval mail, or another app entirely can be what spent
+ * it, and the notice that then goes missing is this one.
  *
  * Wrapped and non-fatal, for the reason every send in this file is: mail is the enhancement, the
  * report is the thing.
