@@ -458,6 +458,12 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(mailCheck_(), p.callback);
 
+      // Which Google permissions this deployment actually HOLDS — read off its own token, not
+      // inferred from the manifest. The check to run before touching `oauthScopes`.
+      case 'scopes_check':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(scopesCheck_(), p.callback);
+
       // The Monday recap. Previews by default; send=yes actually mails it, to= overrides who.
       case 'digest':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
@@ -3303,6 +3309,30 @@ function mailCheck_() {
              ? 'The account above is the one that must grant the mail scope — open the script ' +
                'signed in AS THAT ACCOUNT, run sendDigestNow(), accept the prompt.'
              : 'Mail is authorized for this deployment.' };
+}
+
+/* WHAT THIS DEPLOYMENT IS ACTUALLY ALLOWED TO DO, asked of Google rather than guessed from code.
+ *
+ * Apps Script never re-prompts for a scope added to an authorized project, so the manifest and the
+ * grant can disagree and nothing says so until a call is refused. Declaring `oauthScopes` is only
+ * free if the list equals what is already granted — this is how to know that set. It asks Google's
+ * tokeninfo about the deployment's own token and returns the scope list and NOTHING else.
+ *
+ * The token goes in a POST body, never the URL, and no exception message is echoed: UrlFetchApp
+ * puts whole URLs into its errors, which is how the deploy secret once reached a banner. */
+function scopesCheck_() {
+  try {
+    var r = UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo', {
+      method: 'post', payload: { access_token: ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+    if (r.getResponseCode() !== 200) {
+      return { ok: false, error: 'tokeninfo answered HTTP ' + r.getResponseCode() };
+    }
+    var scopes = String(JSON.parse(r.getContentText() || '{}').scope || '')
+      .split(/\s+/).filter(String).sort();
+    return { ok: true, granted: scopes, count: scopes.length };
+  } catch (e) {
+    return { ok: false, error: 'could not read this deployment\'s grant' };
+  }
 }
 
 function sendDigest_(p) {
