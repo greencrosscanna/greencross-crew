@@ -1765,15 +1765,33 @@ function reviewItems_() {
  * to notice the roster is wrong, and a reporter they are refused is a reporter that produces
  * silence — which reads as "no problems" rather than "no reporter".
  *
- * DO NOT SWALLOW A FAILURE HERE. Inventory wraps its gxIngestBug call in a bare catch because it
- * has an email fallback to fall back TO. Crew has none, so a swallowed throw would return ok:true
- * and the user would read "✓ Reported — thank you!" over a report that does not exist. That exact
- * silent-success is the failure gx-bugreport.js checks res.ok to avoid, and the one gxIngestBug's
- * own title fallback was written for. Let the error travel.
+ * DO NOT SWALLOW A FAILURE HERE. A swallowed failure returns ok:true and the user reads
+ * "✓ Reported — thank you!" over a report that does not exist. That exact silent-success is what
+ * gx-bugreport.js checks res.ok to avoid. Let the error travel.
+ *
+ * *Corrected 2026-09-09.* This used to justify the rule with "Inventory wraps its call in a bare
+ * catch because it has an email fallback to fall back TO; Crew has none" — and Crew now has one,
+ * which is exactly how a reason outlives the thing it was reasoning about. The rule did not change
+ * with it, and the two are independent: the fallback tells SKY, and telling Sky is not a substitute
+ * for telling the person standing in front of the screen, who is the only one who can re-type what
+ * they just lost. Crew therefore does both, which is where it parts company with Leaderboard —
+ * Leaderboard answers ok either way and lets the email carry the whole load.
+ *
+ * READ THE RETURN, NOT JUST THE EXCEPTION. gxIngestBug does not throw when it REFUSES a report; it
+ * answers {ok:false, error}. The v310/v312 re-pin notes said to fall back "only when it THROWS",
+ * corrected by core-admin on 2026-09-09. Crew has always read the return here, so the correction
+ * cost nothing — but the fallback below had to be built watching the same door, not the exception.
+ *
+ * THREE THINGS CAN GO WRONG AND ONLY TWO ARE VISIBLE. The report is refused (this returns the
+ * reason, and mails it); the report files and Core's own email dies (Core swallows that on purpose,
+ * so nothing anywhere records it — see bugNotify_); or it files and mails, which is the normal day.
+ * The middle one is the reason these helpers exist: before them, a filed-but-unannounced bug was
+ * indistinguishable from a filed-and-announced one from every angle in this app.
  *
  * NOTE THE PIN. `context` only reaches the sheet from GXCore v211, where gxIngestBug began
  * self-installing the bug_reports.context header — gxWrite_ maps onto the sheet's REAL header row,
- * so on an older pin the snapshot is dropped silently and the report still returns ok.
+ * so on an older pin the snapshot is dropped silently and the report still returns ok. The mail
+ * fields below need **v312**, and reading them is part of why this app pins v315.
  */
 function reportBug_(p) {
   var auth = requireCrew_(p);
@@ -1783,22 +1801,167 @@ function reportBug_(p) {
   var desc  = String(p.desc  || '').trim();
   if (!title && !desc) return { ok: false, error: 'Say what went wrong.' };
 
-  var res;
+  var b = {
+    reporter: auth.user,
+    title:    title,
+    desc:     desc,
+    priority: String(p.priority || 'normal'),
+    tab:      String(p.tab || ''),
+    appVer:   String(p.appVer || ''),
+    context:  String(p.context || '')
+  };
+
+  var res = null, why = '';
   try {
     res = GXCore.gxIngestBug('crew', auth.user, {
-      title:    title,
-      desc:     desc,
-      priority: String(p.priority || 'normal'),
-      tab:      String(p.tab || ''),
-      appVer:   String(p.appVer || ''),
-      context:  String(p.context || '')
-    });
+      title:    b.title,
+      desc:     b.desc,
+      priority: b.priority,
+      tab:      b.tab,
+      appVer:   b.appVer,
+      context:  b.context
+    }) || {};
+    /* A REFUSAL IS NOT A THROW. gxIngestBug returns {ok:false, error} without throwing when it will
+       not take a report — an empty one, a missing app key (gx_core.gs: `app required`, `title or
+       detail required`). The v310 and v312 re-pin notes told every spoke to fall back "only when
+       gxIngestBug THROWS", which misses exactly that case; core-admin corrected the wording on
+       2026-09-09. Crew never had the bug — the check below has always read the RETURN, not just the
+       exception — but the fallback has to watch the same door. */
+    if (res.ok === false) why = 'GX Core refused the report: ' + (res.error || 'no reason given');
   } catch (e) {
-    return { ok: false, error: 'Could not reach the central bug log: ' +
-                              String((e && e.message) || e) };
+    why = 'Could not reach the central bug log: ' + String((e && e.message) || e);
   }
-  if (!res || !res.ok) return { ok: false, error: (res && res.error) || 'GX Core refused the report' };
+
+  /* NOTHING ON THE BOARD. Crew still tells the reporter — that is the whole point of the doc block
+     above and it does not change — but being told is not the same as being recorded. The
+     description they just typed exists nowhere else the moment this returns, and somebody told
+     "that failed" mid-shift mostly shrugs and carries on. So the email carries the report itself,
+     and its wording says the reporter WAS told: Leaderboard's equivalent says the opposite ("the
+     reporter believes it went through") because Leaderboard answers ok either way, and copying that
+     sentence into Crew would send Sky chasing a person who already knows. */
+  if (why) {
+    if (bugMailOnce_(b, 'unfiled')) {
+      bugNotify_({
+        subject: 'UNFILED GX Crew bug [' + b.priority + ']: ' + (b.title || '(no title)'),
+        lead: [
+          'THIS REPORT IS NOT ON THE BUG BOARD. ' + why + ',',
+          'so nothing was recorded and this email is the only copy of it.',
+          '',
+          'The reporter WAS shown the failure, so they may re-file it themselves — but the text',
+          'below is all that survives if they do not. Re-file it from the Command Center cockpit.'
+        ],
+        b: b
+      });
+    }
+    return { ok: false, error: why };
+  }
+
+  /* THE ROW IS DOWN AND NOBODY WAS TOLD. Core swallows its own mail failure on purpose — a filed
+     report has succeeded, and mail must never be what stops it — so nothing else anywhere will
+     mention this. Unlike the case above the report is safe and the reporter saw a receipt, so this
+     notice has to correct the opposite instinct: do not re-file it, go and look at it.
+     `mail_skipped` is the half that reads as fine and is not — no watch address and no email on
+     file for the reporter means nothing failed and nobody was mailed.
+     A DEDUPED REPEAT CANNOT REACH HERE, and that is a property of Core rather than of this code:
+     gxIngestBug returns at `priorBug` ABOVE its send, so a re-executed request carries no mail
+     field at all and `mailWhy` is undefined. Without that early return the /exec redirect chain —
+     measured re-running one request up to three times — would read as three separate mail failures,
+     which is the three-emails bug rebuilt through its own fix. Pinned by the test rather than
+     re-checked here: a second guard against Core's behavior is a second copy to keep in step. */
+  var mailWhy = res.mail_error || res.mail_skipped;
+  if (mailWhy && bugMailOnce_(b, 'unannounced')) {
+    bugNotify_({
+      subject: 'UNANNOUNCED GX Crew bug [' + b.priority + ']: ' + (b.title || '(no title)'),
+      lead: [
+        'THIS REPORT IS ON THE BUG BOARD — do NOT re-file it — but GX Core could not email anyone',
+        'about it, so this notice is standing in. The reporter got no receipt either.',
+        '',
+        'Bug id   : ' + String(res.id || '(none returned)'),
+        'Mail    ' + (res.mail_error ? ' failed  : ' : ' skipped : ') + mailWhy
+      ],
+      b: b
+    });
+  }
+
   return { ok: true, id: res.id };
+}
+
+/* The body both notices share. Same fields, same order, in one place — the two differ only in the
+ * paragraph at the top saying which failure this was and what to do about it.
+ *
+ * SKY BY NAME, not through a GX Core lookup. This fires when GX Core is the thing that failed, so a
+ * notice that has to ask Core who to write to is a notice that goes nowhere on precisely the run it
+ * exists for. Derived from ACCOUNT_DOMAIN rather than typed, so it moves with the rest of the file
+ * if the domain ever does.
+ *
+ * NO NEW SCOPE, and that matters more than it looks: the Monday digest already uses MailApp. Apps
+ * Script does not re-prompt for a scope added to an already-authorized project, so a first MailApp
+ * call here would have needed the revoke-and-reauthorize dance — with the engine down between the
+ * two steps — that this file already has a section about.
+ *
+ * WHETHER THIS CAN SUCCEED WHERE CORE'S SEND FAILED is not guaranteed, and the honest answer shapes
+ * what it is for. A library call runs in the CALLING project, so gxIngestBug's own MailApp send
+ * spent CREW's quota; an exhausted quota refuses this one too. What it does cover is everything
+ * else: a missing or bad recipient (all of `mail_skipped`), a transient failure, a Core-side config
+ * problem, and every case where Core was never reached at all.
+ *
+ * Wrapped and non-fatal, for the reason every send in this file is: mail is the enhancement, the
+ * report is the thing.
+ */
+function bugNotify_(o) {
+  try {
+    MailApp.sendEmail({
+      to:      'sky@' + ACCOUNT_DOMAIN,
+      name:    'GX Crew',
+      subject: o.subject,
+      body: o.lead.concat([
+        '',
+        'Reporter : ' + (o.b.reporter || ''),
+        'Priority : ' + (o.b.priority || 'normal'),
+        'Screen   : ' + (o.b.tab || ''),
+        'Version  : ' + (o.b.appVer || ''),
+        'Context  : ' + (o.b.context || ''),
+        'Time     : ' + Utilities.formatDate(new Date(), STORE_TZ, 'M/d/yy h:mm a'),
+        '',
+        o.b.desc || '(no details provided)'
+      ]).join('\n')
+    });
+  } catch (mailErr) { /* non-fatal */ }
+}
+
+/* True the FIRST time a given report asks to be emailed AS `kind`, false for a repeat inside three
+ * minutes — the same window gxIngestBug dedupes a bug on, so the email and the board agree about
+ * what "the same report" means. A fourth minute is somebody filing again because nothing happened,
+ * which should mail.
+ *
+ * `kind` NAMESPACES THE MARK, because the two notices carry contradictory instructions ("re-file
+ * this" vs "do NOT re-file this"). One report can legitimately raise both — a submit that never
+ * reaches Core, then a retry that files and cannot mail — and a shared key would silently drop
+ * whichever came second, leaving the earlier, now-wrong instruction standing as the only word on it.
+ *
+ * FAILS OPEN on purpose: a cache or a lock that is unavailable must never be the reason a bug
+ * report goes unread. Better a duplicate email than a silent one. The lock makes check-and-set
+ * atomic, because a redirect chain can re-enter fast enough for three executions to read an empty
+ * cache at once — three simultaneous misses being the exact shape of the bug this guards.
+ */
+function bugMailOnce_(b, kind) {
+  var lock = null;
+  try {
+    var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
+      String(b.reporter || '') + '|' + String(b.title || '') + '|' + String(b.desc || ''),
+      Utilities.Charset.UTF_8);
+    var key = 'bugmail:' + (kind || 'unfiled') + ':' + Utilities.base64EncodeWebSafe(digest);
+    lock = LockService.getScriptLock();
+    try { lock.waitLock(5000); } catch (e) { lock = null; }   // busy, so fall through and send
+    var cache = CacheService.getScriptCache();
+    if (cache.get(key)) return false;
+    cache.put(key, '1', 180);   // seconds; 3 min, the same window as gxIngestBug's dedupe
+    return true;
+  } catch (e) {
+    return true;
+  } finally {
+    if (lock) { try { lock.releaseLock(); } catch (e2) {} }
+  }
 }
 
 function getReview_(p) {
