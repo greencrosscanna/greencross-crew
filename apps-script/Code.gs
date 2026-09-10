@@ -1862,6 +1862,13 @@ function reportBug_(p) {
      notice has to correct the opposite instinct: do not re-file it, go and look at it.
      `mail_skipped` is the half that reads as fine and is not — no watch address and no email on
      file for the reporter means nothing failed and nobody was mailed.
+     IT IS UNREACHABLE TODAY, AND THE BRANCH STAYS ANYWAY. Checked live 2026-09-09: Core's watch
+     address defaults to sky@ (GX_BUG_WATCH_DEFAULT) and `cfg.bugWatchEmail` is unset — and UNSET IS
+     NOT OFF, only the literal string 'off' empties it. Core sends to `rcptTo || watchTo`, so there
+     is always a recipient and `mail_skipped` cannot fire. Setting that one key to 'off' makes it
+     live overnight, from a config change nobody would connect to bug mail; `mail_check` reports the
+     key's state for exactly that reason. A branch deleted as dead is the one nobody re-adds.
+     (Framing from the SPIFF session, via Leaderboard, 2026-09-09.)
      A DEDUPED REPEAT CANNOT REACH HERE, and that is a property of Core rather than of this code:
      gxIngestBug returns at `priorBug` ABOVE its send, so a re-executed request carries no mail
      field at all and `mailWhy` is undefined. Without that early return the /exec redirect chain —
@@ -3263,8 +3270,20 @@ function mailCheck_() {
       triggers.push(t.getHandlerFunction() + ' (' + String(t.getEventType()) + ')');
     });
   } catch (e) { triggers = ['(unreadable: ' + String((e && e.message) || e) + ')']; }
+  /* THE ONE SETTING THAT DECIDES WHETHER A BUG'S `mail_skipped` CAN HAPPEN. Core mails to
+     `rcptTo || watchTo`; watchTo defaults to sky@ and is emptied ONLY by the literal 'off', so
+     while this reads unset or an address, `mail_skipped` is unreachable and the fallback in
+     reportBug_ can only ever fire on `mail_error`. Flip it to 'off' and that changes overnight,
+     with nothing else on screen to connect the two — which is the whole reason it is reported here
+     rather than left to be re-derived. Read through GX Core because Core is the one that acts on
+     it; unreadable is its own answer, and must not read as 'off'. */
+  var watch = '(unreadable)';
+  try { watch = String(GXCore.getKv('cfg.bugWatchEmail') || '').trim() || '(unset - defaults to sky@)'; }
+  catch (e) { watch = '(unreadable: ' + String((e && e.message) || e) + ')'; }
   return { ok: true, effective_user: who, can_send_mail: quota !== null,
            remaining_daily_quota: quota, mail_error: mailErr, triggers: triggers,
+           bug_watch_email: watch,
+           bug_mail_skipped_reachable: watch.toLowerCase() === 'off',
            /* What the LAST attempt did, from wherever it was run. This is the only window into an
               editor execution from out here. */
            last_attempt: last, configured_recipients: subscribers,

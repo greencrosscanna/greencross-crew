@@ -189,6 +189,18 @@ console.log('bug mail fallback');
   ok('the recipient is not fetched from GX Core',
      !/getKv|GXCore\./.test(grab('bugNotify_')));
   ok('the dedupe window matches gxIngestBug (180s)', /180/.test(grab('bugMailOnce_')));
+
+  /* THE UNREACHABLE BRANCH MUST SURVIVE. Core's watch address defaults to sky@ and is emptied only
+     by the literal 'off', so `mail_skipped` cannot fire today — which is exactly the shape of a
+     branch somebody deletes as dead a year from now. It goes live overnight from one config
+     change, so the reason it is unreachable is dated in the comment and pinned here. */
+  ok('the mail_skipped branch is still read', /res\.mail_skipped/.test(src));
+  ok('  and the comment dates WHY it is unreachable rather than leaving it to look dead',
+     /UNREACHABLE TODAY/.test(gs) && /UNSET IS\n     NOT OFF/.test(gs));
+  ok('mail_check reports the setting that makes it reachable',
+     /bug_watch_email/.test(gs) && /bug_mail_skipped_reachable/.test(gs));
+  ok('  and an unreadable key does not read as "off"',
+     /watch\.toLowerCase\(\) === 'off'/.test(gs) && /\(unreadable/.test(gs));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nbug mail fallback: all passed');
