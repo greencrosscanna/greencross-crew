@@ -460,9 +460,21 @@ then run `sendDigestNow()` from the editor. With no stored grant Apps Script re-
 scope and prompts for the full set. **The engine is down between those two steps** — the web app
 runs on that same authorization — so it is a minute of outage, not a free action.
 
-Deliberately NOT fixed by pinning `oauthScopes` in `appsscript.json`: an explicit list replaces
-auto-detection and would have to enumerate everything **GXCore** needs as well as this script's.
-A scope missed there breaks the roster and the review queue, not just email.
+**`oauthScopes` IS declared now (2026-09-09, Sky's call) — and the list is the GRANT, not a
+guess.** This paragraph used to record the opposite decision: an explicit list "would have to
+enumerate everything GXCore needs", and a miss would break the roster. The risk was real; the
+premise was not — the other five apps bind GXCore on the same five scopes. What made it safe was
+reading the grant first: `?action=scopes_check` (deploy-secret, read-only) asks Google's tokeninfo
+about the deployment's own token and returns the scope list. Declaring exactly that set needed no
+reconsent and no downtime. Two entries beyond the suite's five: `userinfo.email`
+(`getEffectiveUser().getEmail()`) and `script.container.ui`, which only GXCore's own HtmlService
+page uses — auto-detect folds library scopes into the grant, so it is declared to keep list == grant.
+
+**The list does not stop a missing scope by itself; `tests/oauth_scopes_test.js` does.** New code
+calling a Google service whose scope is undeclared fails at push, and a declared scope outside the
+recorded grant fails too — because adding one still means the revoke-and-reconsent above, with
+the engine down between the steps. Do that first, confirm with `scopes_check`, then move the
+test's `GRANTED` list.
 
 ## Avatars are written by GX Core now (2026-08-25)
 `GXCore.setAvatar(ref, config, by)` — **v225** — is the single avatar write in the suite, and it is
