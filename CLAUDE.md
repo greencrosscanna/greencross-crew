@@ -165,12 +165,19 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
     will not take a report. The v310/v312 re-pin notes said to fall back "only when it THROWS";
     core-admin corrected that wording on 2026-09-09. Crew never had the bug — it has always read the
     return — but a fallback keyed on the exception would miss the case it exists for.
-  - **A DEDUPED REPEAT CARRIES NO MAIL FIELD AT ALL**, because Core returns at `priorBug` above its
-    send. That is the only reason "no `mailed`" is safe to read as a failure: Crew's `/exec` has the
-    ~6% second-hop flake and a redirect chain has been measured re-running one request three times,
-    which would otherwise read as three separate mail failures — the three-emails bug rebuilt
-    through its own fix. It is Core's property, not Crew's, so it is pinned by the test rather than
-    re-guarded here.
+  - **GATE ON THE PRESENCE OF `mail_error` / `mail_skipped`, NEVER ON THE ABSENCE OF `mailed`.**
+    A deduped repeat carries no mail field at all, because Core returns at `priorBug` above its
+    send — so a rule reading a *missing* `mailed` as failure fires on every deduped repeat. Crew's
+    `/exec` has the ~6% second-hop flake and a redirect chain has been measured re-running one
+    request three times, so that rule is the three-emails bug rebuilt through its own fix. A
+    presence check is silent on a repeat by construction. It is Core's property, not Crew's, so it
+    is pinned by the test rather than re-guarded here.
+
+    *Corrected 2026-09-09.* This bullet said the early return was "the only reason `no mailed` is
+    safe to read as a failure" — backwards: the early return is what makes absence UNSAFE. The code
+    was always right (`res.mail_error || res.mail_skipped`); only the prose was wrong, copied from a
+    Leaderboard note that has since been corrected. Sales mutated its own source to the absence rule
+    and 3 of 44 assertions failed, a lone deduped repeat among them.
   - **Crew still tells the REPORTER on a refusal, and that is where it parts company with
     Leaderboard.** Leaderboard answers ok either way and lets the email carry the whole load. Telling
     Sky is not a substitute for telling the person at the screen, who is the only one who can re-type

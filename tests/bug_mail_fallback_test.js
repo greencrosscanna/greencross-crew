@@ -16,9 +16,10 @@
  *
  * THE TRAP THIS PINS HARDEST is the deduped repeat. Crew's /exec has the ~6% second-hop flake and a
  * redirect chain has been measured re-running one request up to three times. gxIngestBug returns at
- * `priorBug` ABOVE its send, so a repeat carries NO mail field at all — which is the only reason
- * "no `mailed` field" is safe to treat as a failure. Get that backwards and every redirect chain
- * reads as three separate mail failures: the three-emails bug rebuilt through its own fix.
+ * `priorBug` ABOVE its send, so a repeat carries NO mail field at all — which is why the gate reads
+ * the PRESENCE of `mail_error` / `mail_skipped` and never the absence of `mailed`. Read absence as
+ * failure and every redirect chain reads as three separate mail failures: the three-emails bug
+ * rebuilt through its own fix. (Corrected 2026-09-09: this said absence was "safe" — backwards.)
  *
  * AND THE REFUSAL DOOR. gxIngestBug answers {ok:false, error} without throwing when it will not take
  * a report. A fallback keyed on the exception misses exactly the case it exists for. Crew has always
