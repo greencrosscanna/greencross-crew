@@ -1253,6 +1253,37 @@ why. Genuine zeros still print `$0.00` — eight of that period's bonuses really
 
 Pinned by `tests/payout_pdf_test.js`.
 
+### Backups — the whole spreadsheet, to a shared drive (2026-09-11)
+
+*"Where is the payroll record actually backed up?"* was answered **nothing**. Every approved period
+lives in one spreadsheet (`GX Crew — HR data (PII: do not share)`) in Sky's My Drive, shared with
+nobody and copied nowhere. Sheets' version history can undo a bad write — the whole file at once, by
+hand — and the payout PDFs are a paper trail nothing reads back into rows. Nothing survived losing the
+account.
+
+Now `backupCrewSheet_` copies the **whole spreadsheet** into the folder named by GX Core kv
+**`cfg.crewBackupFolder`** — a **shared drive**, Sky's call, because a shared drive belongs to the
+company and survives anything that happens to one person's account.
+
+- **Weekly**, Sunday 03:00 store time (`weeklyBackup`, installed by `install_triggers`), newest **12**
+  kept, older ones **trashed**, not deleted outright.
+- **On every real approval**, after the record and the PDF — **never rotated**. A bug nobody notices
+  for three months rotates out every good weekly copy; these are what remain. Practice periods get none.
+- **No default folder**, unlike the payout PDFs. A fallback into My Drive would look like a working
+  backup while covering half the risk. Unset, it refuses and says so. A failed GX Core read uses the
+  folder last confirmed (`CREW_BACKUP_FOLDER` script property).
+- **Never through `crewSheet_()`**, which *creates an empty spreadsheet* when it cannot open the real
+  one. And a source with no pay rows is still copied but **nothing is rotated**.
+- **A broken backup reaches a person.** Every attempt is recorded; `backupHealth_` fails on no folder,
+  never run, last attempt failed, or more than 8 days late — and the **Monday recap shows a red card
+  only then**. `?action=backup_check` (secret) reads it all; `?action=backup_now&confirm=yes` makes one.
+- The account Crew runs as must be **Content manager or Manager** on the shared drive, or the copy
+  fails and the fix says so. **Keep that drive's membership to people who may see PII** — the copy is
+  the roster too, not just pay.
+
+Needs no new permission: DriveApp and ScriptApp are both already in the grant. Pinned by
+`tests/backup_test.js`.
+
 ### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
 
 There were **two `@media print` blocks** in `index.html`. The second said:

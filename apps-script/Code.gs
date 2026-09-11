@@ -508,6 +508,15 @@ function route_(e) {
       /* Backfill: file the PDF for an ALREADY-APPROVED period from its frozen rows.
          Refuses anything not in history, so it can only ever file a real record. */
       case 'pdf_file':          return json_(pdfFile_(p), p.callback);
+      /* Backups of Crew's whole spreadsheet to the shared drive. Check is read-only; backup_now
+         makes one copy on demand. See the header on backupCrewSheet_. */
+      case 'backup_check':      return json_(backupCheck_(p), p.callback);
+      case 'backup_now':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        if (String(p.confirm || '') !== 'yes') {
+          return json_({ ok: false, error: 'makes a real copy in the backup folder — repeat with confirm=yes' }, p.callback);
+        }
+        return json_(backupCrewSheet_('manual'), p.callback);
       // The approval loop: prepare -> send -> approve, or send back with a reason.
       case 'incentive_send':    return json_(incentiveSend_(p), p.callback);
       case 'incentive_return':  return json_(incentiveReturn_(p), p.callback);
@@ -3092,6 +3101,9 @@ function digestData_() {
     /* null on every other Monday of the month, so the template has one thing to test. */
     eom: (eomFacts && eomFacts.picked) ? null : eomFacts,
     eom_facts: eomFacts,
+    /* Only ever shown when something is WRONG with it. A healthy backup is not an item. */
+    backup: (function () { try { return backupHealth_(); }
+                           catch (e) { return { ok: false, reason: 'Could not check the backup: ' + String((e && e.message) || e) }; } })(),
     byId: byId, stores: stores, all: joined.rows
   };
 }
@@ -3148,6 +3160,16 @@ function digestHtml_(d) {
     tile(d.expiring.length, 'permits inside 90 days', d.expiring.length ? RED : GREEN) +
     tile(d.gaps, 'records with a gap', d.gaps ? GOLD : GREEN) +
     '</tr></table>';
+
+  /* THE PAYROLL BACKUP, and only when it is broken. A weekly copy that fails in front of nobody is
+     indistinguishable from one that works until the day somebody needs it — this is the one place
+     that failure reliably reaches a person. Above everything else, because it is the one item here
+     that gets worse silently. */
+  if (d.backup && !d.backup.ok) {
+    h += '<div style="margin:18px 0 0">' +
+      card(RED, 'Payroll backup', RED, 'The payroll record is not being backed up', d.backup.reason) +
+      '</div>';
+  }
 
   /* EoM sits ABOVE the questions, not below, and only on the one Monday it fires. It is a
      once-a-month ask with a deadline attached; under a long questions list it is the line
@@ -3372,6 +3394,8 @@ function sendDigest_(p) {
                 /* d.eom is the ask; eom_facts still knows a settled pick, which is how the
                    preview distinguishes "already chosen" from "not the first Monday". */
                 eom_reminder: !!d.eom, eom_picked: !!(d.eom_facts && d.eom_facts.picked),
+             backup_ok: !!(d.backup && d.backup.ok),
+             backup_problem: (d.backup && !d.backup.ok) ? d.backup.reason : '',
              /* WHO, not just how many. A preview that says "celebrations: 1" cannot be checked
                 against anything — the first cross-check against ?action=celebrations found a
                 count that disagreed, and the payload gave nothing to find the missing person
@@ -3551,7 +3575,8 @@ function installNightlyScanUnsafe_(p) {
   var canMail = true;
   try { MailApp.getRemainingDailyQuota(); } catch (e) { canMail = false; }
 
-  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest'] : ['nightlyDutchieScan'];
+  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest', 'weeklyBackup']
+                         : ['nightlyDutchieScan', 'weeklyBackup'];
   var removed = 0;
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (handlers.indexOf(t.getHandlerFunction()) >= 0) { ScriptApp.deleteTrigger(t); removed++; }
@@ -3567,6 +3592,10 @@ function installNightlyScanUnsafe_(p) {
     ScriptApp.newTrigger('weeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY)
       .atHour(7).inTimezone(STORE_TZ).create();
   }
+  /* Sunday 03:00 — the quietest hour of the week, and a day before the recap reports on it, so a
+     failed Sunday copy is in Monday's email rather than discovered when somebody needs it. */
+  ScriptApp.newTrigger('weeklyBackup').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY)
+    .atHour(3).inTimezone(STORE_TZ).create();
   /* PROVE THE CRON PATH, NOW, WHILE SOMEBODY IS WATCHING.
    *
    * Installing a trigger and verifying the scan are two different claims, and the request that
@@ -3596,6 +3625,7 @@ function installNightlyScanUnsafe_(p) {
 
   return { ok: true, enabled: true, replaced: removed,
            nightly_scan_hour: 5, timezone: STORE_TZ, cron_path_check: dry,
+           backup_trigger: 'installed, SUNDAY 03:00',
            digest_trigger: canMail ? 'installed, MONDAY 07:00' :
              'LEFT UNTOUCHED — this context cannot send mail, so reinstalling it here would ' +
              'replace a working trigger with one that fails silently. Run installNightlyScan() ' +
@@ -6011,9 +6041,13 @@ function incentiveApprove_(p) {
      written to history but still reading `pending`. */
   var pdf = filePayoutPdf_(pp, String(live.payPeriod.end || ''), rows, split,
                            Math.round(total * 100) / 100, by, now, overrides, spiffInfo);
+  /* …and a copy of the whole spreadsheet, the moment the record stops moving. Never rotated, never
+     able to fail the approval. A rehearsal is not a record, so it gets none. */
+  var backup = isPracticePeriod_(pp) ? { ok: true, skipped: 'practice period' }
+                                     : backupCrewSheet_('approved ' + pp);
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
-           thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf };
+           thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup };
 }
 
 /* ══ The payout PDF — filed to Drive the moment a period is approved ═════════════════════════════
@@ -6356,6 +6390,211 @@ function pdfSelfTest() {
   if (!r.ok) throw new Error('Drive check failed: ' + r.error);
   Logger.log('Drive OK — folder "%s" (%s)', r.folder_name, r.folder_id);
   return r;
+}
+
+/* ══ Backups — a dated copy of Crew's whole spreadsheet, weekly and on every approval ═════════════
+ *
+ * WHY THIS EXISTS (Sky, 2026-09-11, "find out where the payroll record is actually backed up"). The
+ * answer was NOTHING. Every approved pay period lives in one spreadsheet in Sky's My Drive, shared with
+ * nobody, copied nowhere. Sheets' version history can roll a bad write back — the whole file at once,
+ * by hand, a procedure written down nowhere — and the payout PDFs are a paper trail nothing can read
+ * back into rows. Nothing at all survived losing the account.
+ *
+ * WHERE THE COPIES GO: a SHARED DRIVE, Sky's call. A shared drive belongs to the company, not to a
+ * person, so it survives anything that happens to any one account — which was the only failure nothing
+ * covered. The folder is `cfg.crewBackupFolder` in GX Core kv, remembered locally the moment it has
+ * been read once, so a GX Core blip at 3am does not cost the week's copy.
+ *
+ * THERE IS NO DEFAULT FOLDER, deliberately — unlike the payout PDFs. A fallback into My Drive would
+ * look exactly like a working backup while protecting against half of what it was built for. Unset,
+ * it refuses, records that it refused, and the Monday recap says so.
+ *
+ * TWO KINDS OF COPY, and only one of them rotates:
+ *   · weekly   — Sunday 03:00 store time, the newest BACKUP_KEEP_WEEKLY kept, older ones TRASHED
+ *                (never deleted outright — the shared drive's trash holds them another 30 days).
+ *   · approved — taken the moment a real period is approved, when the record stops moving. NEVER
+ *                rotated: a bug that sat unnoticed for three months would otherwise rotate out every
+ *                good weekly copy, and these are what is left when it does.
+ *
+ * IT READS THE SHEET BY ITS STORED ID AND NEVER THROUGH crewSheet_(). That helper CREATES a fresh,
+ * empty spreadsheet when it cannot open the real one — which is right for the roster and exactly
+ * wrong here: a backup of a brand-new empty file, rotating the good copies out one Sunday at a time.
+ * And if the source has no approved pay rows at all, the copy is still made but NOTHING is rotated.
+ *
+ * NEVER THROWS, and never fails an approval — same rule as filePayoutPdf_: by the time it runs the
+ * record is written. Every attempt records its outcome (BACKUP_LAST_PROP), because a weekly job that
+ * fails in front of nobody is indistinguishable from one that worked. `?action=backup_check` reads it.
+ *
+ * Needs no new permission: DriveApp (the payout PDFs) and ScriptApp (the nightly scan) are both
+ * already in the grant — see tests/oauth_scopes_test.js. */
+var BACKUP_FOLDER_KEY  = 'cfg.crewBackupFolder';
+var BACKUP_FOLDER_PROP = 'CREW_BACKUP_FOLDER';   // last folder id GX Core confirmed
+var BACKUP_LAST_PROP   = 'CREW_LAST_BACKUP';
+var BACKUP_KEEP_WEEKLY = 12;
+var BACKUP_PREFIX      = 'GX Crew backup · ';
+var BACKUP_STALE_DAYS  = 8;                      // a weekly job is late after a week and a day
+
+/* The folder id, or '' when nobody has set one. A live read wins and is remembered; the remembered
+   one covers a failed read. Never a constant. */
+function backupFolderId_() {
+  var props = PropertiesService.getScriptProperties();
+  var v = '', readOk = false;
+  try { v = String(GXCore.getKv(BACKUP_FOLDER_KEY) || '').trim(); readOk = true; } catch (e) {}
+  if (readOk) {
+    try {
+      if (v) props.setProperty(BACKUP_FOLDER_PROP, v); else props.deleteProperty(BACKUP_FOLDER_PROP);
+    } catch (e) {}
+    return v;
+  }
+  return String(props.getProperty(BACKUP_FOLDER_PROP) || '');
+}
+
+/* 'weekly' or 'approved <pp>' → the file name. Stamped to the minute in store time so a hand run and
+   the Sunday run on the same day are two names, not one ambiguous pair. */
+function backupName_(kind, when) {
+  return BACKUP_PREFIX + Utilities.formatDate(when || new Date(), 'America/Los_Angeles', 'yyyy-MM-dd HHmm') +
+         ' · ' + kind;
+}
+
+/* WHICH files a weekly run may trash: weekly copies only, beyond the newest `keep`. Pure, so the
+   rule is pinned by a test — an approval copy or a stranger's file in the folder must never match. */
+function backupPrunePlan_(files, keep) {
+  var weekly = files.filter(function (f) {
+    return f.name.indexOf(BACKUP_PREFIX) === 0 && / · weekly$/.test(f.name);
+  }).sort(function (a, b) { return b.created - a.created; });
+  return weekly.slice(keep).map(function (f) { return f.id; });
+}
+
+/* Anything in a shared drive has no owner. Used to REPORT where the copies are, never to refuse —
+   a copy in My Drive still covers a bad write, just not a lost account. */
+function backupInSharedDrive_(folder) {
+  try { return folder.getOwner() === null; } catch (e) { return null; }
+}
+
+function backupCrewSheet_(kind) {
+  var at = new Date();
+  var out = { ok: false, at: at.toISOString(), kind: kind };
+  function note(res) {
+    try { PropertiesService.getScriptProperties().setProperty(BACKUP_LAST_PROP, JSON.stringify(res)); }
+    catch (e) { /* the record is a nicety; never fail the backup over it */ }
+    return res;
+  }
+  var folderId = backupFolderId_();
+  if (!folderId) {
+    out.error = 'no backup folder is set';
+    out.fix = 'Create a shared drive (or a folder in one), then set ' + BACKUP_FOLDER_KEY +
+              ' to its folder id in GX Core.';
+    return note(out);
+  }
+  out.folder_id = folderId;
+  var ssId = String(PropertiesService.getScriptProperties().getProperty(CREW_SHEET_ID_PROP) || '');
+  if (!ssId) { out.error = 'Crew has no spreadsheet id on record — nothing to back up'; return note(out); }
+  try {
+    var src = DriveApp.getFileById(ssId);
+    var folder = DriveApp.getFolderById(folderId);
+    out.folder_name = folder.getName();
+    out.in_shared_drive = backupInSharedDrive_(folder);
+    /* Is there a real record in the source? A copy is taken either way; rotation is not. */
+    var hist = 0;
+    try {
+      var hs = SpreadsheetApp.openById(ssId).getSheetByName(HISTORY_TAB);
+      hist = hs ? Math.max(0, hs.getLastRow() - 1) : 0;
+    } catch (e) {}
+    out.history_rows = hist;
+    var copy = src.makeCopy(backupName_(kind, at), folder);
+    out.ok = true;
+    out.name = copy.getName(); out.id = copy.getId(); out.url = copy.getUrl();
+  } catch (e) {
+    var msg = String((e && e.message) || e);
+    out.error = msg;
+    if (/permission|access|not found|authoriz/i.test(msg)) {
+      out.fix = 'Check that the account GX Crew runs as is a Content manager (or Manager) on that ' +
+                'shared drive, and that ' + BACKUP_FOLDER_KEY + ' is the right folder id.';
+    }
+    return note(out);
+  }
+  /* Rotation — weekly runs only, and never on a source that looks empty. */
+  out.pruned = 0;
+  if (kind === 'weekly') {
+    if (!out.history_rows) {
+      out.prune_skipped = 'the source has no approved pay rows — kept every older copy';
+    } else {
+      try {
+        var files = [], it = folder.getFiles();
+        while (it.hasNext()) {
+          var f = it.next();
+          files.push({ id: f.getId(), name: f.getName(), created: f.getDateCreated().getTime() });
+        }
+        backupPrunePlan_(files, BACKUP_KEEP_WEEKLY).forEach(function (id) {
+          DriveApp.getFileById(id).setTrashed(true);
+          out.pruned++;
+        });
+      } catch (e) {
+        /* The copy landed; rotation is housekeeping. Say so, keep ok. */
+        out.prune_error = String((e && e.message) || e);
+      }
+    }
+  }
+  return note(out);
+}
+
+/* Trigger entry point (Sunday 03:00). */
+function weeklyBackup() { return backupCrewSheet_('weekly'); }
+
+/* Editor-runnable. THROWS on failure so the execution log reads Failed — see sendDigestNow. */
+function backupNow() {
+  var r = backupCrewSheet_('manual');
+  if (!r.ok) throw new Error('Backup failed: ' + r.error + (r.fix ? ' — ' + r.fix : ''));
+  Logger.log('Backed up to "%s" in "%s"', r.name, r.folder_name);
+  return r;
+}
+
+/* Is the backup healthy? The one answer the recap and backup_check both read, so they cannot
+   disagree. `ok:false` with a reason for: no folder, last attempt failed, never run, or late. */
+function backupHealth_() {
+  var last = null;
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty(BACKUP_LAST_PROP);
+    if (raw) last = JSON.parse(raw);
+  } catch (e) {}
+  var folder = '';
+  try { folder = backupFolderId_(); } catch (e) {}
+  if (!folder) return { ok: false, reason: 'No backup folder is set, so the payroll record is not being copied anywhere.', last: last };
+  if (!last) return { ok: false, reason: 'A backup folder is set but no backup has run yet.', last: null };
+  if (!last.ok) return { ok: false, reason: 'The last backup failed: ' + (last.error || 'unknown error') + '.', last: last };
+  var ageDays = (Date.now() - new Date(last.at).getTime()) / 86400000;
+  if (ageDays > BACKUP_STALE_DAYS) {
+    return { ok: false, reason: 'The last backup was ' + Math.floor(ageDays) + ' days ago — the weekly run has stopped.', last: last };
+  }
+  return { ok: true, last: last };
+}
+
+/* ?action=backup_check — read-only. What is set, where it is, what the last attempt did, and what
+   copies exist. `backup_now` (confirm=yes) runs one on demand. Both deploy-secret. */
+function backupCheck_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var h = backupHealth_();
+  var out = { ok: true, healthy: h.ok, problem: h.ok ? '' : h.reason, last_attempt: h.last,
+              folder_id: backupFolderId_(), keep_weekly: BACKUP_KEEP_WEEKLY };
+  if (out.folder_id) {
+    try {
+      var folder = DriveApp.getFolderById(out.folder_id);
+      out.folder_name = folder.getName();
+      out.in_shared_drive = backupInSharedDrive_(folder);
+      var copies = [], it = folder.getFiles();
+      while (it.hasNext()) {
+        var f = it.next();
+        if (f.getName().indexOf(BACKUP_PREFIX) === 0) copies.push(f.getName());
+      }
+      out.copies = copies.sort().reverse();
+    } catch (e) { out.folder_error = String((e && e.message) || e); }
+  }
+  var triggers = [];
+  try {
+    ScriptApp.getProjectTriggers().forEach(function (t) { triggers.push(t.getHandlerFunction()); });
+  } catch (e) {}
+  out.weekly_trigger_installed = triggers.indexOf('weeklyBackup') >= 0;
+  return out;
 }
 
 /* ══ Approval — who prepares, who decides, and how a mistake gets undone ══════════════════════════
