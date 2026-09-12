@@ -1000,6 +1000,56 @@ checking something else. It has not yet occurred on a real period.
 
 Pinned by `tests/floater_fold_test.js`.
 
+### What independently checks these figures, now Leaderboard is going (2026-09-11)
+
+The safety net was a penny-match against Leaderboard. **It had already stopped being one**, and that
+is the finding rather than the plan: measured that day on the PAID 2026-08-17 period, the two engines
+differ by **$1,382 of sales across 22 people** — correctly, since GX Core scores a return against the
+sale's period (+grace) and Leaderboard against the day it was processed — and `incentive_compare`
+keys people on names, so ten nicknamed staff ("Levy" / "Laural") read as present on one side only.
+Sky's decision: reconcile against Dutchie instead. Three checks, at three different layers:
+
+| what | against what | when |
+|---|---|---|
+| the formulas | the frozen Leaderboard oracle, 12,040 boundary combinations | every push, already |
+| the sales figures | **Dutchie's CLOSING REPORT**, per store (`storeTotals_`) | blocks approval + send |
+| the payouts | what the scheme can produce (`ceilingProblems_`), and 27 closed periods (`historyBand_`) | blocks / warns |
+
+- **The closing report is a DIFFERENT Dutchie source** from the per-transaction pull the figures are
+  built from (`sales_daily` ← `/reporting/closing-report`; the slice ← `dutchieTransactions`). That
+  is the whole reason this is a second opinion and not a restatement. Calibrated live: staff sums
+  agreed to **0.09% on sales and 0.9% on transactions** at all six stores across the last two closed
+  periods, and one absent seller moves a store **5-15%** — so the bars are 0.5% and 2%.
+- **Sum the `stores` map, NEVER budtenders + managers.** A manager's row carries their store's whole
+  total (the six managers summed to exactly the six store totals, $311,640.24). And the check reads
+  `live.stores` because it must run **before the floater fold** — folding books a floater to
+  `corporate`, so a post-fold sum reports every store they covered as short by that person.
+- **Three states, never truthiness:** `ok` / `mismatch` / `unchecked`. **`unchecked` blocks too** —
+  an unreadable sales cache, a short cache, an engine that sends no store totals. Acknowledged with
+  **`totals_ok=yes`**, its own flag: `coverage_ok` answers "is a store absent", this answers "do the
+  figures that arrived add up", and **neither clears the other**. Both are written into the row note.
+- **A COMPUTED payout above the scheme's maximum has nothing to acknowledge past** — it means the
+  thresholds or the calc are wrong. An **override** above it only warns: a person decided it, and the
+  email already names every override. The ceilings come from running the **shipped** calcs on a
+  best-case row, so there is no second formula to keep in step.
+- **The ceiling check sits ABOVE the dry-run return**, so "Send for approval" refuses too — a send
+  that mails figures approval will then reject burns the single-use token and reads as a link problem.
+- **The band skips periods whose payroll column is blank** (the oldest import predates it) and reads
+  the real history tab only, so a rehearsal cannot widen it. It **warns**, never blocks: 27 periods is
+  a small sample and a bigger fortnight is allowed to exist.
+- **The screen reports; only the write paths refuse.** A refusal at the moment somebody presses
+  Approve is a bad first sighting of a figure that has been wrong all fortnight. A **pass is stated
+  too**, on screen and in the email — a check visible only when it fails cannot be told apart from
+  one that has quietly stopped running.
+- **`incentive_compare` and the Leaderboard fallback stay until Leaderboard is deleted**, but stop
+  being described as a check. They answer "do the two engines agree", which is now a known no.
+
+*Named `ppDaysBetween_` because `daysBetween_` was already taken* by a Date-object helper 2,400
+lines down; a second definition silently won and broke every permit-expiry reading with
+`a.getFullYear is not a function`. Caught on the first live preview after deploy.
+
+Pinned by `tests/independent_checks_test.js`.
+
 ### A missing store looks exactly like a store that sold nothing (2026-09-09)
 
 A blip in the sales feed does not throw. GX Core catches a per-store failure into `slice.errors`,
