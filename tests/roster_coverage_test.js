@@ -60,6 +60,10 @@ const E = (function () {
   const src = grab('rosterCoverage_') + '\n' + grab('coverageStoreNames_') + '\n' +
               grab('incentiveBlockers_') + '\n' +
               'return { cov: rosterCoverage_, names: coverageStoreNames_, blockers: incentiveBlockers_ };';
+  /* storeTotals_ is the OTHER half of incentiveBlockers_ since 2026-09-11 — coverage asks whether a
+     store is absent, that asks whether the figures that did arrive add up. Stubbed to 'ok' here so
+     these assertions keep testing coverage alone; its own rules are in independent_checks_test.js. */
+  const storeTotalsStub = () => ({ state: 'ok', stores: [], mismatches: [] });
   const GXCore = {
     getStores: () => ([
       { store_id: 'portland-rd', display_name: 'Portland Rd' },
@@ -70,7 +74,7 @@ const E = (function () {
       { store_id: 'commercial',  display_name: 'Commercial' }
     ])
   };
-  return new Function('GXCore', src)(GXCore);
+  return new Function('GXCore', 'storeTotals_', src)(GXCore, storeTotalsStub);
 })();
 
 /* Six stores with staff, exactly as the registry reports them today (6 active each). */

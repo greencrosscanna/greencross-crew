@@ -127,7 +127,11 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
     const fn = new Function(
       'requireCrew_', 'historyPeriods_', 'incentiveHistory_', 'periodList_', 'canApprove_',
       'canEdit_', 'inputsFor_', 'fetchLivePerf_', 'incentiveThresholds_', 'stampEmployeeIds_',
-      'foldFloaters_', 'dualRoleRows_', 'applySpiffEarnings_', 'wfGet_', 'rosterCoverage_', src)(
+      'foldFloaters_', 'dualRoleRows_', 'applySpiffEarnings_', 'wfGet_', 'rosterCoverage_',
+      /* The independent checks the screen carries since 2026-09-11. Stubbed rather than run: what
+         this file tests is the window/key split, and storeTotals_ would need a sales cache. Their
+         own rules live in tests/independent_checks_test.js. */
+      'storeTotals_', 'historyBand_', src)(
       () => ({ ok: true, user: 'mike', role: 'admin' }),
       (pp) => { seen.history.push(pp); return []; },
       () => ({ ok: true }),
@@ -141,7 +145,9 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       () => {}, () => {}, () => {},
       (live, pp) => { seen.spiff = pp; },
       (pp) => { seen.wf = pp; return null; },
-      () => ({ ok: true, checked: true, missing: [] }));
+      () => ({ ok: true, checked: true, missing: [] }),
+      () => ({ state: 'ok', stores: [], mismatches: [] }),
+      () => ({ periods: 0 }));
     return fn({ pp_start: want });
   };
 

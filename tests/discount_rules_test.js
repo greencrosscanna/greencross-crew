@@ -50,6 +50,12 @@ const LIB_SURFACE = [
      to catch. The incentive SCREEN reads SPIFF's published figures through it; approval and the
      send preview still call SPIFF live, on purpose. */
   'publishedSpiffProgress',
+  /* gx_dutchie.gs:1813, a plain sheet read of the `sales_daily` cache — Dutchie's CLOSING REPORT,
+     which is a different source from the per-transaction pull the incentive figures are built
+     from. That is the whole point of storeTotals_ (2026-09-11): it is a second opinion, not a
+     restatement. Public (no trailing underscore) and long-standing, so it is in every snapshot
+     Crew could be pinned to. */
+  'getSalesDaily',
 ];
 
 let CALLS, LOGS, FETCHES, KV, KV_THROWS, LB_REPLY, LB_HTTP, USER, NOTE_RESULT, NOTE_THROWS;

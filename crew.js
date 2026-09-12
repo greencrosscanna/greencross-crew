@@ -2795,6 +2795,49 @@
                'Reload before approving — approving is blocked until it is resolved.</p>');
       }
     }
+    /* THE INDEPENDENT CHECKS, WHILE THERE IS STILL TIME TO LOOK INTO THEM (2026-09-11).
+       Leaderboard used to be the second opinion on these figures and is being unwound — it had in
+       fact stopped agreeing long before, by design. What replaces it: each store's staff total
+       against Dutchie's own closing report, which is a different Dutchie source from the
+       per-transaction pull these figures are built from.
+
+       The ENGINE refuses the approval and the send; this is what says why, a fortnight earlier than
+       the refusal. A pass is stated too — "the stores reconcile" is what makes the rest of the
+       screen trustworthy, and a check that is only ever visible when it fails cannot be told apart
+       from one that has quietly stopped running. */
+    var st = d.store_totals;
+    if (!isImported && st && st.state !== 'ok') {
+      if (st.state === 'mismatch') {
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ <strong>These figures do not agree with ' +
+               'Dutchie\'s closing report.</strong> ' +
+               esc((st.mismatches || []).map(function (m) {
+                 var nm = (window.GXStores && window.GXStores.name) ? window.GXStores.name(m.store) : m.store;
+                 return nm + ' is ' + m.sales_diff_pct + '% out';
+               }).join(', ')) + '. The two come from different Dutchie sources, so one of them is ' +
+               'wrong — approving is blocked until it reconciles.</p>');
+      } else {
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ Store totals could not be checked against ' +
+               'Dutchie\'s closing report — ' + esc(st.reason || 'reason unknown') + '.</p>');
+      }
+    } else if (!isImported && st && st.state === 'ok') {
+      h.push('<p class="crew-inc-note">✓ Store totals agree with Dutchie\'s closing report' +
+             ((st.stores || []).length ? ' (' + st.stores.length + ' store' +
+               (st.stores.length === 1 ? '' : 's') + ', within ' +
+               esc(String((st.tolerance || {}).sales_pct)) + '%)' : '') + '.</p>');
+    }
+    /* THE BAND COMES FROM THE ENGINE, THE TOTAL FROM THIS SCREEN. Comparing the figures actually
+       rendered — rather than a second total computed engine-side — is what stops the warning and
+       the tables disagreeing while a tick is being changed. A warning only: 27 periods is a small
+       sample and a genuinely bigger fortnight is allowed to exist. */
+    var band = d.history_band;
+    if (!isImported && band && band.periods && band.payroll_min != null) {
+      var _tot = Math.round((budTotal + mgrTotal + admPay) * 100) / 100;
+      if (_tot < band.payroll_min || _tot > band.payroll_max) {
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ This period totals ' + money(_tot) +
+               '. All ' + band.periods + ' closed periods have landed between ' +
+               money(band.payroll_min) + ' and ' + money(band.payroll_max) + '.</p>');
+      }
+    }
     var sp = d.spiff;
     if (!isImported && sp) {
       var fresh = sp.refreshed_at ? ' <button type="button" class="crew-inc-refresh" id="incSpiffRefresh">' +

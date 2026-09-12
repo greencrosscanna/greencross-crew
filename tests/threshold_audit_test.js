@@ -41,6 +41,10 @@ const LIB_SURFACE = [
   'gxUpsertEmployee', 'gxUpsertEmployees', 'gxUpsertUser',
   'getStores', 'resolveStore', 'getKv', 'setAvatar',
   'gxAddNote', 'gxIngestBug', 'dutchieEmployees',
+  /* gx_dutchie.gs:1813 — the `sales_daily` cache, built from Dutchie's CLOSING REPORT. A different
+     source from the per-transaction pull the incentive figures come from, which is what makes
+     storeTotals_ (2026-09-11) an independent check rather than a restatement. */
+  'getSalesDaily',
   /* gx_core.gs:3126, added in aec4bd7 which is BELOW the commit stamping GX_LIB_VERSION 306 — so
      it is in the snapshot appsscript.json pins, which is the only thing that matters. Checked in
      the hub's own history rather than taken from the note announcing it: a library call runs the

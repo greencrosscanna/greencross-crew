@@ -5494,6 +5494,16 @@ function getIncentive_(p) {
      to approve is the same problem as Mike editing one he already sent. */
   live.can_edit = canEdit_(auth) && wf.status !== 'pending';
   live.periods = periodList_(imported, live.periods);
+  /* THE INDEPENDENT CHECKS, ON THE SCREEN AND NOT ONLY AT THE GATE. A refusal at the moment
+     somebody presses Approve is a bad first sighting of a figure that has been wrong all fortnight;
+     the reconciliation is what the preparer should see while there is still time to look into it.
+     The screen REPORTS; only the write paths refuse. */
+  live.store_totals = storeTotals_(live);
+  /* The band, not a verdict: the browser holds the period's own totals (it computes every row on
+     each keystroke) and compares them itself. Sending the band rather than the answer keeps one
+     source for what history says and avoids a second total computed engine-side that could
+     disagree with the one on screen. */
+  live.history_band = historyBand_(live.payPeriod.start);
   return live;
 }
 
@@ -5877,7 +5887,11 @@ function incentiveApprove_(p) {
      acknowledgement is recorded on every row written, so the record says the figures were known to
      be short rather than quietly claiming a store sold nothing. */
   var coverageAck = String(p.coverage_ok || '') === 'yes';
-  var _open = incentiveBlockers_(live, false, false, coverageAck);
+  /* A SEPARATE ACK, because it answers a separate question: `coverage_ok` says a store really did
+     sell nothing, `totals_ok` says the figures that ARE here are right despite not reconciling.
+     Neither clears the other, and both are written onto every row. */
+  var totalsAck = String(p.totals_ok || '') === 'yes';
+  var _open = incentiveBlockers_(live, false, false, coverageAck, totalsAck);
   if (_open.length) return { ok: false, error: _open[0].message };
 
   /* FOLD SPIFF IN BEFORE COMPUTING. This was missing until 2026-08-31: approval computed from
@@ -5905,7 +5919,7 @@ function incentiveApprove_(p) {
      successful read with no programs is NOT a failure and needs no acknowledgement. */
   var spiffFailed = !!(live.spiff && live.spiff.ok === false);
   var spiffAck = String(p.spiff_unavailable || '') === 'yes';
-  var _blocked = incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck);
+  var _blocked = incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck, totalsAck);
   if (_blocked.length) {
     /* The remedy names the flag for the blocker that actually fired. It used to say
        `spiff_unavailable=yes` whatever had gone wrong, so a coverage refusal would send whoever
@@ -5918,6 +5932,10 @@ function incentiveApprove_(p) {
         ? ' Reload the period and approve again once the figures are complete, or re-send with '
           + 'coverage_ok=yes if you have confirmed the store really did sell nothing — that '
           + 'confirmation is written onto every row.'
+      : (_b.code === 'store_totals_mismatch' || _b.code === 'store_totals_unknown')
+        ? ' Reload the period and approve again once the figures reconcile, or re-send with '
+          + 'totals_ok=yes if you have confirmed these are the right figures anyway — that '
+          + 'confirmation is written onto every row. It does NOT clear a coverage refusal.'
         : '';
     return { ok: false, error: _b.message + _fix };
   }
@@ -5930,10 +5948,18 @@ function incentiveApprove_(p) {
   var now = new Date().toISOString();
   var by  = String(auth.user || '');
   var _cov = rosterCoverage_(live);
+  /* The reconciliation is recorded whichever way it went — an acknowledged mismatch is exactly the
+     kind of thing a record has to carry, and by the time anyone asks, the closing report it
+     disagreed with will have been re-cached. */
+  var _tot = storeTotals_(live);
   var noteTxt = 'approved by ' + by + (spiffFailed ? ' — SPIFF unreadable, vendor amounts not included' : '')
     + (_cov.ok ? '' : (_cov.reason === 'registry_unreadable'
         ? ' — store coverage unverified, approved anyway'
-        : ' — no sellers from ' + _cov.missing.join(', ') + ', approved anyway'));
+        : ' — no sellers from ' + _cov.missing.join(', ') + ', approved anyway'))
+    + (_tot.state === 'ok' ? '' : (_tot.state === 'mismatch'
+        ? ' — store totals disagree with Dutchie (' + _tot.mismatches.map(function (m) {
+            return m.store + ' ' + m.sales_diff_pct + '%'; }).join(', ') + '), approved anyway'
+        : ' — store totals unverified, approved anyway'));
   function push(section, r, c, extra) {
     var computed = c.payroll == null ? c.bonus : c.payroll;
     var i = inputs[r.employee_id] || {};
@@ -6005,11 +6031,40 @@ function incentiveApprove_(p) {
      people are paid on — worth knowing, and invisible from either app on its own. */
   var schemeInfo = { source: scheme.source, leaderboard_agrees: scheme.lb_agrees,
                      leaderboard_check: scheme.lb_check };
+  /* NOBODY IS PAID MORE THAN THE SCHEME CAN PRODUCE — run ABOVE the dry-run return, so "Send for
+     approval" refuses too. A send that mails figures approval will then reject burns the token and
+     reads to Mike as a link problem; the two paths must agree about what is approvable.
+     A COMPUTED figure over the ceiling is not a judgement call — it means the scheme or the calc is
+     broken, and there is no acknowledgement for it because no version of it is correct. An OVERRIDE
+     over the ceiling is a person deciding, so it rides along as a warning: the email names it. */
+  var _ceil = ceilingProblems_(rows, live, T);
+  if (_ceil.over_computed.length) {
+    var _c = _ceil.over_computed[0];
+    return { ok: false, error: 'refusing these figures: ' + _c.name + ' computes ' +
+      wfMoney_(_c.computed) + ', more than the ' + _c.section + ' scheme can pay (' +
+      wfMoney_(_c.ceiling) + ' with every lever maxed)' +
+      (_ceil.over_computed.length > 1 ? ', and ' + (_ceil.over_computed.length - 1) + ' other' +
+        (_ceil.over_computed.length === 2 ? '' : 's') : '') +
+      '. That is the bonus settings or the calculation being wrong, not a big fortnight — there is ' +
+      'nothing to acknowledge past. Check the thresholds tray.' };
+  }
+  var _warnings = bandWarnings_(Math.round(total * 100) / 100,
+                                rows.filter(function (r) { return (Number(r[14]) || 0) > 0; }).length,
+                                historyBand_(pp))
+    .concat(_ceil.over_override.map(function (o) {
+      return { code: 'override_above_ceiling',
+               message: o.name + ' was paid ' + wfMoney_(o.paid) + ' by hand, above the ' +
+                 o.section + ' maximum of ' + wfMoney_(o.ceiling) + '.' };
+    }));
   if (String(p.confirm || '') !== 'yes') {
     return { ok: true, dry_run: true, pp_start: pp, rows: rows.length, pp_end: live.payPeriod.end,
              overrides: overrides,
              payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
              thresholds: schemeInfo,
+             /* The checks RAN, and the dry run is where that has to be visible — this is what the
+                approval email is built from. An empty `warnings` and a check that never happened
+                are the same array without `store_totals` beside it. */
+             store_totals: _tot, warnings: _warnings,
              unmatched: live.unmatched || [], note: 'nothing written — re-send with confirm=yes' };
   }
 
@@ -6047,7 +6102,11 @@ function incentiveApprove_(p) {
                                      : backupCrewSheet_('approved ' + pp);
   return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
-           thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup };
+           thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup,
+           /* What the checks SAID, not just that nothing stopped the write — the same reason
+              `coverage` rides on the send preview. A silent pass and a check that never ran look
+              identical in an empty array. */
+           store_totals: _tot, warnings: _warnings };
 }
 
 /* ══ The payout PDF — filed to Drive the moment a period is approved ═════════════════════════════
@@ -6968,7 +7027,284 @@ function coverageStoreNames_(slugs) {
   return (slugs || []).map(function (st) { return names[st] || st; });
 }
 
-function incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck) {
+/* ══ THE INDEPENDENT CHECKS — what reconciles against what (Sky's decision, 2026-09-11) ═══════════
+ *
+ * The original safety net for these figures was a penny-match against Leaderboard. Leaderboard is
+ * being unwound, and — measured the day this was written — it had ALREADY stopped being a check:
+ * on the paid 2026-08-17 period the two engines differ by $1,382 of sales across 22 people, by
+ * design (GX Core scores a return against the SALE period +grace; Leaderboard deducts it on the day
+ * it was processed), and `incentive_compare` keys people on their names, so ten nicknamed staff
+ * ("Levy" vs "Laural") read as present on one side only. A comparison nobody can act on is not a
+ * control. So it is replaced rather than mourned:
+ *
+ *   THE FORMULAS      tests/incentive_math_test.js — a frozen copy of Leaderboard's own three
+ *                     functions, driven alongside Crew's over 12,040 boundary combinations on every
+ *                     push. Independent of Leaderboard still existing; nothing to do here.
+ *   THE SALES FIGURES storeTotals_ — each store's staff total against Dutchie's CLOSING REPORT for
+ *                     the same fortnight. A different Dutchie endpoint from the per-transaction pull
+ *                     the figures are built from, which is what makes it a second opinion rather
+ *                     than a restatement. Blocks approval.
+ *   THE PAYOUTS       ceilingProblems_ — nobody paid more than the scheme itself can produce, and
+ *                     historyBand_ — a total or a headcount outside everything 27 closed periods
+ *                     have ever done. The first blocks; the second warns.
+ *
+ * WHY THE STORE CHECK IS WORTH ANYTHING, with the numbers it was calibrated on. Summed per store,
+ * the staff figures and the closing report agreed to 0.09% or better at all six stores across both
+ * of the last two closed periods, and transaction counts to 0.9%. One missing budtender moves their
+ * store by 5-15%. So the tolerances below sit far outside the noise and far inside the failure.
+ *
+ * SUM THE `stores` MAP, NEVER THE PEOPLE. A manager's row carries their STORE's total, not their
+ * own selling — managers summed alone equal the six store totals exactly (311,640.24 on 2026-08-17)
+ * — so adding budtenders to managers double-counts every store. GX Core already publishes the
+ * per-store aggregate it built from the same rows; that is what is compared.
+ *
+ * AND IT RUNS BEFORE THE FLOATER FOLD, which is why it lives on `live.stores` rather than on rows:
+ * folding books a floater's sales to `corporate`, so a post-fold sum would report every store they
+ * covered as short by exactly that person — a false alarm indistinguishable from the real one.
+ *
+ * THREE STATES, NEVER TRUTHINESS. `ok` / `mismatch` / `unchecked` — the lesson `lb_agrees` already
+ * cost this repo, where `null` coercing to `false` made "nothing arrived" and "they disagree" one
+ * claim for two days. `unchecked` BLOCKS as well, acknowledgeable with `totals_ok=yes`: a check that
+ * cannot report it ran is indistinguishable from one that passed, and this one guards the figures
+ * that decide payroll. Neither ack clears the other — `coverage_ok` answers a different question
+ * (is a whole store absent) from `totals_ok` (do the present figures add up).
+ *
+ * STORE VOCABULARY: `sales_daily.store` and the slice's `stores` keys are both GX Core store_ids
+ * (`portland-rd`, `river-rd`). Leaderboard's display slugs (`portland`, `river`) are a DIFFERENT
+ * vocabulary and comparing the wrong one reports four of six stores missing on a perfectly good
+ * period — the same trap rosterCoverage_ carries a warning about. */
+var TOTALS_SALES_TOL_PCT = 0.5;    // measured worst case 0.09%; one absent seller moves 5-15%
+var TOTALS_TXN_TOL_PCT   = 2.0;    // measured worst case 0.9% — orders vs transactions differ slightly
+
+/* The real calendar window, whatever the payload's `start` says. On a practice period
+   payPeriod.start has been rewritten to the storage key (`practice-2026-08-17`), which is not a
+   date and would ask the sales cache for nothing — so the window is derived from the END date,
+   which is always the real fortnight's. */
+function ppWindow_(live) {
+  var pp = (live && live.payPeriod) || {};
+  var end = String(pp.end || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return null;
+  var start = String(pp.start || '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start)) return { from: start, to: end };
+  /* Noon UTC, for the reason computedPeriods_ states: midnight arithmetic lands on the wrong side
+     of a DST change twice a year and would shift a day of sales out of the window. */
+  var ms = Date.UTC(+end.slice(0, 4), +end.slice(5, 7) - 1, +end.slice(8, 10), 12) - 13 * 86400000;
+  var d = new Date(ms);
+  return { from: d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' +
+                 ('0' + d.getUTCDate()).slice(-2), to: end };
+}
+
+function daysBetween_(from, to) {
+  var a = Date.UTC(+from.slice(0, 4), +from.slice(5, 7) - 1, +from.slice(8, 10), 12);
+  var b = Date.UTC(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10), 12);
+  return Math.round((b - a) / 86400000) + 1;
+}
+
+function storeTotals_(live) {
+  var out = { state: 'unchecked', reason: '', stores: [], mismatches: [],
+              tolerance: { sales_pct: TOTALS_SALES_TOL_PCT, txns_pct: TOTALS_TXN_TOL_PCT } };
+  var slice = (live && live.stores) || null;
+  if (!slice || !Object.keys(slice).length) {
+    out.reason = 'these figures came from an engine that sends no per-store totals, so there is ' +
+                 'nothing to reconcile against Dutchie\'s closing report';
+    return out;
+  }
+  if (live.payPeriod && live.payPeriod.current) {
+    /* An open period cannot reconcile and it is not a finding: the closing report has days still
+       to come. Short-circuited before the cache read so the screen does not pay for an answer that
+       could only ever be "unchecked", and because `period_open` already blocks approval anyway. */
+    out.reason = 'this pay period is still open — the closing report has days still to come';
+    return out;
+  }
+  var w = ppWindow_(live);
+  if (!w) { out.reason = 'the pay period has no usable end date'; return out; }
+  out.window = w;
+  var rows = null;
+  try { rows = GXCore.getSalesDaily('', w.from, w.to); } catch (e) {
+    out.reason = 'GX Core\'s daily sales cache could not be read (' +
+                 String((e && e.message) || e) + '), so nothing independent confirms these figures';
+    return out;
+  }
+  if (!rows || !rows.length) {
+    out.reason = 'GX Core\'s daily sales cache holds no days between ' + w.from + ' and ' + w.to;
+    return out;
+  }
+  var expected = daysBetween_(w.from, w.to);
+  var report = Object.create(null);
+  rows.forEach(function (r) {
+    var sid = String(r.store || '').trim().toLowerCase();
+    if (!sid) return;
+    if (!report[sid]) report[sid] = { sales: 0, txns: 0, days: {} };
+    report[sid].sales += Number(r.net) || 0;
+    report[sid].txns  += Number(r.orders) || 0;
+    report[sid].days[String(r.date)] = 1;
+  });
+  var unchecked = 0;
+  Object.keys(slice).forEach(function (sid) {
+    var a = slice[sid] || {}, b = report[String(sid).toLowerCase()];
+    var staffSales = Number(a.sales) || 0, staffTxns = Number(a.txns) || 0;
+    var row = { store: sid, staff_sales: Math.round(staffSales * 100) / 100, staff_txns: staffTxns };
+    if (!b) {
+      row.state = 'unchecked';
+      row.reason = 'the closing report has no days for this store in the period';
+      unchecked++; out.stores.push(row); return;
+    }
+    var days = Object.keys(b.days).length;
+    row.report_sales = Math.round(b.sales * 100) / 100;
+    row.report_txns = b.txns; row.days = days; row.days_expected = expected;
+    if (days < expected) {
+      /* A SHORT CACHE IS NOT A SMALL STORE. Missing days make the report total lower than the
+         staff total for a reason that has nothing to do with the figures being checked, so this
+         must never be read as a mismatch — nor as a pass. */
+      row.state = 'unchecked';
+      row.reason = 'the closing report holds only ' + days + ' of ' + expected + ' days';
+      unchecked++; out.stores.push(row); return;
+    }
+    row.sales_diff_pct = b.sales ? Math.round((staffSales - b.sales) / b.sales * 10000) / 100 : null;
+    row.txns_diff_pct  = b.txns ? Math.round((staffTxns - b.txns) / b.txns * 10000) / 100 : null;
+    var bad = (row.sales_diff_pct === null) ||
+              Math.abs(row.sales_diff_pct) > TOTALS_SALES_TOL_PCT ||
+              (row.txns_diff_pct !== null && Math.abs(row.txns_diff_pct) > TOTALS_TXN_TOL_PCT);
+    row.state = bad ? 'mismatch' : 'ok';
+    if (bad) out.mismatches.push(row);
+    out.stores.push(row);
+  });
+  out.state = out.mismatches.length ? 'mismatch' : (unchecked ? 'unchecked' : 'ok');
+  if (out.state === 'unchecked' && !out.reason) {
+    out.reason = unchecked + ' store' + (unchecked === 1 ? '' : 's') + ' could not be reconciled';
+  }
+  return out;
+}
+
+/* THE MOST ANYONE CAN EARN, produced by the SHIPPED math rather than by a second formula that
+   would have to be kept in step with it: the real calc, run on a best-possible row. Every lever
+   maxed — qualified, at target AOV, zero discount, attendance ticked, and for a manager every one
+   of their own budtenders ticked too. SPIFF is deliberately outside it: vendor money is not the
+   scheme's to cap, and it cancels out of payroll on both sides anyway. */
+function payoutCeilings_(live, T) {
+  var out = { budtender: 0, manager: Object.create(null), admin: 0 };
+  var bt = T.budtender, mt = T.manager;
+  out.budtender = incCalcBud_({ employee_id: '__ceiling__', storeSlug: '__none__',
+      txn: Math.max(Number(bt.txnQualify) || 0, Number(bt.txnQualifyLowVol) || 0) + 1,
+      aov: Number(bt.aovTarget) || 0, discount: 0 },
+    T, { __ceiling__: { att: true } }).payroll;
+
+  var stores = Object.create(null);
+  (live.managers || []).forEach(function (m) { stores[String(m.storeSlug || '')] = 1; });
+  Object.keys(stores).forEach(function (slug) {
+    var inp = { __ceiling__: { att: true } };
+    (live.budtenders || []).forEach(function (b) {
+      if (String(b.storeSlug || '') === slug) inp[b.employee_id || b.nameKey] = { att: true };
+    });
+    /* BOTH discount tiers are tried and the better taken. Which of the two pays more is the
+       scheme's business, not this function's — hardcoding "the tighter tier wins" would silently
+       under-state the ceiling the day somebody sets them the other way round. */
+    var best = 0;
+    [0, (Number(bt.discountMaxPct) || 0) / 100].forEach(function (d) {
+      var c = incCalcMgr_({ employee_id: '__ceiling__', storeSlug: slug, target: 1, sales: 1e9,
+                            discount: d, aov: Number(mt.aovTarget) || 0 },
+                          T, inp, live.budtenders || []);
+      if (c.payroll > best) best = c.payroll;
+    });
+    out.manager[slug] = best;
+  });
+  out.admin = incCalcAdmin_({ target: 1, actual: 1e9,
+    stores: (live.admin && Number(live.admin.stores)) || 0 }, T).bonus;
+  return out;
+}
+
+/* A figure above the ceiling, and the two cases are NOT the same thing:
+     computed  — the math produced more than the scheme can pay. That is a broken scheme or a
+                 broken calc, nothing else, and it BLOCKS.
+     override  — a person typed it. Sky can legitimately decide to pay somebody more, and the
+                 approval email already names every override, so this WARNS rather than refusing.
+   `paid` and `computed` are read from the rows about to be frozen, so what is checked is what
+   gets written — positional indices, which is safe because HISTORY_HEADERS only ever appends. */
+function ceilingProblems_(rows, live, T) {
+  var out = { over_computed: [], over_override: [], ceilings: null };
+  var ceil;
+  try { ceil = payoutCeilings_(live, T); } catch (e) {
+    out.error = 'could not work out the scheme\'s maximum: ' + String((e && e.message) || e);
+    return out;
+  }
+  out.ceilings = { budtender: ceil.budtender, admin: ceil.admin, manager: ceil.manager };
+  var slugById = Object.create(null);
+  (live.managers || []).forEach(function (m) {
+    slugById[String(m.employee_id || m.nameKey || '')] = String(m.storeSlug || '');
+  });
+  (rows || []).forEach(function (r) {
+    var section = String(r[2] || ''), id = String(r[3] || ''), name = String(r[4] || '');
+    var paid = Number(r[14]) || 0;
+    var computed = (r[18] === '' || r[18] == null) ? paid : (Number(r[18]) || 0);
+    var cap = section === 'budtender' ? ceil.budtender
+            : section === 'manager'   ? ceil.manager[slugById[id]]
+            : section === 'admin'     ? ceil.admin : null;
+    if (cap == null) return;                       // a section with no ceiling is not a finding
+    if (computed > cap + 0.005) {
+      out.over_computed.push({ name: name, section: section, computed: computed, ceiling: cap });
+    } else if (paid > cap + 0.005) {
+      out.over_override.push({ name: name, section: section, paid: paid, ceiling: cap });
+    }
+  });
+  return out;
+}
+
+/* WHAT EVERY CLOSED PERIOD HAS EVER DONE — the band a new one is sanity-checked against. Read from
+   the real history tab only, so a practice rehearsal can never widen it.
+   PERIODS WITH NO PAYROLL COLUMN AT ALL ARE SKIPPED, not counted as zero: the oldest imported
+   report predates that column and every row of it is blank. Counting it would drop the floor to $0
+   and make the band meaningless — the same '' -vs- 0 distinction the export and the payout PDF
+   already turn on. */
+function historyBand_(excludePp) {
+  var out = { periods: 0, payroll_min: null, payroll_max: null, paid_min: null, paid_max: null };
+  var rows;
+  try { rows = readTab_(HISTORY_TAB, HISTORY_HEADERS); } catch (e) { out.error = String((e && e.message) || e); return out; }
+  var by = Object.create(null);
+  (rows || []).forEach(function (r) {
+    var pp = String(r.pp_start || '');
+    if (!pp || pp === String(excludePp || '')) return;
+    if (!by[pp]) by[pp] = { total: 0, paid: 0, any: false };
+    var v = r.payroll;
+    if (v === '' || v == null) return;             // blank is "not stated", not zero
+    by[pp].any = true;
+    var n = Number(v) || 0;
+    by[pp].total += n;
+    if (n > 0) by[pp].paid++;
+  });
+  Object.keys(by).forEach(function (pp) {
+    var b = by[pp];
+    if (!b.any) return;
+    out.periods++;
+    var t = Math.round(b.total * 100) / 100;
+    if (out.payroll_min === null || t < out.payroll_min) out.payroll_min = t;
+    if (out.payroll_max === null || t > out.payroll_max) out.payroll_max = t;
+    if (out.paid_min === null || b.paid < out.paid_min) out.paid_min = b.paid;
+    if (out.paid_max === null || b.paid > out.paid_max) out.paid_max = b.paid;
+  });
+  return out;
+}
+
+/* Outside everything that has ever happened. A WARNING, never a refusal — 27 periods is a small
+   sample and a genuinely bigger fortnight is allowed to exist; what is not allowed is for it to go
+   unremarked on the one screen where somebody is deciding to pay it. */
+function bandWarnings_(total, peoplePaid, band) {
+  var out = [];
+  if (!band || !band.periods) return out;
+  if (band.payroll_min !== null && (total < band.payroll_min || total > band.payroll_max)) {
+    out.push({ code: 'total_outside_history',
+      message: 'the payroll total for this period is ' + wfMoney_(total) + ' — every one of the ' +
+        band.periods + ' closed periods has landed between ' + wfMoney_(band.payroll_min) +
+        ' and ' + wfMoney_(band.payroll_max) + '. Worth a look before approving.' });
+  }
+  if (band.paid_min !== null && (peoplePaid < band.paid_min || peoplePaid > band.paid_max)) {
+    out.push({ code: 'headcount_outside_history',
+      message: peoplePaid + ' people earned something this period — closed periods have ranged ' +
+        'from ' + band.paid_min + ' to ' + band.paid_max + '.' });
+  }
+  return out;
+}
+
+function incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck, totalsAck) {
   var out = [];
   if (live.payPeriod && live.payPeriod.current) {
     out.push({ code: 'period_open', message: 'this pay period is still open (' +
@@ -7001,6 +7337,30 @@ function incentiveBlockers_(live, spiffFailed, spiffAck, coverageAck) {
         'store that sold nothing: every other figure on the screen stays plausible and no total ' +
         'looks short, because the missing people never contributed to one. This record cannot be ' +
         'edited afterwards.' });
+    }
+  }
+  /* THE FIGURES THAT ARE PRESENT, against Dutchie's own closing report. rosterCoverage_ one block
+     up asks whether a whole store is ABSENT; this asks whether what did arrive adds up. Different
+     questions, different acknowledgements — see the header on storeTotals_. */
+  var tot = storeTotals_(live);
+  if (tot.state !== 'ok' && !totalsAck) {
+    if (tot.state === 'mismatch') {
+      out.push({ code: 'store_totals_mismatch', message: 'these figures do not agree with ' +
+        'Dutchie\'s own closing report: ' + tot.mismatches.map(function (m) {
+          return coverageStoreNames_([m.store])[0] + ' is ' +
+                 (m.sales_diff_pct === null ? 'unreconcilable' : m.sales_diff_pct + '% out on sales') +
+                 (m.txns_diff_pct !== null && Math.abs(m.txns_diff_pct) > TOTALS_TXN_TOL_PCT
+                   ? ' and ' + m.txns_diff_pct + '% out on transactions' : '') +
+                 ' (' + wfMoney_(m.staff_sales) + ' from the staff, ' + wfMoney_(m.report_sales) +
+                 ' on the report)';
+        }).join('; ') + '. The staff figures and the store report come from different Dutchie ' +
+        'sources, so they disagreeing by more than ' + TOTALS_SALES_TOL_PCT + '% means one of them ' +
+        'is wrong — and this record cannot be edited afterwards.' });
+    } else {
+      out.push({ code: 'store_totals_unknown', message: 'Crew could not check these figures ' +
+        'against Dutchie\'s closing report — ' + (tot.reason || 'reason unknown') + '. A check ' +
+        'that cannot report it ran is indistinguishable from one that passed, and this is the ' +
+        'check on the numbers that decide payroll.' });
     }
   }
   return out;
@@ -7079,6 +7439,8 @@ function incentiveSend_(p) {
     var _spiffFailed = false, _spiffTotal = 0;
     var _ack = String(p.spiff_unavailable || '') === 'yes';
     var _covAck = String(p.coverage_ok || '') === 'yes';
+    var _totalsAck = String(p.totals_ok || '') === 'yes';
+    var _paidCount = 0;
     applySpiffEarnings_(live, (live.payPeriod || {}).start || pp);
     _spiffFailed = !!(live.spiff && live.spiff.ok === false);
 
@@ -7105,6 +7467,7 @@ function incentiveSend_(p) {
                           note: String(i.overrideNote || '') });
         _over.net += (paid - computed);
       }
+      if (paid > 0) _paidCount++;
       return paid;
     }
     (live.budtenders || []).forEach(function (b) {
@@ -7129,7 +7492,13 @@ function incentiveSend_(p) {
             thresholds: { source: _sch.source, leaderboard_agrees: _sch.lb_agrees,
                           leaderboard_check: _sch.lb_check },
             coverage: rosterCoverage_(live),
-            would_block: incentiveBlockers_(live, _spiffFailed, _ack, _covAck) };
+            /* SAME RULE AS `coverage` ONE LINE UP: the dry run has to be able to show the check
+               RAN, not merely that it found nothing. `would_block` empty and `store_totals`
+               absent are the same array. */
+            store_totals: storeTotals_(live),
+            warnings: bandWarnings_(Math.round((sp.budtender + sp.manager + sp.admin) * 100) / 100,
+                                    _paidCount, historyBand_(pp)),
+            would_block: incentiveBlockers_(live, _spiffFailed, _ack, _covAck, _totalsAck) };
   } else {
     pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
     if (pre.ok === false) return pre;
@@ -7173,6 +7542,11 @@ function incentiveSend_(p) {
                                          missing" and "the check never happened" are the same empty
                                          array. This is how a dry run proves the guard is live. */
                                       coverage: pre.coverage || null,
+                                      /* Same rule again: the email body carries the reconciliation
+                                         block, so the JSON has to carry the same facts or the two
+                                         halves of one preview disagree. */
+                                      store_totals: pre.store_totals || null,
+                                      warnings: pre.warnings || [],
                                       would_block: pre.would_block || [],
                                       unmatched: pre.unmatched || [],
                                       to: wfApproverEmails_(), html: html,
@@ -7307,6 +7681,34 @@ function wfApprovalEmail_(pp, pre, sender, token, preview) {
             (o.note ? ' &middot; ' + o.note : '') + '</td></tr>';
         }).join('') +
         '</table></div>';
+    })() +
+    /* THE INDEPENDENT CHECKS — what agrees with these figures, said out loud (2026-09-11).
+       Everything above is Crew describing its own arithmetic. This is the one block in the email
+       that comes from somewhere else: Dutchie's closing report, and 27 closed periods. It says so
+       even when it passes, because "the stores reconcile" is the sentence that makes the rest
+       trustworthy — and an email that only ever mentions the check when it fails cannot be told
+       apart from one where the check quietly stopped running. */
+    (function () {
+      var t = pre.store_totals || null, warns = pre.warnings || [];
+      if (!t && !warns.length) return '';
+      var ok = t && t.state === 'ok';
+      var head = !t ? '' : ok
+        ? '&#10003; Store totals agree with Dutchie\'s closing report' +
+          (t.stores && t.stores.length ? ' (' + t.stores.length + ' store' +
+            (t.stores.length === 1 ? '' : 's') + ', within ' + TOTALS_SALES_TOL_PCT + '%)' : '')
+        : t.state === 'mismatch'
+          ? '&#9888; Store totals do NOT agree with Dutchie\'s closing report: ' +
+            t.mismatches.map(function (m) { return m.store + ' ' + m.sales_diff_pct + '% out'; }).join(', ')
+          : '&#9888; Store totals could not be checked — ' + (t.reason || 'reason unknown');
+      var edge = ok && !warns.length ? '#22c55e' : '#d4a847';
+      var bg   = ok && !warns.length ? '#f0fdf4' : '#fdf6e3';
+      var fg   = ok && !warns.length ? '#14532d' : '#7a5c10';
+      return '<div style="border-left:3px solid ' + edge + ';background:' + bg + ';padding:10px 14px;' +
+        'margin:0 0 18px;border-radius:0 6px 6px 0">' +
+        (head ? '<p style="margin:0;font-size:13px;color:' + fg + '">' + head + '</p>' : '') +
+        warns.map(function (w) {
+          return '<p style="margin:6px 0 0;font-size:13px;color:#7a5c10">&#9888; ' + w.message + '</p>';
+        }).join('') + '</div>';
     })() +
     '<p style="margin:0 0 8px"><a href="' + approveLink + '" style="background:#22c55e;color:#04210f;' +
       'padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:700">Approve</a>' +
