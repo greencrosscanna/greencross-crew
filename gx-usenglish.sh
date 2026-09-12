@@ -65,8 +65,20 @@ import sys, re
 # "organis" inside organism and organist, and "apologis" inside apologist.
 ISE_END = r"(?:e|es|ed|ing|er|ers|ation|ations|ational|able|ably|ability)"
 
-# The lookahead is `(?![a-z])` rather than `\b` on purpose: it still catches a British word opening a
-# camelCase identifier (`optimiseData`), which `\b` would let through, while `optimistic` stays clear.
+# The lookahead is `(?![a-z])` rather than `\b`, and what it buys is narrower than it looks. Lines are
+# LOWERCASED before any pattern runs (see below), so `optimiseData` is `optimisedata` by the time this
+# sees it and the lookahead refuses the match. An -ise stem therefore CANNOT reach inside a camelCase
+# identifier, and that is the correct behavior, not a gap: Sky's rule is explicit that an identifier,
+# CSS class, JSON key or sheet column named the British way is a NAME, and renaming names breaks
+# things for a spelling. Reaching them would mean dropping the lowercase pass and making every pattern
+# case-aware, which would start failing pushes over names.
+#
+# BE AWARE OF THE ASYMMETRY rather than surprised by it: a `plain` entry is a bare substring and DOES
+# fire inside an identifier — `colourPicker` is flagged, and the test asserts that deliberately, on
+# the grounds that a NEW identifier is still ours to spell correctly. So the two kinds of entry treat
+# names differently. Corrected 2026-09-08: this comment previously claimed the opposite of what the
+# code does, and greencross-crew measured it and said so. A comment that overstates a gate invites
+# someone to "restore" a capability that never existed, or to file a bug when a name sails through.
 def ise(stem, amer):
     return (re.compile(stem + ISE_END + r"(?![a-z])"), stem, amer)
 
