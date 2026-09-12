@@ -285,6 +285,20 @@ console.log('\nWired in: the gate refuses, the screen reports, the email says so
   const V = decomment(JS);
   ok('the incentive screen renders the mismatch', /store_totals/.test(V));
   ok('…and compares its own totals against the engine\'s band', /history_band/.test(V));
+  /* IT CALLED `money()`, WHICH LIVES IN THE CSV EXPORT AND IS NOT IN SCOPE THERE — the whole
+     incentive tab rendered "Loading incentive data…" forever with "money is not defined" in the
+     console. Nothing source-level would have caught it; a browser did, before it shipped. The
+     screen's own formatter is m0. */
+  /* Decommented, because the comment above that code NAMES the function it must not call. */
+  const paint = V.slice(V.indexOf('var st = (d.payPeriod'), V.indexOf('var sp = d.spiff;'));
+  ok('the new notices use the incentive screen\'s own money formatter',
+     paint.indexOf('money(') < 0 && /m0\(/.test(paint));
+  ok('an open period is not reported as unreconciled', /payPeriod && d\.payPeriod\.current/.test(paint));
+  /* A fortnight two days in has earned two days of bonuses, so "below everything on record" is true
+     every time and means nothing. Seen live at $200 against a $930 floor. */
+  const bandPaint = V.slice(V.indexOf('var band = '), V.indexOf('var sp = d.spiff;'));
+  ok('…and its total is not compared against the band mid-period',
+     /payPeriod && d\.payPeriod\.current/.test(bandPaint));
 }
 
 console.log(fail ? `\n${fail} FAILED` : '\nindependent checks: all passed');

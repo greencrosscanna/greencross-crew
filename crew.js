@@ -2805,7 +2805,10 @@
        the refusal. A pass is stated too — "the stores reconcile" is what makes the rest of the
        screen trustworthy, and a check that is only ever visible when it fails cannot be told apart
        from one that has quietly stopped running. */
-    var st = d.store_totals;
+    /* An OPEN period is not a finding — the closing report has days still to come, and the screen
+       already says the period is open. Saying "could not be checked" on the period everyone is
+       working in every day is how a notice becomes wallpaper. */
+    var st = (d.payPeriod && d.payPeriod.current) ? null : d.store_totals;
     if (!isImported && st && st.state !== 'ok') {
       if (st.state === 'mismatch') {
         h.push('<p class="crew-inc-note crew-inc-warn">⚠️ <strong>These figures do not agree with ' +
@@ -2829,13 +2832,20 @@
        rendered — rather than a second total computed engine-side — is what stops the warning and
        the tables disagreeing while a tick is being changed. A warning only: 27 periods is a small
        sample and a genuinely bigger fortnight is allowed to exist. */
-    var band = d.history_band;
+    /* AND NOT ON THE OPEN PERIOD EITHER, for a plainer reason than the reconciliation above: a
+       fortnight two days in has earned two days of bonuses, so "below everything on record" is
+       true every time and means nothing. Seen live at $200 against a $930 floor. */
+    var band = (d.payPeriod && d.payPeriod.current) ? null : d.history_band;
     if (!isImported && band && band.periods && band.payroll_min != null) {
       var _tot = Math.round((budTotal + mgrTotal + admPay) * 100) / 100;
       if (_tot < band.payroll_min || _tot > band.payroll_max) {
-        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ This period totals ' + money(_tot) +
+        /* m0, the incentive screen's own money formatter. `money()` is a different function that
+           lives inside the CSV export and is not in scope here — it blanked the whole tab with
+           "money is not defined" on the first render, which no source-level test would have
+           caught. Rendered before shipping, which is the point. */
+        h.push('<p class="crew-inc-note crew-inc-warn">⚠️ This period totals ' + esc(m0(_tot)) +
                '. All ' + band.periods + ' closed periods have landed between ' +
-               money(band.payroll_min) + ' and ' + money(band.payroll_max) + '.</p>');
+               esc(m0(band.payroll_min)) + ' and ' + esc(m0(band.payroll_max)) + '.</p>');
       }
     }
     var sp = d.spiff;
