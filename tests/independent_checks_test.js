@@ -6,9 +6,11 @@
  * WHY THIS EXISTS
  * The original safety net for these numbers was a penny-match against Leaderboard, and Leaderboard
  * is being unwound. Measured on 2026-09-11 it had already stopped being a check: on the PAID
- * 2026-08-17 period the two engines differ by $1,382 of sales across 22 people — by design, since
- * GX Core scores a return against the sale's period and Leaderboard against the day it was
- * processed — and ten nicknamed staff read as present on one side only. Sky's decision that day:
+ * 2026-08-17 period the two engines differ by $459 company-wide on $311,695 (0.15%) — first
+ * reported as $1,382 until Sky refused that figure as too large, which it was: incentive_compare
+ * summed three overlapping views of the same sales — and ten nicknamed staff read as present on one
+ * side only. Against Dutchie's own closing report that period reads GX Core -$55, Leaderboard
+ * +$404. Sky's decision that day:
  * reconcile against Dutchie's own closing report instead, and sanity-check the payouts against the
  * scheme and against every period that has ever closed.
  *

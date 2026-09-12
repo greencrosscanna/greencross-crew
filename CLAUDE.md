@@ -1003,11 +1003,10 @@ Pinned by `tests/floater_fold_test.js`.
 ### What independently checks these figures, now Leaderboard is going (2026-09-11)
 
 The safety net was a penny-match against Leaderboard. **It had already stopped being one**, and that
-is the finding rather than the plan: measured that day on the PAID 2026-08-17 period, the two engines
-differ by **$1,382 of sales across 22 people** — correctly, since GX Core scores a return against the
-sale's period (+grace) and Leaderboard against the day it was processed — and `incentive_compare`
-keys people on names, so ten nicknamed staff ("Levy" / "Laural") read as present on one side only.
-Sky's decision: reconcile against Dutchie instead. Three checks, at three different layers:
+is the finding rather than the plan: measured that day on the PAID 2026-08-17 period the two engines
+differ by **$459 company-wide on $311,695 (0.15%)**, and `incentive_compare` keys people on names, so
+ten nicknamed staff ("Levy" / "Laural") read as present on one side only. Sky's decision: reconcile
+against Dutchie instead. Three checks, at three different layers:
 
 | what | against what | when |
 |---|---|---|
@@ -1043,6 +1042,20 @@ Sky's decision: reconcile against Dutchie instead. Three checks, at three differ
   one that has quietly stopped running.
 - **`incentive_compare` and the Leaderboard fallback stay until Leaderboard is deleted**, but stop
   being described as a check. They answer "do the two engines agree", which is now a known no.
+
+***The $459 was first reported to Sky as $1,382, and he refused it as too large for what it was
+being blamed on — correctly.*** `incentive_compare`'s `totals` **summed three overlapping views of
+the same fortnight**: budtender rows, manager rows (which carry their **store's whole total**) and
+the admin row (the **company total** again). One $459 gap, counted three times. Fixed 2026-09-11 —
+the route now reports the three separately, refuses to add them, and `total_delta` is the admin row,
+which is one number for the whole company.
+
+**What the third party says, which is the part that matters.** Against **Dutchie's own closing
+report** for that period: **GX Core −$55 company-wide, Leaderboard +$404**. The figures people are
+paid on are the closer pair. **And "it is all returns timing" is NOT established**: the returns GX
+Core sets aside match the Leaderboard gap exactly at Baseline ($75) and at no other store, so the
+residual is unexplained and is deliberately not explained away here. It is small, it is in Crew's
+favor, and the new store check is what would catch it growing.
 
 *Named `ppDaysBetween_` because `daysBetween_` was already taken* by a Date-object helper 2,400
 lines down; a second definition silently won and broke every permit-expiry reading with

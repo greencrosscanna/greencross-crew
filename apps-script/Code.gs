@@ -4241,14 +4241,40 @@ function incentiveCompare_(p) {
   });
   diffs.sort(function (x, y) { return Math.abs(y.delta) - Math.abs(x.delta); });
 
+  /* THE OLD `totals` WAS ONE SUMMED NUMBER, AND IT TRIPLE-COUNTED. Sky spotted it on 2026-09-11:
+     it reported the two engines $1,382 apart on the 8/17 period, which is far too large for what
+     it was being blamed on. The sum added THREE OVERLAPPING VIEWS OF THE SAME SALES — budtender
+     rows, manager rows (which carry their STORE's whole total, not the manager's own selling) and
+     the admin row (the company total again). The real gap is $459, counted three times as $1,382.
+
+     Nothing downstream ever used it; it was a diagnostic, and its one job was to size a difference.
+     So it now reports the three views SEPARATELY and never adds them. `total_delta` is the honest
+     company-wide answer — the admin row, which is one number for the whole company. */
   var sum = function (o) { return Object.keys(o).reduce(function (t, k) { return t + o[k]; }, 0); };
+  var r2 = function (n) { return Math.round(n * 100) / 100; };
+  var group = function (payload, key) {
+    return r2((payload[key] || []).reduce(function (t, x) { return t + (Number(x.sales) || 0); }, 0));
+  };
+  var lbAdmin = Number(lb.admin && lb.admin.actual) || 0;
+  var gxAdmin = Number(gx.admin && gx.admin.actual) || 0;
   return {
     ok: true,
     pp_start: gx.payPeriod.start, pp_end: gx.payPeriod.end,
     people: { in_both: both, only_leaderboard: onlyLb, only_gxcore: onlyGx },
-    totals: { leaderboard: Math.round(sum(a) * 100) / 100,
-              gxcore: Math.round(sum(b) * 100) / 100,
-              delta: Math.round((sum(b) - sum(a)) * 100) / 100 },
+    totals: {
+      /* Three views, never added together. Each is a complete count of the same fortnight. */
+      budtender_rows: { leaderboard: group(lb, 'budtenders'), gxcore: group(gx, 'budtenders'),
+                        delta: r2(group(gx, 'budtenders') - group(lb, 'budtenders')) },
+      store_totals:   { leaderboard: group(lb, 'managers'), gxcore: group(gx, 'managers'),
+                        delta: r2(group(gx, 'managers') - group(lb, 'managers')),
+                        note: 'a manager row carries their STORE\'s total, so this is the six stores' },
+      company:        { leaderboard: r2(lbAdmin), gxcore: r2(gxAdmin), delta: r2(gxAdmin - lbAdmin) },
+      total_delta: r2(gxAdmin - lbAdmin),
+      note: 'these views OVERLAP — the same sales counted three ways. Never add them: doing so is ' +
+            'what once reported a $459 difference as $1,382.'
+    },
+    /* Per-name deltas index the same overlapping rows, so a manager\'s entry here is their store. */
+    per_name_note: 'a manager\'s delta is their STORE\'s, not their own selling',
     differing_people: diffs.length,
     largest_deltas: diffs.slice(0, 15),
     /* Read THIS before the numbers. A field Leaderboard sends and GX Core does not is a feature that
@@ -7030,12 +7056,21 @@ function coverageStoreNames_(slugs) {
 /* ══ THE INDEPENDENT CHECKS — what reconciles against what (Sky's decision, 2026-09-11) ═══════════
  *
  * The original safety net for these figures was a penny-match against Leaderboard. Leaderboard is
- * being unwound, and — measured the day this was written — it had ALREADY stopped being a check:
- * on the paid 2026-08-17 period the two engines differ by $1,382 of sales across 22 people, by
- * design (GX Core scores a return against the SALE period +grace; Leaderboard deducts it on the day
- * it was processed), and `incentive_compare` keys people on their names, so ten nicknamed staff
- * ("Levy" vs "Laural") read as present on one side only. A comparison nobody can act on is not a
- * control. So it is replaced rather than mourned:
+ * being unwound, and — measured the day this was written — it had ALREADY stopped being a check: on
+ * the paid 2026-08-17 period the two engines differ by $459 company-wide on $311,695 (0.15%), and
+ * `incentive_compare` keys people on their names, so ten nicknamed staff ("Levy" vs "Laural") read
+ * as present on one side only. A comparison nobody can act on is not a control. So it is replaced
+ * rather than mourned:
+ *
+ * *That $459 was first reported here as $1,382, and Sky refused it as too large — correctly.*
+ * `incentive_compare` summed three OVERLAPPING views of the same fortnight (budtender rows, manager
+ * rows which carry their store's whole total, and the admin row which is the company total again),
+ * so one $459 gap was counted three times. The tool now reports the three separately and refuses to
+ * add them. Against DUTCHIE'S OWN closing report the same period reads: GX Core -$55 company-wide,
+ * Leaderboard +$404 — so the figures people are paid on are the closer pair, which is the fact that
+ * matters and the one the summed number obscured. The returns difference explains only part of the
+ * residual (Baseline matches its set-aside returns exactly at $75; the other five stores do not),
+ * so "it is all returns timing" is NOT established and is not claimed here.
  *
  *   THE FORMULAS      tests/incentive_math_test.js — a frozen copy of Leaderboard's own three
  *                     functions, driven alongside Crew's over 12,040 boundary combinations on every
