@@ -71,8 +71,8 @@ const M = new Function('GXCore', 'Utilities',
      turns this file into a test that cannot fail. It did exactly that on the first run. */
   'var TOTALS_SALES_TOL_PCT = ' + tol('TOTALS_SALES_TOL_PCT') + ';\n' +
   'var TOTALS_TXN_TOL_PCT = ' + tol('TOTALS_TXN_TOL_PCT') + ';\n' +
-  fnSrc(SRC, 'ppWindow_') + '\n' + fnSrc(SRC, 'daysBetween_') + '\n' + fnSrc(SRC, 'storeTotals_') +
-  '\n; return { totals: storeTotals_, window: ppWindow_, days: daysBetween_ };'
+  fnSrc(SRC, 'ppWindow_') + '\n' + fnSrc(SRC, 'ppDaysBetween_') + '\n' + fnSrc(SRC, 'storeTotals_') +
+  '\n; return { totals: storeTotals_, window: ppWindow_, days: ppDaysBetween_ };'
 )({ getSalesDaily: function () { if (DAILY_THROWS) throw new Error(DAILY_THROWS); return DAILY; } }, {});
 
 /* 14 days of closing-report rows for one store. */

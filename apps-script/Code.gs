@@ -7094,7 +7094,12 @@ function ppWindow_(live) {
                  ('0' + d.getUTCDate()).slice(-2), to: end };
 }
 
-function daysBetween_(from, to) {
+/* NOT `daysBetween_` — that name is taken, by a function 2,400 lines down that takes DATE OBJECTS
+   and is what the permit-expiry warnings run on. A second definition of it silently WON (the last
+   one loaded does, with no error anywhere) and broke every permit reading with "a.getFullYear is
+   not a function". Caught live on the first preview after deploy, 2026-09-11. Dates in TEXT are
+   this file's convention, so a text-shaped helper needs its own name. */
+function ppDaysBetween_(from, to) {
   var a = Date.UTC(+from.slice(0, 4), +from.slice(5, 7) - 1, +from.slice(8, 10), 12);
   var b = Date.UTC(+to.slice(0, 4), +to.slice(5, 7) - 1, +to.slice(8, 10), 12);
   return Math.round((b - a) / 86400000) + 1;
@@ -7129,7 +7134,7 @@ function storeTotals_(live) {
     out.reason = 'GX Core\'s daily sales cache holds no days between ' + w.from + ' and ' + w.to;
     return out;
   }
-  var expected = daysBetween_(w.from, w.to);
+  var expected = ppDaysBetween_(w.from, w.to);
   var report = Object.create(null);
   rows.forEach(function (r) {
     var sid = String(r.store || '').trim().toLowerCase();
