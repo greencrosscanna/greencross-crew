@@ -1052,10 +1052,30 @@ which is one number for the whole company.
 
 **What the third party says, which is the part that matters.** Against **Dutchie's own closing
 report** for that period: **GX Core −$55 company-wide, Leaderboard +$404**. The figures people are
-paid on are the closer pair. **And "it is all returns timing" is NOT established**: the returns GX
-Core sets aside match the Leaderboard gap exactly at Baseline ($75) and at no other store, so the
-residual is unexplained and is deliberately not explained away here. It is small, it is in Crew's
-favor, and the new store check is what would catch it growing.
+paid on are the closer pair.
+
+***And the +$404 is VOIDS, not returns.*** Sky asked for it chased to the transaction level on
+2026-09-11, and Leaderboard's own source already names it: `greencross-leaderboard/dutchie_fetch.gs`
+— *"A VOID IS NOT A SALE, and seven places here forgot to say so"* — measured on **this exact
+fortnight**, **$403.93 of voided transactions counted as sales, bend alone 72.00 across two of
+them.** Cent for cent, per store, what Crew measured independently (bend +72.00, commercial +187.34,
+hillsboro +75.00, portland-rd +52.92, river-rd +16.67, center 0.00). A voided transaction is still
+typed `Retail` and carries `isVoid`; every filter there tested the type and stopped. GX Core's
+`gxIsRetail_` always had both halves.
+
+**Leaderboard fixed it on 2026-08-31 and its answer for this period will never change**, which is
+not a contradiction: `incentiveperf` serves a **frozen** closed-period snapshot
+(`GC_INC_PERF_v2_<ppStart>`), written once when the period closed — the day before the fix — and
+deliberately never recomputed. So every earlier period LB holds carries the voids permanently.
+
+**No pay was affected.** The 8/17 rows frozen in `crew_incentive_history` match GX Core store for
+store, not Leaderboard — the engine flag had already moved to `gxcore` on 2026-09-01, before the
+2026-09-02 approval. (One store reads $57.50 above what GX Core computes *today*: a return that
+settled after approval. That is what freezing is for, and it is why a closed period is never
+recomputed.)
+
+The returns explanation this section first offered was wrong, and it looked right because the
+returns GX Core sets aside happen to match the Leaderboard gap at Baseline ($75) and nowhere else.
 
 *Named `ppDaysBetween_` because `daysBetween_` was already taken* by a Date-object helper 2,400
 lines down; a second definition silently won and broke every permit-expiry reading with

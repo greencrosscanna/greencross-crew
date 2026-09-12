@@ -10,7 +10,9 @@
  * reported as $1,382 until Sky refused that figure as too large, which it was: incentive_compare
  * summed three overlapping views of the same sales — and ten nicknamed staff read as present on one
  * side only. Against Dutchie's own closing report that period reads GX Core -$55, Leaderboard
- * +$404. Sky's decision that day:
+ * +$404 — and that +$404 is VOIDED transactions counted as sales, which Leaderboard's own
+ * dutchie_fetch.gs measured on this same fortnight at $403.93 and fixed on 2026-08-31, one day
+ * after the period closed and froze. Sky's decision that day:
  * reconcile against Dutchie's own closing report instead, and sanity-check the payouts against the
  * scheme and against every period that has ever closed.
  *
