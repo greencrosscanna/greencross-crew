@@ -128,6 +128,21 @@
     return (Date.now().toString(36) + Math.random().toString(36).slice(2) +
             Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g, '').slice(0, 40);
   }
+
+  /* A REPLAYED ANSWER DESCRIBES THE PAST; `r.status` on it is read fresh by the engine. These are
+     the words for where a period stands NOW, so an "already done" toast cannot claim a period is
+     awaiting approval after it was sent back. */
+  function payStatusWords(st) {
+    return st === 'approved' ? 'approved' : st === 'pending' ? 'awaiting approval'
+         : st === 'draft' ? 'back in preparation' : (st || 'unknown');
+  }
+  /* The toast for a late retry: what this click did, and — only if it has since moved — where the
+     period is now. `expect` is the status this action leaves behind. */
+  function payReplayToast(did, r, expect) {
+    if (!r.status || r.status === expect) return did + ' (an earlier attempt of this click landed first)';
+    return did + ' earlier — the period has since moved on and is now ' + payStatusWords(r.status) +
+           '. Nothing was done twice.';
+  }
   function setSession(t, u, avatarCfg) {
     try {
       if (t) {
@@ -3696,7 +3711,19 @@
       var r = await Engine.jsonp('incentive_save', params, { timeoutMs: 20000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
       /* `already_applied` is a SUCCESS: an earlier attempt of this same click landed, and the engine
-         is saying so rather than saving it twice. The screen already shows it. */
+         is saying so rather than saving it twice. It also sends the person's inputs AS THEY ARE NOW —
+         somebody may have changed them since — so the screen shows that rather than this click's
+         value, and says so when the two differ. */
+      if (r.already_applied && r.now && r.now.inputs && incEditSeq[cell] === seq) {
+        var live = incInputs();
+        var was = JSON.stringify(live[employeeId] || null);
+        live[employeeId] = r.now.inputs;
+        if (JSON.stringify(r.now.inputs) !== was) {
+          paintIncentive();
+          toast('That change had already been saved, and has since been changed again — showing the current value');
+          return;
+        }
+      }
       toast(field === 'att' ? 'Attendance saved'
           : field === 'hours' ? (value === '' ? 'Hours cleared — back to the flat figure' : 'Hours saved')
           : field === 'payroll_override'
@@ -4008,6 +4035,12 @@
       var r = await Engine.jsonp('incentive_approve', params, { timeoutMs: 45000, retries: 1 });
       inc.approveToken = ''; inc.approvePp = '';      // single use, whatever the outcome
       if (!r || r.ok === false) throw new Error((r && r.error) || 'approve failed');
+      if (r.already_applied && r.status && r.status !== 'approved') {
+        /* Approved by an earlier attempt, then reopened before this answer arrived: nothing to print. */
+        toast(payReplayToast('That approval went through', r, 'approved'));
+        await loadIncentive(pp);
+        return;
+      }
       toast((r.already_applied ? 'Approved (an earlier attempt of this click landed first) — '
                                : 'Approved — ') + (r.written == null ? '' : r.written + ' rows frozen for ') + pp);
       /* Reload before printing: the period is now a record, so it must print as one — badged
@@ -4036,7 +4069,7 @@
       /* The warning matters more than the success: "sent" with nobody emailed looks identical to
          "sent" from here, and the difference is whether anyone knows to look. */
       toast(r.warning ? ('Marked sent — ' + r.warning)
-          : r.already_applied ? 'Already sent for approval — an earlier attempt of this click went through'
+          : r.already_applied ? payReplayToast('Sent for approval', r, 'pending')
           : ('Sent for approval — emailed ' + (r.mailed || []).join(', ')), !!r.warning);
       await loadIncentive(pp);
     } catch (e) {
@@ -4060,8 +4093,8 @@
         { token: token(), pp_start: pp, note: note.trim(), request_id: payRequestId() },
         { timeoutMs: 30000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send back');
-      toast('Sent back to ' + (r.returned_to || 'the sender') +
-            (r.already_applied ? ' (an earlier attempt of this click landed first)' : ''));
+      toast(r.already_applied ? payReplayToast('Sent back to ' + (r.returned_to || 'the sender'), r, 'draft')
+                              : 'Sent back to ' + (r.returned_to || 'the sender'));
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not send back: ' + ((e && e.message) || 'unknown'), true);
@@ -4458,8 +4491,8 @@
                 { token: token(), pp_start: pp, reason: reason, confirm: 'yes', request_id: payRequestId() },
                 { timeoutMs: 45000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not reopen');
-      toast((r.already_applied ? 'Reopened (an earlier attempt of this click landed first) — ' : 'Reopened — ') +
-            r.voided + ' rows voided (' + m0(r.payroll_total) + ' kept on record)');
+      toast(r.already_applied ? payReplayToast('Reopened', r, 'draft')
+                              : 'Reopened — ' + r.voided + ' rows voided (' + m0(r.payroll_total) + ' kept on record)');
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not reopen: ' + ((e && e.message) || 'unknown'), true);
@@ -5118,7 +5151,9 @@
                     { timeoutMs: 20000, retries: 1 });
           if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
           inputs[m.id] = inputs[m.id] || {};
-          inputs[m.id].att = !!m.want;
+          /* A late retry reports the person's inputs as they are NOW; trust that over this row. */
+          if (r.already_applied && r.now && r.now.inputs) inputs[m.id] = r.now.inputs;
+          else inputs[m.id].att = !!m.want;
           done++;
         } catch (e) {
           failed.push(m.who + ' (' + ((e && e.message) || 'unknown') + ')');

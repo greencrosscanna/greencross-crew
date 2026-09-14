@@ -6997,13 +6997,43 @@ function payReqReplay_(hit, id, action) {
   }
   var out = {};
   Object.keys(hit.result || {}).forEach(function (k) { out[k] = hit.result[k]; });
+  /* THE FIRST ANSWER DESCRIBES THE PAST. A late retry of a send that worked used to come back saying
+     `status: pending` about a period that had since been sent back — true when the send ran, false
+     by the time anybody read it, and the screen said "Already sent for approval" beside a period
+     that was not. So the old status is kept as `status_then`, and `status` / `now` are read fresh:
+     what the request did is history, where the period stands is not. */
+  if (out.status !== undefined) { out.status_then = out.status; delete out.status; }
+  var now = payReqNow_(action, hit.pp || out.pp_start || '', out.employee_id || '');
+  if (now) {
+    if (now.status) out.status = now.status;
+    out.now = now;
+  }
   out.ok = hit.ok;
   out.already_applied = true;
   out.request_id = id;
   out.applied_at = hit.decided_at;
   out.replay_note = 'this exact request was already handled at ' + hit.decided_at +
-    ' (a retry arriving late) — that answer is repeated here and nothing was changed again';
+    ' (a retry arriving late) — nothing was changed again' +
+    (now && now.status ? '; the period is ' + now.status + ' now' : '');
   return out;
+}
+
+/* Where things stand NOW, for a replay. A save reports the person's current inputs (which may have
+   been changed since by another click); everything else reports the period's current status —
+   `approved` if it is a closed record, else the workflow row's, else `draft`. Null if it cannot be
+   read: a replay without it is still correct, just less informative. */
+function payReqNow_(action, pp, eid) {
+  if (!pp) return null;
+  try {
+    if (action === 'incentive_save') {
+      if (!eid) return null;
+      var i = inputsFor_(pp)[eid];
+      return { inputs: i || { att: false, spiff: null, hours: null, payrollOverride: null, overrideNote: '' } };
+    }
+    if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) return { status: 'approved' };
+    var wf = wfGet_(pp);
+    return { status: (wf && wf.status) || 'draft' };
+  } catch (e) { return null; }
 }
 
 /* The fast hint. Never the reason a write goes ahead — a miss here just means "ask the sheet". */
@@ -7027,8 +7057,8 @@ function payReqSeen_(rq, action) {
     var row = sh.getRange(i + 2, 1, 1, PAYREQ_HEADERS.length).getValues()[0];
     var result = {};
     try { result = JSON.parse(String(row[6] || '{}')); } catch (e) {}
-    return payReqReplay_({ action: String(row[1]), decided_at: String(row[3]), ok: String(row[5]) === 'yes',
-                           result: result }, rq.id, action);
+    return payReqReplay_({ action: String(row[1]), pp: String(row[2]), decided_at: String(row[3]),
+                           ok: String(row[5]) === 'yes', result: result }, rq.id, action);
   }
   return null;
 }
@@ -7048,7 +7078,7 @@ function payReqRecord_(rq, action, pp, by, res) {
       rq.id, action, String(pp || ''), now, String(by || ''), res && res.ok ? 'yes' : 'no', JSON.stringify(compact)
     ]]);
     sh.getRange(row, 3, 1, 2).setNumberFormat('@');
-    payReqCache_(rq.id, action, now, !!(res && res.ok), compact);
+    payReqCache_(rq.id, action, pp, now, !!(res && res.ok), compact);
     if (row - 1 > PAYREQ_PRUNE_AT) {
       var stamps = sh.getRange(2, 4, row - 1, 1).getValues();
       var cutoff = new Date().getTime() - PAYREQ_KEEP_MS, n = 0;
@@ -7073,16 +7103,17 @@ function payReqUpdate_(rq, row, action, res) {
     if (String(sh.getRange(row, 1).getValue()) !== rq.id) return;
     var compact = payReqCompact_(res);
     sh.getRange(row, 6, 1, 2).setValues([[res && res.ok ? 'yes' : 'no', JSON.stringify(compact)]]);
-    payReqCache_(rq.id, action, String(sh.getRange(row, 4).getValue()), !!(res && res.ok), compact);
+    payReqCache_(rq.id, action, String(sh.getRange(row, 3).getValue()), String(sh.getRange(row, 4).getValue()),
+                 !!(res && res.ok), compact);
   } catch (e) {
     Logger.log('pay request ' + rq.id + ': final answer not recorded: ' + e);
   }
 }
 
-function payReqCache_(id, action, at, ok, result) {
+function payReqCache_(id, action, pp, at, ok, result) {
   try {
     CacheService.getScriptCache().put('payreq:' + id,
-      JSON.stringify({ action: action, decided_at: at, ok: ok, result: result }), 21600);
+      JSON.stringify({ action: action, pp: String(pp || ''), decided_at: at, ok: ok, result: result }), 21600);
   } catch (e) {}
 }
 

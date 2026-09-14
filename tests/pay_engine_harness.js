@@ -50,7 +50,7 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
               /* One-time request ids (2026-09-14). Optional, so CODE_GS can point at the engine from
                  before they existed and the request-id test can be seen to fail there. */
               'payReqId_', 'payReqCompact_', 'payReqReplay_', 'payReqCached_', 'payReqSeen_',
-              'payReqRecord_', 'payReqUpdate_', 'payReqCache_'];
+              'payReqRecord_', 'payReqUpdate_', 'payReqCache_', 'payReqNow_'];
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT'];

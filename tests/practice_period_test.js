@@ -263,9 +263,11 @@ console.log('\nNothing that enumerates what the company actually closed can see 
   const single = decomment(GS).match(/historyPeriods_\(pp\)\.some/g) || [];
   /* 5 since 2026-09-14: approve, send and save, plus the RE-CHECKS approve and send now make under
      the pay lock (tests/pay_period_race_test.js). Each of those must pass the key too — a bare
-     re-check would ask the real history about a practice period and never find it approved. */
+     re-check would ask the real history about a practice period and never find it approved.
+     6 since the same evening: payReqNow_, which tells a late retry whether the period is closed
+     NOW — a bare call there would report a closed practice period as still in preparation. */
   ok('while every "is THIS period already closed" guard passes the key (' + single.length + ')',
-     single.length === 5);
+     single.length === 6);
   ok('and no guard asks the bare question about one period',
      !/historyPeriods_\(\)\.some/.test(decomment(GS)));
 

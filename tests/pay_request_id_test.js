@@ -55,6 +55,8 @@ for (const evict of [false, true]) {
     ok('and carries the first answer, so the screen can say what happened',
        late.written === 2 && late.pp_start === PP);
     ok('the period is still draft', E.wfGet(PP).status === 'draft');
+    ok('the late answer says where the period is NOW (draft), not what it was (approved)',
+       late.status === 'draft' && late.now && late.now.status === 'draft');
   }
 
   console.log('\nincentive_save — tick, untick, then the stalled tick lands' + how);
@@ -68,6 +70,8 @@ for (const evict of [false, true]) {
        E.inputsFor(PP).e1 && E.inputsFor(PP).e1.att === false);
     ok('one inputs row for the person', forPP(E, INP).filter(r => r[1] === 'e1').length === 1);
     ok('the late tick is answered as already applied', late.ok === true && late.already_applied === true);
+    ok('and carries the person\'s inputs as they are NOW (unticked), so the screen shows the truth',
+       late.now && late.now.inputs && late.now.inputs.att === false);
   }
 
   console.log('\nincentive_send — send, send back, then the stalled send lands' + how);
@@ -84,6 +88,9 @@ for (const evict of [false, true]) {
     ok('the period stays sent back (draft) — got ' + E.wfGet(PP).status, E.wfGet(PP).status === 'draft');
     ok('the returned note is not wiped by a second send', /missed attendance/.test(E.wfGet(PP).note));
     ok('the late send is answered as already applied', late.ok === true && late.already_applied === true);
+    ok('THE WRINKLE: it no longer says "pending" about a period that was sent back — status ' + late.status +
+       ', status_then ' + late.status_then, late.status === 'draft' && late.status_then === 'pending' &&
+       /draft now/.test(late.replay_note));
   }
 
   console.log('\nincentive_return — send back, send again, then the stalled send-back lands' + how);
@@ -102,6 +109,7 @@ for (const evict of [false, true]) {
     ok('its approval link still works (token untouched)', !!tokenNow && E.wfGet(PP).token === tokenNow);
     ok('ONE "sent back" email — got ' + returnMails(E), returnMails(E) === 1);
     ok('the late send-back is answered as already applied', late.ok === true && late.already_applied === true);
+    ok('and reports the period as pending again — which it is', late.status === 'pending' && late.status_then === 'draft');
   }
 
   console.log('\nincentive_unapprove — reopen, re-approve, then the stalled reopen lands' + how);
@@ -117,6 +125,7 @@ for (const evict of [false, true]) {
     ok('the period still reads approved', E.wfGet(PP).status === 'approved');
     ok('the older closed period is untouched', E.rows(HIST).filter(r => r[0] === '2026-08-03').length === 1);
     ok('the late reopen is answered as already applied', late.ok === true && late.already_applied === true);
+    ok('and reports the period as approved, which it is again', late.status === 'approved');
   }
 
   console.log('\na refusal decided under the lock is remembered too' + how);
@@ -153,6 +162,14 @@ for (const evict of [false, true]) {
     ok('LIMIT: a pre-lock refusal is not remembered — the late copy is decided afresh',
        refused.ok === false && late.ok === true && !late.already_applied);
   }
+}
+
+console.log('\na replay with nothing in between still reads as done');
+{
+  const E = engine(); E.seedClosed(); E.user = 'mike';
+  E.send({ pp_start: PP, request_id: id('S') });
+  const late = E.send({ pp_start: PP, request_id: id('S') });
+  ok('status now and status then agree (pending)', late.status === 'pending' && late.status_then === 'pending');
 }
 
 console.log('\nno id, bad ids, and different ids');
@@ -254,6 +271,16 @@ console.log('\ncrew.js — every pay write sends a request id minted once per ac
                gen({}, undefined)(), gen({ crypto: { getRandomValues: a => require('crypto').webcrypto.getRandomValues(a) } }, undefined)()];
   ok('the id is one the engine accepts, with or without crypto.randomUUID — ' + ids.join(' '),
      ids.every(x => /^[A-Za-z0-9_-]{16,64}$/.test(x)));
+  const toastSrc = JS.slice(JS.indexOf('function payStatusWords('), JS.indexOf('\n  }', JS.indexOf('function payReplayToast(')) + 4);
+  const T = new Function(toastSrc + '\nreturn payReplayToast;')();
+  ok('a late send on a sent-back period does NOT say it is awaiting approval — "' +
+     T('Sent for approval', { status: 'draft' }, 'pending') + '"',
+     /now back in preparation/.test(T('Sent for approval', { status: 'draft' }, 'pending')) &&
+     !/awaiting approval/.test(T('Sent for approval', { status: 'draft' }, 'pending')));
+  ok('with nothing in between it just says it landed first',
+     /landed first/.test(T('Sent for approval', { status: 'pending' }, 'pending')));
+  ok('the old fixed "Already sent for approval" wording is gone, and every replay toast reads the fresh status',
+     !/Already sent for approval/.test(JS) && (JS.match(/payReplayToast\(/g) || []).length >= 5);
   ok('and two clicks get two ids', gen({ crypto: require('crypto').webcrypto })() !== gen({ crypto: require('crypto').webcrypto })());
 }
 
