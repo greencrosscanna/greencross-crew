@@ -770,15 +770,36 @@ and the sheet writes only**, flush, and release. **Never widen it around the per
 Drive filing, the backup or an email** — it is the same lock every roster edit waits on. A lock it
 cannot get is a worded refusal that says nothing was saved.
 
-**What it does NOT fix, because a lock cannot:** a request stalled for *minutes* that runs after
-somebody has already acted on its twin. A stalled Approve landing after Sky has reopened the period
-approves it again; a stalled attendance tick landing after an untick re-ticks. Those need a request
-id from the browser, which is a `gx-client.js` / `crew.js` design change, not an engine one.
-`roster_retire` and `roster_merge` need no lock: both converge on a keyed upsert, and the merge's
+**What the lock cannot fix — a request stalled for *minutes* that runs after somebody has already
+acted on its twin — is covered by one-time request ids.** A stalled Approve landing after Sky has
+reopened the period would approve it again; a stalled tick landing after an untick would re-tick.
+`crew.js` mints one `request_id` per click (`payRequestId()`) into the params object, and gx-client
+sends that same object on every retry, so **no shared-client change was needed**. The engine checks
+and records the id **inside `withPayLock_`**, in the **`crew_pay_requests`** tab (kept 7 days), and a
+second arrival gets the first answer back with `already_applied: true` — which the screen treats as
+done, not as an error. Script cache is only a fast hint at the top of a route; the sheet is the guard.
+
+- **Refusals decided under the lock are remembered too** — a click the person was told was refused
+  must not quietly succeed later. **Refusals returned before the lock are not** (auth, missing
+  fields, blockers): that is the known limit, pinned by the test so nobody assumes otherwise.
+- **No id = old behavior**, so deploy-secret tooling and a tab running an older `crew.js` still work.
+  A malformed id is refused before anything runs.
+- **Never mint the id inside a retry**, or per call to a helper that retries. One id per person-
+  action; the attendance import mints one per row.
+
+`roster_retire` and `roster_merge` need neither: both converge on a keyed upsert, and the merge's
 duplicate alias row is identical and read as a map.
 
-Pinned by `tests/pay_period_race_test.js`, which fails against the unlocked code by running a second
-execution between the first one's read and its write.
+Pinned by `tests/pay_period_race_test.js` (two copies at once — fails against the unlocked code) and
+`tests/pay_request_id_test.js` (a copy landing after its twin — fails against the engine from before
+request ids). Both run the real routes through `tests/pay_engine_harness.js`.
+
+**`?action=pay_audit` (deploy-secret, read-only)** finds what the pre-lock race could have left:
+duplicate people in a closed record, duplicate inputs rows, duplicate workflow/scheme rows, the same
+rows voided twice. Run 2026-09-14: one hit — `amirah_montaner` has two identical inputs rows for
+2026-08-17 (written 2026-09-01, 19:21 and 19:55), a double-append race on a tick; no dollar effect,
+because the rows agree. It reads tabs **by position**, as the engine does: `crew_incentive_voided`
+and `crew_incentive_inputs` have header rows older than their columns.
 
 ### Things that silently pay the wrong amount
 
