@@ -7986,6 +7986,24 @@ function incentiveUnapproveLocked_(p, pp, reason, by) {
 }
 function VOID_HEADERS() { return HISTORY_HEADERS.concat(['voided_at', 'void_reason']); }
 
+/* A void row, read on the shape it was WRITTEN in. Rows voided before 2026-09-02 were copied when
+   HISTORY_HEADERS had 18 columns, so they are 20 wide — read 22 wide by position, their voided_at
+   sits in computed_payroll and void_reason in override_note, with the real two columns blank. An
+   ISO stamp in a money column with nothing where voided_at belongs can only be that shape.
+
+   READ-SIDE ONLY, and deliberately: those rows are the audit trail, and rewriting them to fit the
+   newer header would be editing the record of what was un-paid. Every reader of the void log goes
+   through this — incentive_voided grouped the 2026-08-17 reopen under an empty timestamp with no
+   reason until it did. Mutates and returns the row. */
+function voidRowShape_(r) {
+  if (String(r.voided_at == null ? '' : r.voided_at).trim() === '' &&
+      /^\d{4}-\d{2}-\d{2}T/.test(String(r.computed_payroll == null ? '' : r.computed_payroll))) {
+    r.voided_at = r.computed_payroll; r.void_reason = r.override_note;
+    r.computed_payroll = ''; r.override_note = ''; r._shape = 'pre-2026-09-02';
+  }
+  return r;
+}
+
 /**
  * ?action=incentive_voided[&pp_start=YYYY-MM-DD]  — what a reopen took away.
  *
@@ -8011,7 +8029,7 @@ function incentiveVoided_(p) {
   var rows;
   /* The void log follows the period it belongs to: reopening a practice period is part of the
      rehearsal, and its trail must not appear in the audit of what the company actually un-paid. */
-  try { rows = readTab_(incTab_(VOID_TAB, String(p.pp_start || '').trim()), vh); }
+  try { rows = readTab_(incTab_(VOID_TAB, String(p.pp_start || '').trim()), vh).map(voidRowShape_); }
   catch (e) { return { ok: true, periods: [], rows: [], note: 'nothing has ever been voided' }; }
 
   /* COMPARED THROUGH normDate_, not as raw strings. Rows written before the fix above hold a real
@@ -8202,13 +8220,8 @@ function payAuditRows_(t, hdr) {
   /* ── Void log: a reopen that ran twice ────────────────────────────────────────────────────────── */
   /* …and the OLDEST void rows are the opposite case: written 20 wide, before history gained
      computed_payroll and override_note, so read 22 wide their voided_at sits in computed_payroll.
-     An ISO stamp in a money column with nothing where voided_at belongs can only be that shape. */
-  V.rows.forEach(function (r) {
-    if (String(r.voided_at || '') === '' && /^\d{4}-\d{2}-\d{2}T/.test(String(r.computed_payroll || ''))) {
-      r.voided_at = r.computed_payroll; r.void_reason = r.override_note;
-      r.computed_payroll = ''; r.override_note = ''; r._shape = 'pre-2026-09-02';
-    }
-  });
+     voidRowShape_ is the one place that knows it; incentive_voided reads through it too. */
+  V.rows.forEach(voidRowShape_);
   var vb = groupBy(V.rows, function (r) { return day(r.pp_start) + '|' + String(r.voided_at || ''); });
   var voids = vb.keys.map(function (k) {
     var rows = vb.g[k];
