@@ -527,6 +527,8 @@ function route_(e) {
       case 'incentive_voided':    return json_(incentiveVoided_(p), p.callback);
       // Did two copies of a pay write ever both land? Read-only, deploy-secret. See payAudit_.
       case 'pay_audit':           return json_(payAudit_(p), p.callback);
+      // Remove ONE exact-duplicate inputs row that pay_audit found. Dry by default. See inputsDedupe_.
+      case 'inputs_dedupe':       return json_(inputsDedupe_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'export':       return json_(buildCapstoneExport_(p), p.callback);// payroll export (CSV/PDF)
@@ -8106,6 +8108,71 @@ function payAudit_(p) {
          schemes: SCHEME_HEADERS });
   });
   return out;
+}
+
+/**
+ * ?action=inputs_dedupe&pp_start=…&employee_id=…&row=N&secret=…[&confirm=yes]
+ *
+ * THE CLEANUP FOR ONE THING pay_audit REPORTS: a person with two crew_incentive_inputs rows for one
+ * pay period, left by a retried save before withPayLock_ existed (2026-09-14). Harmless while the
+ * rows agree, a trap the moment they don't: saves update the FIRST row, `inputsFor_` reads the LAST,
+ * so an edit after a reopen would never reach the math.
+ *
+ * It deletes exactly one row, and only when deleting it CANNOT change a figure: the row must be one
+ * of at least two for that person and period, and every field the math reads (att, spiff, hours,
+ * payroll_override, override_note) must equal a row that stays. Anything else is refused — two rows
+ * that DISAGREE are a pay question for a person, not a cleanup. Deploy-secret, dry unless
+ * confirm=yes, under the pay lock, and the sheet row is re-found by content inside the lock rather
+ * than trusted from the request. Decided by Sky, 2026-09-14, for amirah_montaner on 2026-08-17.
+ */
+function inputsDedupe_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var pp = String(p.pp_start || '').trim(), eid = String(p.employee_id || '').trim();
+  var row = Number(p.row);
+  if (!pp || !eid || !(row >= 2)) return { ok: false, error: 'pp_start, employee_id and row (a sheet row, 2 or more) required' };
+  var dry = String(p.confirm || '') !== 'yes';
+  var FIELDS = ['att', 'spiff', 'hours', 'payroll_override', 'override_note'];
+  return withPayLock_(function () {
+    var sh = sheetOf_(incTab_(INPUTS_TAB, pp), INPUTS_HEADERS);
+    var last = sh.getLastRow();
+    if (last < 2) return { ok: false, error: 'the inputs tab is empty' };
+    var vals = sh.getRange(2, 1, last - 1, INPUTS_HEADERS.length).getValues();
+    function obj(r) {
+      var o = {}; INPUTS_HEADERS.forEach(function (h, j) { o[h] = String(r[j] == null ? '' : r[j]).trim(); });
+      return o;
+    }
+    var mine = [];
+    vals.forEach(function (r, i) {
+      var o = obj(r);
+      if ((normDate_(r[0]) || o.pp_start) === pp && o.employee_id === eid) { o._row = i + 2; mine.push(o); }
+    });
+    if (mine.length < 2) {
+      return { ok: false, error: eid + ' has ' + mine.length + ' inputs row(s) for ' + pp + ' — nothing to de-duplicate' };
+    }
+    var target = mine.filter(function (o) { return o._row === row; })[0];
+    if (!target) {
+      return { ok: false, error: 'sheet row ' + row + ' is not one of ' + eid + '\'s rows for ' + pp +
+               ' (those are ' + mine.map(function (o) { return o._row; }).join(', ') + ') — nothing deleted' };
+    }
+    var keep = mine.filter(function (o) { return o._row !== row; });
+    var twin = keep.filter(function (o) {
+      return FIELDS.every(function (f) { return o[f] === target[f]; });
+    })[0];
+    if (!twin) {
+      return { ok: false, error: 'row ' + row + ' disagrees with every other row for ' + eid + ' on ' + pp +
+               ' — deleting it could change pay, so this is a decision for a person, not a cleanup. Nothing deleted.',
+               rows: mine.map(function (o) { var c = {}; FIELDS.concat(['_row', 'updated_at', 'updated_by']).forEach(function (f) { c[f] = o[f]; }); return c; }) };
+    }
+    var summary = { ok: true, dry_run: dry, pp_start: pp, employee_id: eid, delete_row: row,
+                    identical_to_row: twin._row, rows_before: mine.length, rows_after: mine.length - 1,
+                    values: FIELDS.reduce(function (a, f) { a[f] = target[f]; return a; }, {}),
+                    deleted_row_written: { updated_at: target.updated_at, updated_by: target.updated_by } };
+    if (dry) { summary.note = 'nothing deleted — re-send with confirm=yes'; return summary; }
+    sh.deleteRow(row);
+    Logger.log('inputs_dedupe: deleted ' + INPUTS_TAB + ' row ' + row + ' (' + eid + ', ' + pp + '), identical to row ' + twin._row);
+    summary.note = 'deleted — ' + eid + ' now has one inputs row for ' + pp + ', with the same values';
+    return summary;
+  });
 }
 
 /* The analysis behind pay_audit. `t` holds each tab's raw getValues() (header row first), or null
