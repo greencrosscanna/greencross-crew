@@ -41,6 +41,22 @@ jobs:
           repository: greencrosscanna/greencross-leaderboard
           path: greencross-leaderboard
 
+      # AND NO OTHER SIBLING IS NEEDED — checked, not assumed. incentive_math_test.js is the ONLY
+      # suite in this repo that reads outside it (`../../greencross-leaderboard/index.html`); every
+      # other one reads crew's own source or its own frozen fixtures.
+      #
+      # DO NOT ADD A greencross-command-center CHECKOUT. It gets proposed because
+      # threshold_audit_test.js is about GX Core's library surface — but that test reads NO hub
+      # source. It checks crew's `GXCore.*` call sites against LIB_SURFACE, a list maintained inside
+      # the test file and verified against the hub's .gs by a human. It does not skip here, and a hub
+      # checkout would not make it cover one line more.
+      #
+      # The reason this warning is worth the space: the hub is PRIVATE, so a spoke's default
+      # GITHUB_TOKEN cannot reach it, and the only way past that is a PAT secret to create, rotate and
+      # leak — bought for coverage that ALREADY runs somewhere better. The hub's own CI checks out all
+      # seven spokes, this one included, and runs gxcore_surface_test.js against the real library
+      # surface. That is the check that catches a LIB_SURFACE list gone stale, and it lives next to
+      # the library it is checking rather than next to a copy of a list.
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -87,7 +103,23 @@ jobs:
             done
             echo ""
             if [ -d ../greencross-leaderboard ]; then
-              echo "Leaderboard checked out — the incentive drift check ran."
+              echo "Leaderboard checked out — incentive_math_test.js's drift check could run."
+              # ...AND SAY WHAT IT FOUND, because "could run" and "compared something" are different
+              # claims and this line used to make the stronger one. The transplant is finished:
+              # calcBud/calcMgr/calcAdmin are GONE from Leaderboard's index.html, so the drift half
+              # now compares ZERO functions and prints "– … no longer in Leaderboard" — which is not
+              # a SKIP marker, so the per-file list above shows a plain ✅. That is correct, not a
+              # hole: the 12,040-combination browser-vs-engine comparison against the FROZEN oracle
+              # is the coverage that matters, it runs here, and the oracle is frozen on purpose
+              # because that dashboard is expected to be deleted. The checkout stays so the drift
+              # check speaks up again if Leaderboard ever grows a copy of the pay math back.
+              # Matches ONLY the drift check's own two verdicts ("frozen oracle still matches …" /
+              # "… no longer in Leaderboard"). A looser pattern on the word Leaderboard also catches
+              # the budtender line, which is a different check entirely and would read as evidence
+              # the drift comparison did something.
+              node tests/incentive_math_test.js 2>&1 \
+                | grep -E 'frozen oracle still matches|no longer in Leaderboard' \
+                | sed 's/^ */- /' || true
             else
               echo "> **Leaderboard absent.** incentive_math_test.js's drift check did NOT run here."
             fi
