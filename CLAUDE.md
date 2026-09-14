@@ -748,6 +748,38 @@ Email links carry a single-use 72-hour token bound to the period **and the total
 
 `?action=incentive_send&preview=1&secret=…&to=…` dry-runs the email with no state change.
 
+### Two copies of one pay write at once — `withPayLock_` (2026-09-14)
+
+The guards above ("already a closed record", "already sent for approval") stop a **replay that
+comes after** the first request. They did nothing for two copies **running at the same time**, and
+that is what a retry produces: `crew.js` sends these writes with `retries`, an Apps Script call can
+stall 18-34s before it starts and still run afterwards, and abandoning a JSONP attempt cancels
+nothing. Eight parallel `health` calls to this engine finished within 10ms of each other, so
+overlapping executions are real here. Unlocked, a pair of copies:
+
+- **approve** froze every row twice — the Capstone export would have paid everyone double;
+- **send** mailed two approval emails, the first one's Approve link already dead;
+- **reopen** deleted by row numbers the first copy had already shifted — **a later period's paid
+  rows** — and voided the period twice;
+- **save** appended a second inputs row, after which an untick or override stopped reaching the math
+  (saves update the first row, `inputsFor_` reads the last);
+- **send back** mailed the preparer twice.
+
+`approve`, `send`, `return`, `unapprove` and `save` now take the script lock around **the re-check
+and the sheet writes only**, flush, and release. **Never widen it around the performance fetch, the
+Drive filing, the backup or an email** — it is the same lock every roster edit waits on. A lock it
+cannot get is a worded refusal that says nothing was saved.
+
+**What it does NOT fix, because a lock cannot:** a request stalled for *minutes* that runs after
+somebody has already acted on its twin. A stalled Approve landing after Sky has reopened the period
+approves it again; a stalled attendance tick landing after an untick re-ticks. Those need a request
+id from the browser, which is a `gx-client.js` / `crew.js` design change, not an engine one.
+`roster_retire` and `roster_merge` need no lock: both converge on a keyed upsert, and the merge's
+duplicate alias row is identical and read as a map.
+
+Pinned by `tests/pay_period_race_test.js`, which fails against the unlocked code by running a second
+execution between the first one's read and its write.
+
 ### Things that silently pay the wrong amount
 
 - **SPIFF is vendor money.** In Bonus, never in Payroll, never in the export. Budtenders subtract it

@@ -5693,6 +5693,17 @@ function saveIncentiveInput_(p) {
     }
   }
 
+  /* THE UPSERT RUNS UNDER THE PAY LOCK. Unlocked, a retried save for somebody with no row yet let
+     both copies find no row and APPEND one each. That is a pay bug, not clutter: later saves update
+     the FIRST matching row and `inputsFor_` reads the LAST, so an untick or an override made
+     afterwards silently stops reaching the math. The same lock also stops two different fields
+     saved at once for one person from overwriting each other's half of the row. Ten seconds, not
+     thirty — the browser gives this route 20. */
+  return withPayLock_(function () { return upsertIncentiveInput_(p, pp, eid, auth); }, 10000);
+}
+
+/* The body of saveIncentiveInput_, run only while holding withPayLock_. Never call it directly. */
+function upsertIncentiveInput_(p, pp, eid, auth) {
   var sh = sheetOf_(incTab_(INPUTS_TAB, pp), INPUTS_HEADERS);
   var rows = readTab_(incTab_(INPUTS_TAB, pp), INPUTS_HEADERS);
   var idx = -1;
@@ -6097,25 +6108,39 @@ function incentiveApprove_(p) {
   /* An approve link from the email carries a single-use token. It is checked against the period
      AND against the total that was sent: if anything moved between the email and the click, the
      link refuses and Sky goes and looks instead of approving a number he never saw. */
-  var wf = wfGet_(pp);
-  var tok = String(p.approve_token || '').trim();
-  if (tok) {
-    if (!wf || wf.status !== 'pending') return { ok: false, error: 'this period is no longer awaiting approval' };
-    if (tok !== String(wf.token || '')) return { ok: false, error: 'that approval link is not valid any more' };
-    if (wf.token_expires && new Date(wf.token_expires).getTime() < new Date().getTime()) {
-      return { ok: false, error: 'that approval link has expired — open the period in Crew to approve it' };
+  /* THE RE-CHECK AND THE WRITE, UNDER ONE LOCK. The closed-record check at the top ran before the
+     performance fetch, which takes seconds — long enough for a retried copy of this same request to
+     pass the same check and append the same rows. So it is asked again here, where no other
+     execution can be between the answer and the write. Found present at this point it can only
+     have landed while this one was computing. The token is checked in here too: it is cleared by
+     the write, so a copy that read it first would otherwise still find it valid. */
+  var written = withPayLock_(function () {
+    if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
+      return { ok: false, error: pp + ' was approved by another request while this one was being checked ' +
+               '(a retry, or a second click) — nothing was written twice. Reload the period to see the record.' };
     }
-    if (Math.abs(Number(wf.sent_total || 0) - total) > 0.005) {
-      return { ok: false, error: 'the figures have changed since that email was sent (was ' +
-               wfMoney_(wf.sent_total) + ', now ' + wfMoney_(total) + ') — open it in Crew and review' };
+    var wf = wfGet_(pp);
+    var tok = String(p.approve_token || '').trim();
+    if (tok) {
+      if (!wf || wf.status !== 'pending') return { ok: false, error: 'this period is no longer awaiting approval' };
+      if (tok !== String(wf.token || '')) return { ok: false, error: 'that approval link is not valid any more' };
+      if (wf.token_expires && new Date(wf.token_expires).getTime() < new Date().getTime()) {
+        return { ok: false, error: 'that approval link has expired — open the period in Crew to approve it' };
+      }
+      if (Math.abs(Number(wf.sent_total || 0) - total) > 0.005) {
+        return { ok: false, error: 'the figures have changed since that email was sent (was ' +
+                 wfMoney_(wf.sent_total) + ', now ' + wfMoney_(total) + ') — open it in Crew and review' };
+      }
     }
-  }
 
-  var sh = historySheet_(pp);
-  sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
-  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
-  freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
-  wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
+    var sh = historySheet_(pp);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, HISTORY_HEADERS.length).setValues(rows);
+    sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
+    freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
+    wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
+    return { ok: true };
+  });
+  if (!written.ok) return written;
   /* THE PAYOUT PDF, filed from the rows just written — LAST, and unable to fail the approval.
      Everything above is the permanent record; this is a copy of it for the Drive archive Sky has
      kept by hand for 28 fortnights. Ordered after wfSet_ so a Drive outage cannot leave a period
@@ -6826,6 +6851,45 @@ function wfUnsend_(pp, prev) {
                  sent_at: (prev && prev.sent_at) || '',
                  token: '', token_expires: '', sent_total: '' });
   } catch (e) { /* the send already failed; do not mask that with a rollback error */ }
+}
+
+/* ONE LOCK AROUND EVERY CHECK-THEN-WRITE ON A PAY PERIOD (2026-09-14).
+ *
+ * Every pay route guarded a SEQUENTIAL replay — "already a closed record", "already sent for
+ * approval" — and none took a lock, so two executions that both read the state before either wrote
+ * both passed the guard. That is not hypothetical here: crew.js sends these writes with `retries`,
+ * an Apps Script /exec call can stall 18-34s on its first hop and still run afterwards, and
+ * abandoning a JSONP attempt cancels nothing. Eight parallel `health` calls to this engine finished
+ * within 10ms of each other the same day, so two executions of this script really do overlap.
+ * Unlocked, the pair appended every approved row twice (a Capstone file that pays everyone double),
+ * sent two approval emails with two tokens, and — the worst of them — let a second reopen delete by
+ * row numbers the first had already shifted, which deletes a LATER period's paid rows.
+ *
+ * SHORT ON PURPOSE. Callers take it around the re-check and the sheet writes only — never around
+ * the performance fetch, the Drive filing, the backup or an email — because it is the SCRIPT lock
+ * and `writeAttrs_` waits on the same one for every roster edit.
+ *
+ * FLUSHED BEFORE RELEASE. Sheets batches writes; without the flush the execution that was waiting
+ * can take the lock and re-read the state from before this one wrote, which is the race again.
+ *
+ * A lock it cannot get is a REFUSAL, not a throw: nothing was written, and the person at the screen
+ * is told so in words rather than seeing "Lock timeout". */
+function withPayLock_(fn, waitMs) {
+  var lock = LockService.getScriptLock();
+  var got = false;
+  try { got = lock.tryLock(waitMs || 30000); } catch (e) { got = false; }
+  if (!got) {
+    return { ok: false, busy: true,
+             error: 'another change to this pay period was still being written, so nothing was saved — ' +
+                    'reload the period, check it, and try again' };
+  }
+  try {
+    var out = fn();
+    SpreadsheetApp.flush();
+    return out;
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* WHO APPROVES — and why this is not a role check.
@@ -7550,9 +7614,28 @@ function incentiveSend_(p) {
   var token = preview ? 'PREVIEW' : Utilities.getUuid().replace(/-/g, '');
   var expires = new Date(new Date().getTime() + 72 * 3600 * 1000).toISOString();
   if (!preview) {
-    wfSet_(pp, { status: 'pending', sent_by: auth.user || '', sent_at: new Date().toISOString(),
-                 decided_by: '', decided_at: '', note: '', token: token, token_expires: expires,
-                 sent_total: String(pre.payroll_total) });
+    /* CLAIM THE SEND UNDER THE LOCK, THEN MAIL OUTSIDE IT. The "already pending" check at the top
+       ran before the dry run, which takes seconds — so a retried copy of this request could pass it
+       too, and each copy then mailed its own email with its own token, the first one's Approve link
+       already dead. Asked again here; whoever sets `pending` first is the one that mails. `wfPrev`
+       is re-read in here as well, because it is what a failed send rolls back to. */
+    var claimed = withPayLock_(function () {
+      if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
+        return { ok: false, error: pp + ' is already a closed record' };
+      }
+      var cur = wfGet_(pp);
+      if (cur && cur.status === 'pending') {
+        return { ok: false, error: 'already sent for approval on ' + cur.sent_at + ' by ' + cur.sent_by +
+                 ', moments ago, while this request was preparing (a retry, or a second click) — ' +
+                 'only one email went out' };
+      }
+      wfPrev = cur;
+      wfSet_(pp, { status: 'pending', sent_by: auth.user || '', sent_at: new Date().toISOString(),
+                   decided_by: '', decided_at: '', note: '', token: token, token_expires: expires,
+                   sent_total: String(pre.payroll_total) });
+      return { ok: true };
+    });
+    if (!claimed.ok) return claimed;
   }
 
   /* "prepared by preview." is what the sender line read on a dry run, because the preview branch
@@ -7770,12 +7853,18 @@ function incentiveReturn_(p) {
   /* A reason is required. "Sent back" with no note is a period that bounces again for the same
      thing, and the person fixing it has to guess what was wrong. */
   if (!note) return { ok: false, error: 'a reason is required — it is what the sender has to work from' };
-  var wf = wfGet_(pp);
-  if (!wf || wf.status !== 'pending') {
-    return { ok: false, error: pp + ' is not awaiting approval' };
-  }
-  wfSet_(pp, { status: 'draft', decided_by: auth.user || '', decided_at: new Date().toISOString(),
-               note: note, token: '', token_expires: '' });
+  /* Under the pay lock so a retried copy cannot also find it pending and mail the preparer twice. */
+  var wf = null;
+  var moved = withPayLock_(function () {
+    wf = wfGet_(pp);
+    if (!wf || wf.status !== 'pending') {
+      return { ok: false, error: pp + ' is not awaiting approval' };
+    }
+    wfSet_(pp, { status: 'draft', decided_by: auth.user || '', decided_at: new Date().toISOString(),
+                 note: note, token: '', token_expires: '' });
+    return { ok: true };
+  });
+  if (!moved.ok) return moved;
 
   var rows = rosterJoin_().rows || [];
   var sender = null;
@@ -7834,6 +7923,16 @@ function incentiveUnapprove_(p) {
              'it is the only record of this afterwards' };
   }
 
+  /* THE WHOLE READ-COPY-DELETE RUNS UNDER THE PAY LOCK, and this is the route where going without
+     it did the most damage. Rows are deleted by the row numbers read at the top; a retried copy
+     reading the same numbers deletes them again AFTER the first copy has shifted every row beneath
+     up — so it deletes a LATER period's paid rows, and voids this one twice. Held for the dry run
+     too, which is only a read and keeps the body in one piece. */
+  return withPayLock_(function () { return incentiveUnapproveLocked_(p, pp, reason, by); });
+}
+
+/* The body of incentiveUnapprove_, run only while holding withPayLock_. Never call it directly. */
+function incentiveUnapproveLocked_(p, pp, reason, by) {
   var sh = historySheet_(pp);
   var all = sh.getDataRange().getValues();
   var hit = [];

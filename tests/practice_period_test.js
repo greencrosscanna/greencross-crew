@@ -261,8 +261,13 @@ console.log('\nNothing that enumerates what the company actually closed can see 
   ok('and the bare calls — the ones that enumerate real closed periods — still exist',
      callers.length >= 3);
   const single = decomment(GS).match(/historyPeriods_\(pp\)\.some/g) || [];
+  /* 5 since 2026-09-14: approve, send and save, plus the RE-CHECKS approve and send now make under
+     the pay lock (tests/pay_period_race_test.js). Each of those must pass the key too — a bare
+     re-check would ask the real history about a practice period and never find it approved. */
   ok('while every "is THIS period already closed" guard passes the key (' + single.length + ')',
-     single.length === 3);
+     single.length === 5);
+  ok('and no guard asks the bare question about one period',
+     !/historyPeriods_\(\)\.some/.test(decomment(GS)));
 
   /* The picker offers it last. Sorted newest-first, a practice entry at the top is the one a hurried
      click lands on — so it is appended after the sort, where its position cannot drift. */
