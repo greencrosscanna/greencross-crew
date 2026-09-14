@@ -108,6 +108,26 @@
 
   // ─── session ─────────────────────────────────────────────────────────────────
   function token()      { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+
+  /* ONE ID PER PERSON-ACTION, NEVER PER ATTEMPT (2026-09-14). A pay write that stalls is not
+     canceled when the browser gives up on it — it still runs, possibly minutes later, after
+     somebody has acted on the retry that did land. Every attempt of one click therefore carries the
+     same `request_id`, and the engine answers a second arrival with the first answer instead of
+     applying it again (see payReqId_ in Code.gs).
+
+     Minted by the CALLER, into the params object, before Engine.jsonp is called — gx-client sends
+     that same object on every retry, so the id rides all of them with no change to the shared
+     client. Minting it inside a retry loop, or per call to a helper that retries, would defeat it. */
+  function payRequestId() {
+    var c = (typeof window !== 'undefined' && window.crypto) || (typeof crypto !== 'undefined' ? crypto : null);
+    if (c && typeof c.randomUUID === 'function') return c.randomUUID().replace(/-/g, '');
+    if (c && typeof c.getRandomValues === 'function') {
+      var a = new Uint8Array(16); c.getRandomValues(a);
+      return Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+    }
+    return (Date.now().toString(36) + Math.random().toString(36).slice(2) +
+            Math.random().toString(36).slice(2)).replace(/[^a-z0-9]/g, '').slice(0, 40);
+  }
   function setSession(t, u, avatarCfg) {
     try {
       if (t) {
@@ -3655,7 +3675,7 @@
   async function incSave(employeeId, field, value, note) {
     if (!inc.data || !employeeId) return;
     var pp = inc.data.payPeriod ? inc.data.payPeriod.start : inc.data.pp_start;
-    var params = { token: token(), pp_start: pp, employee_id: employeeId };
+    var params = { token: token(), pp_start: pp, employee_id: employeeId, request_id: payRequestId() };
     params[field] = value;
     /* The figure and its reason go in ONE call. The engine refuses an override that has no reason,
        so sending them separately would make the first of the two saves fail on its own — and the
@@ -3675,6 +3695,8 @@
     try {
       var r = await Engine.jsonp('incentive_save', params, { timeoutMs: 20000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
+      /* `already_applied` is a SUCCESS: an earlier attempt of this same click landed, and the engine
+         is saying so rather than saving it twice. The screen already shows it. */
       toast(field === 'att' ? 'Attendance saved'
           : field === 'hours' ? (value === '' ? 'Hours cleared — back to the flat figure' : 'Hours saved')
           : field === 'payroll_override'
@@ -3981,12 +4003,13 @@
                    ? '\n\nNot matched to a roster record: ' + pre.unmatched.join(', ') : '');
       if (!window.confirm(msg)) return;
       if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
-      var params = { token: token(), pp_start: pp, confirm: 'yes' };
+      var params = { token: token(), pp_start: pp, confirm: 'yes', request_id: payRequestId() };
       if (appr) params.approve_token = appr;
       var r = await Engine.jsonp('incentive_approve', params, { timeoutMs: 45000, retries: 1 });
       inc.approveToken = ''; inc.approvePp = '';      // single use, whatever the outcome
       if (!r || r.ok === false) throw new Error((r && r.error) || 'approve failed');
-      toast('Approved — ' + r.written + ' rows frozen for ' + pp);
+      toast((r.already_applied ? 'Approved (an earlier attempt of this click landed first) — '
+                               : 'Approved — ') + (r.written == null ? '' : r.written + ' rows frozen for ') + pp);
       /* Reload before printing: the period is now a record, so it must print as one — badged
          `as paid`, with no live inputs on the page. */
       await loadIncentive(pp);
@@ -4007,13 +4030,14 @@
     try {
       incBusy(btn, 'Sending…');
       var r = await Engine.jsonp('incentive_send',
-        { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
+        { token: token(), pp_start: pp, request_id: payRequestId() }, { timeoutMs: 45000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send');
       if (btn) btn.disabled = true;
       /* The warning matters more than the success: "sent" with nobody emailed looks identical to
          "sent" from here, and the difference is whether anyone knows to look. */
       toast(r.warning ? ('Marked sent — ' + r.warning)
-                      : ('Sent for approval — emailed ' + (r.mailed || []).join(', ')), !!r.warning);
+          : r.already_applied ? 'Already sent for approval — an earlier attempt of this click went through'
+          : ('Sent for approval — emailed ' + (r.mailed || []).join(', ')), !!r.warning);
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not send: ' + ((e && e.message) || 'unknown'), true);
@@ -4033,9 +4057,11 @@
     if (!note.trim()) { toast('A reason is required — it is what they have to work from', true); return; }
     try {
       var r = await Engine.jsonp('incentive_return',
-        { token: token(), pp_start: pp, note: note.trim() }, { timeoutMs: 30000, retries: 1 });
+        { token: token(), pp_start: pp, note: note.trim(), request_id: payRequestId() },
+        { timeoutMs: 30000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send back');
-      toast('Sent back to ' + (r.returned_to || 'the sender'));
+      toast('Sent back to ' + (r.returned_to || 'the sender') +
+            (r.already_applied ? ' (an earlier attempt of this click landed first)' : ''));
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not send back: ' + ((e && e.message) || 'unknown'), true);
@@ -4429,10 +4455,11 @@
                         'voided.\n\nReason: ' + reason)) return;
     try {
       var r = await Engine.jsonp('incentive_unapprove',
-                { token: token(), pp_start: pp, reason: reason, confirm: 'yes' },
+                { token: token(), pp_start: pp, reason: reason, confirm: 'yes', request_id: payRequestId() },
                 { timeoutMs: 45000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not reopen');
-      toast('Reopened — ' + r.voided + ' rows voided (' + m0(r.payroll_total) + ' kept on record)');
+      toast((r.already_applied ? 'Reopened (an earlier attempt of this click landed first) — ' : 'Reopened — ') +
+            r.voided + ' rows voided (' + m0(r.payroll_total) + ' kept on record)');
       await loadIncentive(pp);
     } catch (e) {
       toast('Could not reopen: ' + ((e && e.message) || 'unknown'), true);
@@ -5084,8 +5111,10 @@
         var m = rows[i];
         if (prog) prog.textContent = 'Saving ' + (i + 1) + ' of ' + rows.length + '…';
         try {
+          /* One id per PERSON: each row of Mike's list is its own write, retried on its own. */
           var r = await Engine.jsonp('incentive_save',
-                    { token: token(), pp_start: pp, employee_id: m.id, att: m.want ? '1' : '' },
+                    { token: token(), pp_start: pp, employee_id: m.id, att: m.want ? '1' : '',
+                      request_id: payRequestId() },
                     { timeoutMs: 20000, retries: 1 });
           if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
           inputs[m.id] = inputs[m.id] || {};

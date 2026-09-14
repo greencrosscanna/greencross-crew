@@ -5638,6 +5638,13 @@ function saveIncentiveInput_(p) {
   var pp  = String(p.pp_start || '').trim();
   var eid = String(p.employee_id || '').trim();
   if (!pp || !eid) return { ok: false, error: 'pp_start and employee_id required' };
+  /* A LATE RETRY OF A SAVE THAT ALREADY LANDED is answered before the guards below — otherwise a
+     tick that succeeded, followed by a send for approval, would come back from its own retry as
+     "locked", and the screen would put back a tick that is really there. See payReqId_. */
+  var rq = payReqId_(p);
+  if (rq.error) return { ok: false, error: rq.error };
+  var _seen = payReqCached_(rq, 'incentive_save');
+  if (_seen) return _seen;
   if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
     return { ok: false, error: pp + ' is an imported (closed) period — its figures are what was paid and cannot be edited' };
   }
@@ -5703,7 +5710,15 @@ function saveIncentiveInput_(p) {
      afterwards silently stops reaching the math. The same lock also stops two different fields
      saved at once for one person from overwriting each other's half of the row. Ten seconds, not
      thirty — the browser gives this route 20. */
-  return withPayLock_(function () { return upsertIncentiveInput_(p, pp, eid, auth); }, 10000);
+  /* …and the request id is checked and recorded under the same lock, so a stalled copy of a tick
+     that lands after an UNtick is answered from the record instead of re-ticking. */
+  return withPayLock_(function () {
+    var seen = payReqSeen_(rq, 'incentive_save');
+    if (seen) return seen;
+    var res = upsertIncentiveInput_(p, pp, eid, auth);
+    payReqRecord_(rq, 'incentive_save', pp, auth.user, res);
+    return res;
+  }, 10000);
 }
 
 /* The body of saveIncentiveInput_, run only while holding withPayLock_. Never call it directly. */
@@ -5913,6 +5928,12 @@ function incentiveApprove_(p) {
 
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
+  /* The request id matters only on the WRITE. A dry run changes nothing, so it is neither checked
+     nor recorded — and incentiveSend_ calls this as its dry run with no id at all. */
+  var rq = String(p.confirm || '') === 'yes' ? payReqId_(p) : { id: '' };
+  if (rq.error) return { ok: false, error: rq.error };
+  var _seen = payReqCached_(rq, 'incentive_approve');
+  if (_seen) return _seen;
   if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
     return { ok: false, error: pp + ' is already a closed record and cannot be approved again' };
   }
@@ -6118,7 +6139,7 @@ function incentiveApprove_(p) {
      execution can be between the answer and the write. Found present at this point it can only
      have landed while this one was computing. The token is checked in here too: it is cleared by
      the write, so a copy that read it first would otherwise still find it valid. */
-  var written = withPayLock_(function () {
+  var approveLocked = function () {
     if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
       return { ok: false, error: pp + ' was approved by another request while this one was being checked ' +
                '(a retry, or a second click) — nothing was written twice. Reload the period to see the record.' };
@@ -6142,8 +6163,21 @@ function incentiveApprove_(p) {
     sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
     freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
     wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
-    return { ok: true };
+    return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
+             payroll_total: Math.round(total * 100) / 100 };
+  };
+  var rqRow = 0, replay = null;
+  var written = withPayLock_(function () {
+    /* A STALLED COPY OF AN APPROVAL THAT ALREADY HAPPENED. If the period has since been reopened,
+       every guard below would now let it through and freeze the figures a second time; the record
+       of this request id is the only thing that still knows it was answered. */
+    replay = payReqSeen_(rq, 'incentive_approve');
+    if (replay) return replay;
+    var res = approveLocked();
+    rqRow = payReqRecord_(rq, 'incentive_approve', pp, by, res);
+    return res;
   });
+  if (replay) return replay;
   if (!written.ok) return written;
   /* THE PAYOUT PDF, filed from the rows just written — LAST, and unable to fail the approval.
      Everything above is the permanent record; this is a copy of it for the Drive archive Sky has
@@ -6155,13 +6189,15 @@ function incentiveApprove_(p) {
      able to fail the approval. A rehearsal is not a record, so it gets none. */
   var backup = isPracticePeriod_(pp) ? { ok: true, skipped: 'practice period' }
                                      : backupCrewSheet_('approved ' + pp);
-  return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
+  var approved = { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
            thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup,
            /* What the checks SAID, not just that nothing stopped the write — the same reason
               `coverage` rides on the send preview. A silent pass and a check that never ran look
               identical in an empty array. */
            store_totals: _tot, warnings: _warnings };
+  payReqUpdate_(rq, rqRow, 'incentive_approve', approved);
+  return approved;
 }
 
 /* ══ The payout PDF — filed to Drive the moment a period is approved ═════════════════════════════
@@ -6896,6 +6932,160 @@ function withPayLock_(fn, waitMs) {
   }
 }
 
+/* ONE-TIME REQUEST IDS FOR PAY WRITES (2026-09-14).
+ *
+ * withPayLock_ stops two copies of one write running AT THE SAME TIME. It cannot stop a copy that
+ * stalled for minutes and lands AFTER somebody has acted on its twin, because by then the guard it
+ * re-checks has a different answer:
+ *
+ *   Approve (attempt 1 stalls) → attempt 2 approves → Sky reopens → attempt 1 lands: approves AGAIN
+ *   tick (attempt 1 stalls)    → attempt 2 ticks    → Mike unticks → attempt 1 lands: RE-TICKS
+ *
+ * Every attempt of one user action carries the same `request_id` — crew.js mints it once per click
+ * and gx-client sends the same params object on every retry — and the engine remembers each id it
+ * has DECIDED. A second arrival gets the first decision back, marked `already_applied`, and changes
+ * nothing. That covers refusals as well as successes: an action the person was told was refused must
+ * not quietly succeed later when its stalled twin finally runs.
+ *
+ * WHERE THE MEMORY LIVES. A tab in Crew's own spreadsheet, not ScriptProperties or CacheService:
+ * CacheService may evict, and this is a payroll guard. The authoritative check is the sheet, read
+ * INSIDE withPayLock_ and written before the lock is released and flushed, so it has exactly the
+ * consistency the pay writes themselves have. CacheService is only a fast hint at the top of a
+ * route, so a replay is answered before the ordinary guards ("already a closed record", "locked
+ * pending approval") can call a request that already succeeded an error.
+ *
+ * KEPT 7 DAYS. An Apps Script execution cannot outlive six minutes and the longest retry chain in
+ * crew.js is two 45-second attempts, so a week is not a tuning choice — it is "longer than anything
+ * that could still be in flight" by a margin nobody has to think about. Rows are pruned from the top
+ * once the tab passes 3,000.
+ *
+ * OPTIONAL. A request with no id behaves exactly as before, so deploy-secret tooling and a tab still
+ * running an older crew.js keep working. A MALFORMED id is refused before anything runs. */
+var PAYREQ_TAB = 'crew_pay_requests';
+var PAYREQ_HEADERS = ['request_id', 'action', 'pp_start', 'decided_at', 'by', 'ok', 'result_json'];
+var PAYREQ_KEEP_MS = 7 * 24 * 3600 * 1000;
+var PAYREQ_PRUNE_AT = 3000;
+
+/* { id } for a usable id, { id: '' } for none, { error } for one that cannot be trusted. */
+function payReqId_(p) {
+  var raw = p && p.request_id;
+  if (raw == null || String(raw).trim() === '') return { id: '' };
+  var id = String(raw).trim();
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(id)) {
+    return { id: '', error: 'this request carried a malformed request id, so nothing was saved — reload the page and try again' };
+  }
+  return { id: id };
+}
+
+/* Only the small, scalar parts of a response are kept for replay — enough for the screen to say
+   what happened (rows written, total, who it went back to), never an email body or a PDF result. */
+function payReqCompact_(res) {
+  var out = {};
+  Object.keys(res || {}).forEach(function (k) {
+    var v = res[k];
+    if (v == null || typeof v === 'number' || typeof v === 'boolean' ||
+        (typeof v === 'string' && v.length <= 600)) { out[k] = v; return; }
+    if (k === 'split' || k === 'mailed' || k === 'saved') out[k] = v;
+  });
+  var s = JSON.stringify(out);
+  return s.length <= 4000 ? out : { ok: !!(res && res.ok), error: res && res.error ? String(res.error).slice(0, 600) : undefined };
+}
+
+function payReqReplay_(hit, id, action) {
+  if (hit.action !== action) {
+    return { ok: false, error: 'this request id was already used for ' + hit.action + ', so nothing was saved — reload the page and try again' };
+  }
+  var out = {};
+  Object.keys(hit.result || {}).forEach(function (k) { out[k] = hit.result[k]; });
+  out.ok = hit.ok;
+  out.already_applied = true;
+  out.request_id = id;
+  out.applied_at = hit.decided_at;
+  out.replay_note = 'this exact request was already handled at ' + hit.decided_at +
+    ' (a retry arriving late) — that answer is repeated here and nothing was changed again';
+  return out;
+}
+
+/* The fast hint. Never the reason a write goes ahead — a miss here just means "ask the sheet". */
+function payReqCached_(rq, action) {
+  if (!rq || !rq.id) return null;
+  try {
+    var v = CacheService.getScriptCache().get('payreq:' + rq.id);
+    return v ? payReqReplay_(JSON.parse(v), rq.id, action) : null;
+  } catch (e) { return null; }
+}
+
+/* The authoritative check. Call it ONLY inside withPayLock_. */
+function payReqSeen_(rq, action) {
+  if (!rq || !rq.id) return null;
+  var sh = sheetOf_(PAYREQ_TAB, PAYREQ_HEADERS);
+  var last = sh.getLastRow();
+  if (last < 2) return null;
+  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+  for (var i = ids.length - 1; i >= 0; i--) {
+    if (String(ids[i][0]) !== rq.id) continue;
+    var row = sh.getRange(i + 2, 1, 1, PAYREQ_HEADERS.length).getValues()[0];
+    var result = {};
+    try { result = JSON.parse(String(row[6] || '{}')); } catch (e) {}
+    return payReqReplay_({ action: String(row[1]), decided_at: String(row[3]), ok: String(row[5]) === 'yes',
+                           result: result }, rq.id, action);
+  }
+  return null;
+}
+
+/* Record a decision. Call it inside the same withPayLock_ as the payReqSeen_ that preceded it.
+   Returns the sheet row, for payReqUpdate_. A failure to record is LOGGED, never thrown: the pay
+   write it describes has already happened, and reporting it as an error invites the retry this
+   exists to stop. */
+function payReqRecord_(rq, action, pp, by, res) {
+  if (!rq || !rq.id) return 0;
+  try {
+    var sh = sheetOf_(PAYREQ_TAB, PAYREQ_HEADERS);
+    var now = new Date().toISOString();
+    var compact = payReqCompact_(res);
+    var row = sh.getLastRow() + 1;
+    sh.getRange(row, 1, 1, PAYREQ_HEADERS.length).setValues([[
+      rq.id, action, String(pp || ''), now, String(by || ''), res && res.ok ? 'yes' : 'no', JSON.stringify(compact)
+    ]]);
+    sh.getRange(row, 3, 1, 2).setNumberFormat('@');
+    payReqCache_(rq.id, action, now, !!(res && res.ok), compact);
+    if (row - 1 > PAYREQ_PRUNE_AT) {
+      var stamps = sh.getRange(2, 4, row - 1, 1).getValues();
+      var cutoff = new Date().getTime() - PAYREQ_KEEP_MS, n = 0;
+      while (n < stamps.length && new Date(String(stamps[n][0])).getTime() < cutoff) n++;
+      if (n > 0) { sh.deleteRows(2, n); row -= n; }
+    }
+    return row;
+  } catch (e) {
+    Logger.log('pay request ' + rq.id + ' (' + action + ') was applied but could not be recorded: ' + e);
+    return 0;
+  }
+}
+
+/* Replace the recorded answer with the route's FINAL one — for approve and send, whose full answer
+   (the PDF, the email) is only known after the lock is released. The id itself was recorded under
+   the lock; this only improves what a replay says. Checks the row still holds the id, because a
+   prune between the two calls moves rows up. */
+function payReqUpdate_(rq, row, action, res) {
+  if (!rq || !rq.id || !row) return;
+  try {
+    var sh = sheetOf_(PAYREQ_TAB, PAYREQ_HEADERS);
+    if (String(sh.getRange(row, 1).getValue()) !== rq.id) return;
+    var compact = payReqCompact_(res);
+    sh.getRange(row, 6, 1, 2).setValues([[res && res.ok ? 'yes' : 'no', JSON.stringify(compact)]]);
+    payReqCache_(rq.id, action, String(sh.getRange(row, 4).getValue()), !!(res && res.ok), compact);
+  } catch (e) {
+    Logger.log('pay request ' + rq.id + ': final answer not recorded: ' + e);
+  }
+}
+
+function payReqCache_(id, action, at, ok, result) {
+  try {
+    CacheService.getScriptCache().put('payreq:' + id,
+      JSON.stringify({ action: action, decided_at: at, ok: ok, result: result }), 21600);
+  } catch (e) {}
+}
+
 /* WHO APPROVES — and why this is not a role check.
  *
  * The obvious answer was `role === 'owner'`, and it is wrong twice over. GX Core's role vocabulary
@@ -7494,6 +7684,12 @@ function incentiveSend_(p) {
   }
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
+  /* Checked before "already pending", which is exactly what a late retry of a send that worked
+     would otherwise be told. A preview writes nothing and is never recorded. */
+  var rq = preview ? { id: '' } : payReqId_(p);
+  if (rq.error) return { ok: false, error: rq.error };
+  var _seen = payReqCached_(rq, 'incentive_send');
+  if (_seen) return _seen;
   if (!preview) {
     if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
       return { ok: false, error: pp + ' is already a closed record' };
@@ -7623,7 +7819,7 @@ function incentiveSend_(p) {
        too, and each copy then mailed its own email with its own token, the first one's Approve link
        already dead. Asked again here; whoever sets `pending` first is the one that mails. `wfPrev`
        is re-read in here as well, because it is what a failed send rolls back to. */
-    var claimed = withPayLock_(function () {
+    var claimLocked = function () {
       if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
         return { ok: false, error: pp + ' is already a closed record' };
       }
@@ -7637,8 +7833,20 @@ function incentiveSend_(p) {
       wfSet_(pp, { status: 'pending', sent_by: auth.user || '', sent_at: new Date().toISOString(),
                    decided_by: '', decided_at: '', note: '', token: token, token_expires: expires,
                    sent_total: String(pre.payroll_total) });
-      return { ok: true };
+      return { ok: true, pp_start: pp, status: 'pending', rows: pre.rows, payroll_total: pre.payroll_total };
+    };
+    var rqRow = 0, replay = null;
+    var claimed = withPayLock_(function () {
+      /* A stalled copy of a send that already went out, landing after the period was sent BACK:
+         every guard below says "draft, go ahead", and it would mail a second approval request for
+         figures the approver has just returned. */
+      replay = payReqSeen_(rq, 'incentive_send');
+      if (replay) return replay;
+      var res = claimLocked();
+      rqRow = payReqRecord_(rq, 'incentive_send', pp, auth.user, res);
+      return res;
     });
+    if (replay) return replay;
     if (!claimed.ok) return claimed;
   }
 
@@ -7699,10 +7907,12 @@ function incentiveSend_(p) {
          email. Worse, this route REFUSES a period that is already `pending`, so the failed send
          locked the period out of being re-sent by anyone; the only way back was break glass. */
       if (!preview) wfUnsend_(pp, wfPrev);
-      return { ok: true, pp_start: pp, status: preview ? 'preview' : (wfPrev && wfPrev.status) || 'draft',
+      var failedSend = { ok: true, pp_start: pp, status: preview ? 'preview' : (wfPrev && wfPrev.status) || 'draft',
                rows: pre.rows, payroll_total: pre.payroll_total, mailed: [],
                warning: 'the email failed, so the period was left where it was — try again: ' +
                         String((e && e.message) || e) };
+      if (!preview) payReqUpdate_(rq, rqRow, 'incentive_send', failedSend);
+      return failedSend;
     }
   }
   /* Same rule for the quieter failure: no approver RESOLVED, so nothing was mailed and nobody is
@@ -7715,7 +7925,7 @@ function incentiveSend_(p) {
   /* Overrides here too — this is the return for a preview that DID mail, and for every real send.
      Fixing only the no-recipient branch left the more common path still reporting `overrides: 0`
      beside an email that named Levy Nelson's $25 correctly. Two returns, one rule. */
-  return { ok: true, preview: preview || undefined, pp_start: pp,
+  var sent = { ok: true, preview: preview || undefined, pp_start: pp,
            overrides: pre.overrides || { rows: [], net: 0 },
            status: preview ? 'preview'
                  : (mailed.length ? 'pending' : ((wfPrev && wfPrev.status) || 'draft')), rows: pre.rows,
@@ -7723,6 +7933,8 @@ function incentiveSend_(p) {
            still_open: !!pre.still_open,
            warning: mailed.length ? '' : (noApproverError_() + ' — nobody was emailed, so ' + pp +
                                           ' was left where it was') };
+  if (!preview) payReqUpdate_(rq, rqRow, 'incentive_send', sent);
+  return sent;
 }
 
 /* ONE builder for the real email and the preview. Two would drift, and the drift would only show
@@ -7857,17 +8069,30 @@ function incentiveReturn_(p) {
   /* A reason is required. "Sent back" with no note is a period that bounces again for the same
      thing, and the person fixing it has to guess what was wrong. */
   if (!note) return { ok: false, error: 'a reason is required — it is what the sender has to work from' };
-  /* Under the pay lock so a retried copy cannot also find it pending and mail the preparer twice. */
-  var wf = null;
+  var rq = payReqId_(p);
+  if (rq.error) return { ok: false, error: rq.error };
+  var _seen = payReqCached_(rq, 'incentive_return');
+  if (_seen) return _seen;
+  /* Under the pay lock so a retried copy cannot also find it pending and mail the preparer twice —
+     and with its request id, so a copy that stalls until the period has been sent AGAIN cannot send
+     that second send back as well. */
+  var wf = null, rqRow = 0, replay = null;
   var moved = withPayLock_(function () {
+    replay = payReqSeen_(rq, 'incentive_return');
+    if (replay) return replay;
     wf = wfGet_(pp);
+    var res;
     if (!wf || wf.status !== 'pending') {
-      return { ok: false, error: pp + ' is not awaiting approval' };
+      res = { ok: false, error: pp + ' is not awaiting approval' };
+    } else {
+      wfSet_(pp, { status: 'draft', decided_by: auth.user || '', decided_at: new Date().toISOString(),
+                   note: note, token: '', token_expires: '' });
+      res = { ok: true, pp_start: pp, status: 'draft', returned_to: wf.sent_by, note: note };
     }
-    wfSet_(pp, { status: 'draft', decided_by: auth.user || '', decided_at: new Date().toISOString(),
-                 note: note, token: '', token_expires: '' });
-    return { ok: true };
+    rqRow = payReqRecord_(rq, 'incentive_return', pp, auth.user, res);
+    return res;
   });
+  if (replay) return replay;
   if (!moved.ok) return moved;
 
   var rows = rosterJoin_().rows || [];
@@ -7888,7 +8113,9 @@ function incentiveReturn_(p) {
           'payroll record.</p></div>' });
     } catch (e) { /* the state change is what matters; a failed nudge is not a failed return */ }
   }
-  return { ok: true, pp_start: pp, status: 'draft', returned_to: wf.sent_by, note: note, mailed: to };
+  var returned = { ok: true, pp_start: pp, status: 'draft', returned_to: wf.sent_by, note: note, mailed: to };
+  payReqUpdate_(rq, rqRow, 'incentive_return', returned);
+  return returned;
 }
 
 /**
@@ -7932,7 +8159,20 @@ function incentiveUnapprove_(p) {
      reading the same numbers deletes them again AFTER the first copy has shifted every row beneath
      up — so it deletes a LATER period's paid rows, and voids this one twice. Held for the dry run
      too, which is only a read and keeps the body in one piece. */
-  return withPayLock_(function () { return incentiveUnapproveLocked_(p, pp, reason, by); });
+  /* A reopen is the one write whose stalled twin does the most damage AFTER the fact: approve →
+     reopen (stalls) → reopen (retry) lands → re-approve → the stalled copy lands and voids the NEW
+     approval. Only the confirmed write carries an id; the dry run changes nothing. */
+  var rq = String(p.confirm || '') === 'yes' ? payReqId_(p) : { id: '' };
+  if (rq.error) return { ok: false, error: rq.error };
+  var _seen = payReqCached_(rq, 'incentive_unapprove');
+  if (_seen) return _seen;
+  return withPayLock_(function () {
+    var seen = payReqSeen_(rq, 'incentive_unapprove');
+    if (seen) return seen;
+    var res = incentiveUnapproveLocked_(p, pp, reason, by);
+    payReqRecord_(rq, 'incentive_unapprove', pp, by, res);
+    return res;
+  });
 }
 
 /* The body of incentiveUnapprove_, run only while holding withPayLock_. Never call it directly. */
