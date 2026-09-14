@@ -525,6 +525,8 @@ function route_(e) {
       case 'incentive_unapprove': return json_(incentiveUnapprove_(p), p.callback);
       // ...and what a reopen took away. Approver-only, because these are frozen pay figures.
       case 'incentive_voided':    return json_(incentiveVoided_(p), p.callback);
+      // Did two copies of a pay write ever both land? Read-only, deploy-secret. See payAudit_.
+      case 'pay_audit':           return json_(payAudit_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'export':       return json_(buildCapstoneExport_(p), p.callback);// payroll export (CSV/PDF)
@@ -8045,6 +8047,211 @@ function incentiveVoided_(p) {
   var total = mine.reduce(function (a, r) { return a + (Number(r.payroll) || 0); }, 0);
   return { ok: true, pp_start: want, rows: mine, voided_at: mine[0].voided_at,
            reason: mine[0].void_reason, payroll_total: Math.round(total * 100) / 100 };
+}
+
+/**
+ * ?action=pay_audit&secret=…  — did a retried pay write ever land twice? (2026-09-14)
+ *
+ * withPayLock_ went live on 2026-09-14. Before it, two overlapping copies of one pay write could
+ * both pass their guard, and each route leaves a DIFFERENT fingerprint in the sheet:
+ *
+ *   approve    two append batches for one period — same people, two `imported_at` stamps
+ *   save       two inputs rows for one person + period (the math reads the last, saves hit the first)
+ *   send       two workflow rows for one period on a first-ever send (the emails leave no trace)
+ *   unapprove  two void batches for one period with the same people, moments apart — and the
+ *              second copy's deletes landed on whatever had shifted into those row numbers
+ *
+ * STRICTLY READ-ONLY, and not by convention: it opens the spreadsheet by id and asks for tabs by
+ * name, never through crewSheet_() or sheetOf_(), both of which CREATE what they cannot find. A tab
+ * that does not exist is reported absent. Row references are 1-based sheet rows, header = row 1.
+ *
+ * The analysis is payAuditRows_, a pure function over raw values, so it is tested without a sheet.
+ */
+function payAudit_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var id = String(PropertiesService.getScriptProperties().getProperty(CREW_SHEET_ID_PROP) || '');
+  if (!id) return { ok: false, error: 'Crew has no spreadsheet id on record' };
+  var ss;
+  try { ss = SpreadsheetApp.openById(id); }
+  catch (e) { return { ok: false, error: 'could not open Crew\'s spreadsheet: ' + String((e && e.message) || e) }; }
+  function raw(name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh || sh.getLastRow() < 1) return null;
+    return sh.getDataRange().getValues();
+  }
+  var out = { ok: true, at: new Date().toISOString() };
+  [['real', ''], ['practice', '_practice']].forEach(function (k) {
+    out[k[0]] = payAuditRows_({
+      history: raw(HISTORY_TAB + k[1]), inputs: raw(INPUTS_TAB + k[1]), workflow: raw(WF_TAB + k[1]),
+      voided: raw(VOID_TAB + k[1]), schemes: raw(SCHEME_TAB + k[1])
+    });
+  });
+  return out;
+}
+
+/* The analysis behind pay_audit. `t` holds each tab's raw getValues() (header row first), or null
+   for a tab that does not exist. Columns are found by HEADER NAME, not by the position the code
+   expects, so a tab whose header drifted is read for what it actually holds. */
+function payAuditRows_(t) {
+  function day(v) {
+    if (v instanceof Date) return normDate_(v) || String(v);
+    return String(v == null ? '' : v).trim();
+  }
+  function table(vals) {
+    if (!vals || !vals.length) return { present: !!vals, rows: [] };
+    var head = vals[0].map(function (h) { return String(h == null ? '' : h).trim(); });
+    var rows = [];
+    for (var i = 1; i < vals.length; i++) {
+      if (vals[i].every(function (c) { return c === '' || c == null; })) continue;
+      var o = { _row: i + 1 };
+      head.forEach(function (h, j) { if (h) o[h] = vals[i][j]; });
+      rows.push(o);
+    }
+    return { present: true, rows: rows };
+  }
+  function money(n) { return Math.round(n * 100) / 100; }
+  function groupBy(rows, keyFn) {
+    var g = Object.create(null), order = [];
+    rows.forEach(function (r) {
+      var k = keyFn(r);
+      if (!g[k]) { g[k] = []; order.push(k); }
+      g[k].push(r);
+    });
+    return { g: g, keys: order };
+  }
+  function dups(rows, keyFn) {
+    var by = groupBy(rows, keyFn), out = [];
+    by.keys.forEach(function (k) {
+      if (by.g[k].length > 1) out.push({ key: k, rows: by.g[k].map(function (r) { return r._row; }) });
+    });
+    return out;
+  }
+
+  var H = table(t.history), I = table(t.inputs), W = table(t.workflow), V = table(t.voided),
+      S = table(t.schemes);
+  var findings = [];
+
+  /* ── Closed records ─────────────────────────────────────────────────────────────────────────── */
+  var hp = groupBy(H.rows, function (r) { return day(r.pp_start); });
+  var periods = hp.keys.map(function (pp) {
+    var rows = hp.g[pp];
+    var batches = groupBy(rows, function (r) { return String(r.format || '') + '|' + String(r.imported_at || ''); });
+    var people = dups(rows, function (r) {
+      return String(r.section || '') + ':' + (String(r.employee_id || '') || 'name:' + String(r.pdf_name || ''));
+    });
+    var rowNums = rows.map(function (r) { return r._row; });
+    var e = {
+      pp_start: pp, rows: rows.length, first_row: Math.min.apply(null, rowNums),
+      last_row: Math.max.apply(null, rowNums),
+      contiguous: Math.max.apply(null, rowNums) - Math.min.apply(null, rowNums) + 1 === rows.length,
+      payroll_total: money(rows.reduce(function (a, r) { return a + (Number(r.payroll) || 0); }, 0)),
+      batches: batches.keys.map(function (k) {
+        return { format: k.split('|')[0], imported_at: k.split('|').slice(1).join('|'), rows: batches.g[k].length };
+      }),
+      duplicate_people: people
+    };
+    if (people.length) {
+      findings.push({ kind: 'history_duplicate_person', pp_start: pp, count: people.length, detail: people });
+    }
+    if (batches.keys.length > 1) {
+      findings.push({ kind: 'history_multiple_batches', pp_start: pp, detail: e.batches });
+    }
+    return e;
+  });
+
+  /* ── Inputs: one row per person per period, or later edits stop reaching the math ────────────── */
+  var FIELDS = ['att', 'spiff', 'hours', 'payroll_override', 'override_note'];
+  var inputDups = dups(I.rows, function (r) { return day(r.pp_start) + '|' + String(r.employee_id || ''); })
+    .map(function (d) {
+      var rows = I.rows.filter(function (r) { return d.rows.indexOf(r._row) >= 0; });
+      var first = rows[0], last = rows[rows.length - 1];
+      return { pp_start: d.key.split('|')[0], employee_id: d.key.split('|')[1], rows: d.rows,
+               /* Which fields the math would read differently from what the screen last saved. */
+               differing_fields: FIELDS.filter(function (f) {
+                 return String(first[f] == null ? '' : first[f]) !== String(last[f] == null ? '' : last[f]);
+               }) };
+    });
+  if (inputDups.length) findings.push({ kind: 'inputs_duplicate_row', count: inputDups.length, detail: inputDups });
+  var inputPeriods = groupBy(I.rows, function (r) { return day(r.pp_start); });
+
+  /* ── Workflow: one row per period ─────────────────────────────────────────────────────────────── */
+  var wfDups = dups(W.rows, function (r) { return day(r.pp_start); });
+  if (wfDups.length) findings.push({ kind: 'workflow_duplicate_row', detail: wfDups });
+
+  /* ── Schemes: frozen once per approval ────────────────────────────────────────────────────────── */
+  var schemeDups = dups(S.rows, function (r) { return day(r.pp_start); });
+  if (schemeDups.length) findings.push({ kind: 'scheme_duplicate_row', detail: schemeDups });
+
+  /* ── Void log: a reopen that ran twice ────────────────────────────────────────────────────────── */
+  var vb = groupBy(V.rows, function (r) { return day(r.pp_start) + '|' + String(r.voided_at || ''); });
+  var voids = vb.keys.map(function (k) {
+    var rows = vb.g[k];
+    var ids = rows.map(function (r) {
+      return String(r.section || '') + ':' + (String(r.employee_id || '') || 'name:' + String(r.pdf_name || ''));
+    }).sort();
+    var pp = k.split('|')[0];
+    /* Was the period approved AGAIN after this void? Stamps are ISO strings, so they compare. */
+    var at = k.split('|').slice(1).join('|');
+    var reapproved = (hp.g[pp] || []).some(function (r) {
+      return String(r.format || '') === 'approved' && String(r.imported_at || '') > at;
+    });
+    return { pp_start: pp, voided_at: at, rows: rows.length,
+             sheet_rows: [rows[0]._row, rows[rows.length - 1]._row],
+             payroll_total: money(rows.reduce(function (a, r) { return a + (Number(r.payroll) || 0); }, 0)),
+             duplicate_people_in_batch: dups(rows, function (r) {
+               return String(r.section || '') + ':' + (String(r.employee_id || '') || 'name:' + String(r.pdf_name || ''));
+             }).length,
+             reason: String(rows[0].void_reason || ''), reapproved_after: reapproved, _ids: ids.join(','),
+             /* The approval these rows came from — the voided copy keeps its own imported_at. */
+             _approved: rows.map(function (r) { return String(r.imported_at || ''); }) };
+  });
+  /* Two batches for one period holding the SAME people within 15 minutes is the race; a genuine
+     second reopen is a human finding something else wrong, which takes longer than that and — the
+     tell that matters — cannot find the rows the first reopen already removed unless the period
+     was approved again in between. */
+  var doubleVoids = [];
+  for (var a = 0; a < voids.length; a++) {
+    for (var b = a + 1; b < voids.length; b++) {
+      var x = voids[a], y = voids[b];
+      if (x.pp_start !== y.pp_start || x._ids !== y._ids) continue;
+      var gapMs = Math.abs(new Date(y.voided_at).getTime() - new Date(x.voided_at).getTime());
+      var lo = x.voided_at < y.voided_at ? x.voided_at : y.voided_at;
+      var hi = x.voided_at < y.voided_at ? y.voided_at : x.voided_at;
+      var later = x.voided_at < y.voided_at ? y : x;
+      /* An approval between the two voids shows up in either place: still in history, or — when
+         the second reopen removed it — on the rows that second reopen copied into the log. */
+      var approvedBetween = (hp.g[x.pp_start] || []).some(function (r) {
+        var s = String(r.imported_at || '');
+        return String(r.format || '') === 'approved' && s > lo && s < hi;
+      }) || later._approved.some(function (s) { return s > lo && s < hi; });
+      if (!approvedBetween || (isFinite(gapMs) && gapMs < 15 * 60 * 1000)) {
+        doubleVoids.push({ pp_start: x.pp_start, voided_at: [x.voided_at, y.voided_at],
+                           gap_seconds: isFinite(gapMs) ? Math.round(gapMs / 1000) : null,
+                           approved_between: approvedBetween });
+      }
+    }
+  }
+  if (doubleVoids.length) findings.push({ kind: 'void_same_rows_twice', detail: doubleVoids });
+  voids.forEach(function (v) {
+    if (v.duplicate_people_in_batch) findings.push({ kind: 'void_batch_duplicate_person', pp_start: v.pp_start, voided_at: v.voided_at });
+    delete v._ids; delete v._approved;
+  });
+
+  return {
+    tabs: { history: H.present, inputs: I.present, workflow: W.present, voided: V.present, schemes: S.present },
+    clean: findings.length === 0,
+    findings: findings,
+    history: periods,
+    inputs: inputPeriods.keys.map(function (pp) { return { pp_start: pp, rows: inputPeriods.g[pp].length }; }),
+    workflow: W.rows.map(function (r) {
+      return { row: r._row, pp_start: day(r.pp_start), status: String(r.status || ''),
+               sent_at: String(r.sent_at || ''), decided_at: String(r.decided_at || ''),
+               sent_total: String(r.sent_total || ''),
+               note_head: String(r.note || '').slice(0, 80) };
+    }),
+    schemes: S.rows.map(function (r) { return { row: r._row, pp_start: day(r.pp_start), frozen_at: String(r.frozen_at || '') }; }),
+    voids: voids
+  };
 }
 
 /* ══ Thresholds — GX Core holds them, Crew edits them ════════════════════════════════════════════
