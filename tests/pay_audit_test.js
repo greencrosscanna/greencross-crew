@@ -28,7 +28,7 @@ function fnSrc(name) {
   throw new Error('unbalanced ' + name);
 }
 const auditRows = new Function('Utilities', 'STORE_TZ',
-  fnSrc('pad2_') + fnSrc('normDate_') + fnSrc('payAuditRows_') + '\nreturn payAuditRows_;')
+  fnSrc('pad2_') + fnSrc('normDate_') + fnSrc('voidRowShape_') + fnSrc('payAuditRows_') + '\nreturn payAuditRows_;')
   ({ formatDate: d => d.toISOString().slice(0, 10) }, 'America/Los_Angeles');
 
 const HH = ['pp_start', 'pp_end', 'section', 'employee_id', 'pdf_name', 'store_label', 'store_id', 'txn',
