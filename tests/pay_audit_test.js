@@ -27,7 +27,7 @@ function fnSrc(name) {
   }
   throw new Error('unbalanced ' + name);
 }
-const audit = new Function('Utilities', 'STORE_TZ',
+const auditRows = new Function('Utilities', 'STORE_TZ',
   fnSrc('pad2_') + fnSrc('normDate_') + fnSrc('payAuditRows_') + '\nreturn payAuditRows_;')
   ({ formatDate: d => d.toISOString().slice(0, 10) }, 'America/Los_Angeles');
 
@@ -38,6 +38,8 @@ const IH = ['pp_start', 'employee_id', 'att', 'spiff', 'hours', 'updated_at', 'u
 const WH = ['pp_start', 'status', 'sent_by', 'sent_at', 'decided_by', 'decided_at', 'note', 'token', 'token_expires', 'sent_total'];
 const VH = HH.concat(['voided_at', 'void_reason']);
 const SH = ['pp_start', 'thresholds_json', 'frozen_at', 'frozen_by'];
+/* The engine's own headers, which is what the route passes. */
+const audit = t => auditRows(t, { history: HH, inputs: IH, workflow: WH, voided: VH, schemes: SH });
 const hrow = (pp, id, pay, fmt, at, section) => HH.map(h => ({ pp_start: pp, employee_id: id, pdf_name: id, payroll: pay,
   section: section || 'budtender', format: fmt || 'gen2', imported_at: at || '2026-08-27T06:38:04.758Z' })[h] ?? '');
 const vrow = (pp, id, pay, at) => hrow(pp, id, pay, 'approved', '2026-09-02T20:00:00.000Z').concat([at, 'fix it — reopened by sky']);
@@ -130,6 +132,47 @@ console.log('\npay_audit — reopen ran twice');
   const r = audit(t);
   ok('the same people voided twice with NO approval between is a race, however far apart',
      r.findings.some(x => x.kind === 'void_same_rows_twice'));
+}
+
+console.log('\npay_audit — a tab whose header row is older than its rows');
+{
+  /* crew_incentive_voided, live: created when history had 18 columns, so its header row is 20 wide
+     while every void since 2026-09-02 writes 22. Read by header name, `voided_at` is a dollar figure. */
+  const t = cleanTabs();
+  const oldHead = HH.slice(0, 18).concat(['voided_at', 'void_reason']);
+  t.voided[0] = oldHead;
+  const r = audit(t);
+  ok('the void batches are still grouped on the real voided_at — got ' + r.voids.map(v => v.voided_at).join(),
+     r.voids.length === 2 && r.voids.every(v => /^2026-09-02T2/.test(v.voided_at)));
+  ok('and the stale header is reported', !!r.header_drift.voided && r.header_drift.voided.sheet_says.length === 20);
+  ok('a current header reports no drift', r.header_drift.history === null);
+}
+{
+  /* The oldest void rows: 20 wide, so read 22 wide their stamp lands in computed_payroll. */
+  const t = cleanTabs();
+  const narrow = (id, pay) => hrow('2026-08-17', id, pay, 'approved', '2026-09-02T20:00:00.000Z').slice(0, 18)
+    .concat(['2026-09-02T21:04:06.171Z', 'plumbing test — reopened by sky']);
+  t.voided = [VH, narrow('a', 40), narrow('b', 25)];
+  const r = audit(t);
+  ok('a pre-2026-09-02 void row is read on its own shape — got ' + r.voids.map(v => v.voided_at).join(),
+     r.voids.length === 1 && r.voids[0].voided_at === '2026-09-02T21:04:06.171Z' && /plumbing/.test(r.voids[0].reason));
+}
+{
+  const t = cleanTabs();
+  t.voided = [VH, vrow('2026-08-17', 'a', 40, '2026-09-02T21:00:00.000Z'), vrow('2026-08-17', 'b', 25, '2026-09-02T21:00:00.000Z')];
+  const twice = vrow('2026-08-17', 'a', 40, '2026-09-02T21:00:00.000Z'); twice[17] = '2026-09-02T20:00:01.200Z';
+  t.voided.push(twice);
+  const r = audit(t);
+  const f = r.findings.find(x => x.kind === 'void_batch_duplicate_person');
+  ok('a double approval later swept into the void log is found, with both approval stamps',
+     !!f && f.from_approvals.length === 2);
+}
+{
+  const t = cleanTabs();
+  t.inputs.push(IH.map(h => ({ pp_start: '2026-08-17', employee_id: 'a', att: 'true', updated_at: '2026-09-02T18:00:00Z', updated_by: 'mike' })[h] ?? ''));
+  const f = audit(t).findings.find(x => x.kind === 'inputs_duplicate_row');
+  ok('a duplicate inputs row reports when and by whom each copy was written',
+     !!f && f.detail[0].written.length === 2 && f.detail[0].written[1].updated_by === 'mike');
 }
 
 console.log('\npay_audit — the route reads, it never creates');

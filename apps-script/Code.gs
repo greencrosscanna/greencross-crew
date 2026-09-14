@@ -8084,22 +8084,33 @@ function payAudit_(p) {
     out[k[0]] = payAuditRows_({
       history: raw(HISTORY_TAB + k[1]), inputs: raw(INPUTS_TAB + k[1]), workflow: raw(WF_TAB + k[1]),
       voided: raw(VOID_TAB + k[1]), schemes: raw(SCHEME_TAB + k[1])
-    });
+    }, { history: HISTORY_HEADERS, inputs: INPUTS_HEADERS, workflow: WF_HEADERS, voided: VOID_HEADERS(),
+         schemes: SCHEME_HEADERS });
   });
   return out;
 }
 
 /* The analysis behind pay_audit. `t` holds each tab's raw getValues() (header row first), or null
-   for a tab that does not exist. Columns are found by HEADER NAME, not by the position the code
-   expects, so a tab whose header drifted is read for what it actually holds. */
-function payAuditRows_(t) {
+   for a tab that does not exist; `hdr` the headers the ENGINE reads each tab with.
+
+   COLUMNS BY POSITION, THE WAY THE ENGINE READS THEM — not by the sheet's own header row. sheetOf_
+   writes a header only when it creates a tab, so a tab created before a column was appended keeps
+   the old, shorter header forever while every later write is wider. crew_incentive_voided is exactly
+   that: created when HISTORY_HEADERS had 18 columns, so its header says `voided_at` over the column
+   where newer rows hold computed_payroll. Read by header name, every void after 2026-09-02 grouped
+   on a dollar amount. The drift itself is reported, because it is a fact about the sheet worth
+   knowing — it just must not decide how the rows are read. */
+function payAuditRows_(t, hdr) {
+  hdr = hdr || {};
   function day(v) {
     if (v instanceof Date) return normDate_(v) || String(v);
     return String(v == null ? '' : v).trim();
   }
-  function table(vals) {
-    if (!vals || !vals.length) return { present: !!vals, rows: [] };
-    var head = vals[0].map(function (h) { return String(h == null ? '' : h).trim(); });
+  function table(vals, want) {
+    if (!vals || !vals.length) return { present: !!vals, rows: [], header_drift: null };
+    var sheetHead = vals[0].map(function (h) { return String(h == null ? '' : h).trim(); });
+    var head = want || sheetHead;
+    var drift = want ? want.filter(function (h, j) { return sheetHead[j] !== h; }) : [];
     var rows = [];
     for (var i = 1; i < vals.length; i++) {
       if (vals[i].every(function (c) { return c === '' || c == null; })) continue;
@@ -8107,7 +8118,8 @@ function payAuditRows_(t) {
       head.forEach(function (h, j) { if (h) o[h] = vals[i][j]; });
       rows.push(o);
     }
-    return { present: true, rows: rows };
+    return { present: true, rows: rows,
+             header_drift: drift.length ? { sheet_says: sheetHead.filter(Boolean), engine_reads: want } : null };
   }
   function money(n) { return Math.round(n * 100) / 100; }
   function groupBy(rows, keyFn) {
@@ -8127,8 +8139,8 @@ function payAuditRows_(t) {
     return out;
   }
 
-  var H = table(t.history), I = table(t.inputs), W = table(t.workflow), V = table(t.voided),
-      S = table(t.schemes);
+  var H = table(t.history, hdr.history), I = table(t.inputs, hdr.inputs), W = table(t.workflow, hdr.workflow),
+      V = table(t.voided, hdr.voided), S = table(t.schemes, hdr.schemes);
   var findings = [];
 
   /* ── Closed records ─────────────────────────────────────────────────────────────────────────── */
@@ -8166,6 +8178,11 @@ function payAuditRows_(t) {
       var rows = I.rows.filter(function (r) { return d.rows.indexOf(r._row) >= 0; });
       var first = rows[0], last = rows[rows.length - 1];
       return { pp_start: d.key.split('|')[0], employee_id: d.key.split('|')[1], rows: d.rows,
+               /* When each copy was last written, and by whom — a race leaves two stamps moments
+                  apart; two different sessions days apart is a different story. */
+               written: rows.map(function (r) {
+                 return { row: r._row, updated_at: String(r.updated_at || ''), updated_by: String(r.updated_by || '') };
+               }),
                /* Which fields the math would read differently from what the screen last saved. */
                differing_fields: FIELDS.filter(function (f) {
                  return String(first[f] == null ? '' : first[f]) !== String(last[f] == null ? '' : last[f]);
@@ -8183,6 +8200,15 @@ function payAuditRows_(t) {
   if (schemeDups.length) findings.push({ kind: 'scheme_duplicate_row', detail: schemeDups });
 
   /* ── Void log: a reopen that ran twice ────────────────────────────────────────────────────────── */
+  /* …and the OLDEST void rows are the opposite case: written 20 wide, before history gained
+     computed_payroll and override_note, so read 22 wide their voided_at sits in computed_payroll.
+     An ISO stamp in a money column with nothing where voided_at belongs can only be that shape. */
+  V.rows.forEach(function (r) {
+    if (String(r.voided_at || '') === '' && /^\d{4}-\d{2}-\d{2}T/.test(String(r.computed_payroll || ''))) {
+      r.voided_at = r.computed_payroll; r.void_reason = r.override_note;
+      r.computed_payroll = ''; r.override_note = ''; r._shape = 'pre-2026-09-02';
+    }
+  });
   var vb = groupBy(V.rows, function (r) { return day(r.pp_start) + '|' + String(r.voided_at || ''); });
   var voids = vb.keys.map(function (k) {
     var rows = vb.g[k];
@@ -8192,15 +8218,20 @@ function payAuditRows_(t) {
     var pp = k.split('|')[0];
     /* Was the period approved AGAIN after this void? Stamps are ISO strings, so they compare. */
     var at = k.split('|').slice(1).join('|');
+    /* Which approval(s) the voided rows came from. A batch carrying TWO stamps with every person
+       twice is a double approval that a later reopen swept out of history — the one place that
+       race could still be seen after the fact. */
+    var fromApprovals = groupBy(rows, function (r) { return String(r.imported_at || ''); });
     var reapproved = (hp.g[pp] || []).some(function (r) {
       return String(r.format || '') === 'approved' && String(r.imported_at || '') > at;
     });
     return { pp_start: pp, voided_at: at, rows: rows.length,
              sheet_rows: [rows[0]._row, rows[rows.length - 1]._row],
              payroll_total: money(rows.reduce(function (a, r) { return a + (Number(r.payroll) || 0); }, 0)),
+             from_approvals: fromApprovals.keys.map(function (s) { return { imported_at: s, rows: fromApprovals.g[s].length }; }),
              duplicate_people_in_batch: dups(rows, function (r) {
                return String(r.section || '') + ':' + (String(r.employee_id || '') || 'name:' + String(r.pdf_name || ''));
-             }).length,
+             }),
              reason: String(rows[0].void_reason || ''), reapproved_after: reapproved, _ids: ids.join(','),
              /* The approval these rows came from — the voided copy keeps its own imported_at. */
              _approved: rows.map(function (r) { return String(r.imported_at || ''); }) };
@@ -8233,12 +8264,17 @@ function payAuditRows_(t) {
   }
   if (doubleVoids.length) findings.push({ kind: 'void_same_rows_twice', detail: doubleVoids });
   voids.forEach(function (v) {
-    if (v.duplicate_people_in_batch) findings.push({ kind: 'void_batch_duplicate_person', pp_start: v.pp_start, voided_at: v.voided_at });
+    if (v.duplicate_people_in_batch.length) {
+      findings.push({ kind: 'void_batch_duplicate_person', pp_start: v.pp_start, voided_at: v.voided_at,
+                      detail: v.duplicate_people_in_batch, from_approvals: v.from_approvals });
+    }
     delete v._ids; delete v._approved;
   });
 
   return {
     tabs: { history: H.present, inputs: I.present, workflow: W.present, voided: V.present, schemes: S.present },
+    header_drift: { history: H.header_drift, inputs: I.header_drift, workflow: W.header_drift,
+                    voided: V.header_drift, schemes: S.header_drift },
     clean: findings.length === 0,
     findings: findings,
     history: periods,
