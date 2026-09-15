@@ -46,7 +46,7 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
               'VOID_HEADERS', 'saveIncentiveInput_', 'inputsFor_', 'historyPeriods_', 'historySheet_',
               'incTab_', 'isPracticePeriod_', 'wfSheet_', 'wfGet_', 'wfSet_', 'wfUnsend_',
               'freezeScheme_', 'schemeFor_', 'sheetOf_', 'readTab_', 'isTruthyFlag_', 'normDate_', 'pad2_',
-              'incPayroll_',
+              'incPayroll_', 'notifyApproved_', 'wfApprovedEmail_',
               /* One-time request ids (2026-09-14). Optional, so CODE_GS can point at the engine from
                  before they existed and the request-id test can be seen to fail there. */
               'payReqId_', 'payReqCompact_', 'payReqReplay_', 'payReqCached_', 'payReqSeen_',
@@ -54,7 +54,7 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT'];
-const OPTIONAL = /Locked_|upsert|^payReq/;
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
@@ -167,6 +167,7 @@ function engine() {
     function rosterJoin_() { return { rows: [{ user_id: 'mike' }] }; }
     function accountEmail_() { return 'mike@example.com'; }
     var CREW_URL = 'https://crew.example/';
+    var ACCOUNT_DOMAIN = 'example.com';
     var STORE_TZ = 'America/Los_Angeles';
     var Logger = { log: function (m) { E.logs = (E.logs || []).concat([String(m)]); } };
   `;

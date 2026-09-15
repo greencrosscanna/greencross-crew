@@ -6015,12 +6015,14 @@ function incentiveApprove_(p) {
      execution can be between the answer and the write. Found present at this point it can only
      have landed while this one was computing. The token is checked in here too: it is cleared by
      the write, so a copy that read it first would otherwise still find it valid. */
+  var wfAtApprove = null;             // who SENT it — the person the "approved" email goes to
   var approveLocked = function () {
     if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
       return { ok: false, error: pp + ' was approved by another request while this one was being checked ' +
                '(a retry, or a second click) — nothing was written twice. Reload the period to see the record.' };
     }
     var wf = wfGet_(pp);
+    wfAtApprove = wf;
     var tok = String(p.approve_token || '').trim();
     if (tok) {
       if (!wf || wf.status !== 'pending') return { ok: false, error: 'this period is no longer awaiting approval' };
@@ -6065,15 +6067,87 @@ function incentiveApprove_(p) {
      able to fail the approval. A rehearsal is not a record, so it gets none. */
   var backup = isPracticePeriod_(pp) ? { ok: true, skipped: 'practice period' }
                                      : backupCrewSheet_('approved ' + pp);
+  /* TELL THE PREPARER. Last, after the PDF, so the email can say whether it filed — and like the
+     PDF it cannot fail the approval: the record is written whatever the mail does. */
+  var notified = notifyApproved_(pp, String(live.payPeriod.end || ''), wfAtApprove, by,
+                                 rows.filter(function (r) { return (Number(r[14]) || 0) > 0; }).length,
+                                 Math.round(total * 100) / 100, overrides, pdf);
   var approved = { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
            thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup,
+           notified: notified,
            /* What the checks SAID, not just that nothing stopped the write — the same reason
               `coverage` rides on the send preview. A silent pass and a check that never ran look
               identical in an empty array. */
            store_totals: _tot, warnings: _warnings };
   payReqUpdate_(rq, rqRow, 'incentive_approve', approved);
   return approved;
+}
+
+/* ══ "Approved — carry on": the email back to whoever sent the period (2026-09-15) ══════════════
+ *
+ * Sky, testing the hand-off with Mike: "when I hit approve, Mike should get an email saying it has
+ * been approved and that he can carry on, nothing is happening." Nothing was ever built to happen.
+ * Sending mailed the approver and sending BACK mailed the preparer, but approving — the step Mike
+ * is actually waiting on, because Print and Export stay locked until it lands — told nobody. He
+ * could only find out by reloading the screen.
+ *
+ * WHO: `sent_by` on the workflow row, the person who pressed "Send for approval". Nobody else.
+ * When the approver approved directly with no send (Sky's own path, and a practice run), nobody is
+ * waiting on an email and none goes; `skipped` says so rather than the field reading like a failure.
+ * Never to the approver themselves — they know, they just pressed it.
+ *
+ * NEVER THROWS. Called after the history rows are written: an exception here would report an error
+ * for an approval that succeeded, and the obvious retry answers "already a closed record". */
+function notifyApproved_(pp, ppEnd, wf, by, paidCount, total, overrides, pdf) {
+  try {
+    var sender = String((wf && wf.sent_by) || '').trim().toLowerCase();
+    if (!sender) return { to: [], skipped: 'nobody sent this period for approval, so nobody is waiting on an email' };
+    if (sender === String(by || '').trim().toLowerCase()) {
+      return { to: [], skipped: 'the person who sent it is the person who approved it' };
+    }
+    var to = '';
+    (rosterJoin_().rows || []).forEach(function (r) {
+      if (!to && String(r.user_id || '').trim().toLowerCase() === sender) to = accountEmail_(r);
+    });
+    /* Same rule as wfApproverEmails_: a GX account with no roster row still gets the mail, built
+       the way createAccounts_ built the address. */
+    if (!to) to = sender.indexOf('@') > 0 ? sender : sender + '@' + ACCOUNT_DOMAIN;
+    if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(to)) return { to: [], error: 'no usable address for ' + sender };
+    var isPrac = isPracticePeriod_(pp);
+    var label = (isPrac ? practiceSource_(pp) : pp) + (ppEnd ? ' → ' + ppEnd : '');
+    MailApp.sendEmail({ to: to, name: 'GX Crew',
+      subject: (isPrac ? '[PRACTICE] ' : '') + 'Approved — incentive ' + (isPrac ? practiceSource_(pp) : pp),
+      htmlBody: wfApprovedEmail_(pp, label, by, paidCount, total, overrides, pdf) });
+    return { to: [to] };
+  } catch (e) {
+    return { to: [], error: String((e && e.message) || e) };
+  }
+}
+
+function wfApprovedEmail_(pp, label, by, paidCount, total, overrides, pdf) {
+  var esc = function (x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
+  var n = (overrides && overrides.rows && overrides.rows.length) || 0;
+  return '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px">' +
+    (isPracticePeriod_(pp)
+      ? '<div style="margin:0 0 14px;padding:10px 14px;border:2px solid #000;font-weight:700">' +
+        'PRACTICE PAY PERIOD — a rehearsal. Nobody is paid from this.</div>' : '') +
+    '<h2 style="margin:0 0 4px">Approved — carry on</h2>' +
+    '<p style="margin:0 0 12px;color:#555">Pay period <strong>' + esc(label) + '</strong> was approved by ' +
+      '<strong>' + esc(by || 'the approver') + '</strong>.</p>' +
+    '<p style="margin:0 0 12px"><strong>' + wfMoney_(total) + '</strong> to ' + paidCount + ' ' +
+      (paidCount === 1 ? 'person' : 'people') + '. The figures are now the record and cannot change.</p>' +
+    (n ? '<p style="margin:0 0 12px;color:#8a6d00">Includes ' + n + ' hand-set ' +
+      (n === 1 ? 'figure' : 'figures') + ' (◆ in Crew).</p>' : '') +
+    '<p style="margin:0 0 6px"><strong>Next:</strong></p>' +
+    '<ol style="margin:0 0 14px;padding-left:20px">' +
+      '<li>Print PDF — ' + (pdf && pdf.ok ? 'a copy has already been filed to Drive' +
+        (pdf.url ? ' (<a href="' + esc(pdf.url) + '">open it</a>)' : '')
+        : 'the automatic Drive copy did not file, so save this one') + '</li>' +
+      '<li>Export Payroll CSV (Capstone)</li>' +
+    '</ol>' +
+    '<p><a href="' + CREW_URL + '#incentive/' + encodeURIComponent(pp) + '">Open in GX Crew</a></p>' +
+    '</div>';
 }
 
 /* ══ The payout PDF — filed to Drive the moment a period is approved ═════════════════════════════

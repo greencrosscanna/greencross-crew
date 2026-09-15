@@ -4123,8 +4123,14 @@
         await loadIncentive(pp);
         return;
       }
+      /* Who was told, and when nobody could be: a mail that failed is the one outcome the approver
+         can still fix from here (tell them by hand), so it is said in the toast, not only in JSON. */
+      var nt = r.notified || {};
+      var told = (nt.to && nt.to.length) ? ' — emailed ' + nt.to.join(', ')
+               : nt.error ? ' — but the email to the preparer failed (' + nt.error + '), let them know' : '';
       toast((r.already_applied ? 'Approved (an earlier attempt of this click landed first) — '
-                               : 'Approved — ') + (r.written == null ? '' : r.written + ' rows frozen for ') + pp);
+                               : 'Approved — ') + (r.written == null ? '' : r.written + ' rows frozen for ') + pp + told,
+            !!nt.error);
       /* Reload before printing: the period is now a record, so it must print as one — badged
          `as paid`, with no live inputs on the page. */
       await loadIncentive(pp);
