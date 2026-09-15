@@ -178,6 +178,27 @@ console.log('\nNot approved yet — no grayed "Approved" step pretending it is d
   ok('pending', M.incHeadActions(pending, false).indexOf('incApproved') < 0);
 }
 
+console.log('\nThe backup approver on the screen (2026-09-15)');
+{
+  const cover = (o) => Object.assign({ backup: ['shawn'], away: { on: false }, can_decide: false, as: '', backup_active: false }, o);
+  const shawnIdle = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: false,
+                                                                 approval_cover: cover({}) }), false);
+  ok('on standby, Shawn gets no Approve', shawnIdle.indexOf('id="incApprove"') < 0);
+  const shawnOn = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: true,
+    approval_cover: cover({ can_decide: true, as: 'backup', backup_active: true, why: 'waiting' }) }), false);
+  ok('covering, Shawn gets Approve and Send back', isOn(shawnOn, 'incApprove') && shawnOn.indexOf('id="incReturn"') > 0);
+  ok('and is told he is covering, and why', /covering as backup/.test(shawnOn) && /4 hours/.test(shawnOn));
+  ok('but still no settings gear — that is the approver\'s alone', shawnOn.indexOf('incGear') < 0);
+  const mike = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: false,
+    approval_cover: cover({ backup_active: true, why: 'waiting' }) }), false);
+  ok('Mike, waiting, is told the backup can decide too', /the backup, shawn, can decide too/.test(mike));
+  const skyAway = M.incHeadActions(Object.assign({}, ended, { can_approve: true, can_decide: true,
+    approval_cover: cover({ away: { on: true }, can_decide: true, as: 'primary', backup_active: true, why: 'away' }) }), false);
+  ok('Sky, marked away, sees it on the screen with a way back', /You are marked away/.test(skyAway) && skyAway.indexOf('id="incBack"') > 0);
+  const older = M.incHeadActions(Object.assign({}, pending, { can_approve: true }), false);
+  ok('an engine that sends no can_decide still gives the approver Approve', isOn(older, 'incApprove'));
+}
+
 console.log('\nThe HANDLERS refuse too — a disabled button is only one DOM node');
 {
   M.inc.data = running;

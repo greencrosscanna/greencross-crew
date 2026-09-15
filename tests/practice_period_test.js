@@ -134,7 +134,9 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       'storeTotals_', 'historyBand_',
       /* The screen reads the real history tab once and hands the rows to historyPeriods_ and
          historyBand_ (2026-09-15). Stubbed empty: nothing in this file is a closed real period. */
-      'readTab_', 'HISTORY_TAB', 'HISTORY_HEADERS', src)(
+      'readTab_', 'HISTORY_TAB', 'HISTORY_HEADERS',
+      /* Backup-approver cover (2026-09-15) — its own rules are in tests/backup_approver_test.js. */
+      'approvalCover_', src)(
       () => ({ ok: true, user: 'mike', role: 'admin' }),
       (pp) => { seen.history.push(pp); return []; },
       () => ({ ok: true }),
@@ -151,7 +153,8 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       () => ({ ok: true, checked: true, missing: [] }),
       () => ({ state: 'ok', stores: [], mismatches: [] }),
       () => ({ periods: 0 }),
-      () => [], 'crew_incentive_history', []);
+      () => [], 'crew_incentive_history', [],
+      () => ({ can_decide: false, backup: [] }));
     return fn({ pp_start: want });
   };
 

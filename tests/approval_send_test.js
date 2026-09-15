@@ -98,14 +98,16 @@ console.log('\nThe gate moved to the write, and did not go away');
   /* The guard exactly as it is written in the shipped source — extracted rather than retyped so
      that rewording the condition cannot leave this test passing against the old behaviour. */
   const APPROVE = fnSrc('incentiveApprove_');
-  const line = APPROVE.split('\n').find(l => l.includes('!canApprove_(auth)'));
-  ok('the approver gate exists at all', !!line);
+  /* Since the backup approver (2026-09-15) the gate asks canDecide_ for THIS period, which is the
+     primary or a backup inside its window. Still only on the write. */
+  const line = APPROVE.split('\n').find(l => l.includes('canDecide_(auth, pp)'));
+  ok('the approver gate exists at all', !!line && /if \(decider && !decider\.ok\)/.test(APPROVE));
   ok('and it is conditioned on confirm=yes (the WRITE), not on entry',
-     !!line && /confirm[^)]*\)\s*===\s*'yes'\s*&&\s*!canApprove_/.test(line.replace(/\s+/g, ' ')));
-
+     !!line && /confirm[^)]*\)\s*===\s*'yes'\s*\?\s*canDecide_\(auth, pp\)\s*:\s*null/.test(line.replace(/\s+/g, ' ')));
+  const expr = (line.match(/var decider = (.*);/) || [])[1];
   const guard = new Function('p', 'isApprover',
-    'return ' + (line.match(/if \((.*)\) \{/) || [])[1]
-      .replace(/canApprove_\(auth\)/, 'isApprover') + ';');
+    'var auth = {}, pp = "x"; function canDecide_() { return { ok: isApprover }; }' +
+    'var decider = ' + expr + '; return !!(decider && !decider.ok);');
   ok('DRY RUN by a non-approver is allowed  (this is Mike sending)',
      guard({}, false) === false);
   ok('dry run by the approver is allowed too', guard({}, true) === false);
