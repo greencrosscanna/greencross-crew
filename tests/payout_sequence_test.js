@@ -158,6 +158,24 @@ console.log('\nApproved — both steps open, and the row stops explaining itself
   ok('Export is live', isOn(h, 'incCsv'));
   ok('no gate message once nothing is blocked', h.indexOf('crew-inc-wait') < 0);
   ok('and the break glass is offered, since this is a record', h.indexOf('incReopen') > 0);
+  /* Sky, 2026-09-15: the Approve step stays, grayed, once it is done — it used to vanish. */
+  ok('the approve step is still there, grayed out', isOff(h, 'incApproved') && /Approved/.test(btn(h, 'incApproved') + h));
+  ok('and it comes BEFORE Print, so the row still reads as the sequence',
+     h.indexOf('id="incApproved"') >= 0 && h.indexOf('id="incApproved"') < h.indexOf('id="incPrint"'));
+  ok('it is NOT the live approve button — that id is wired to the handler', h.indexOf('id="incApprove"') < 0);
+  const mikeDone = M.incHeadActions(Object.assign({}, approved, { can_approve: false }), true);
+  ok('the preparer sees the same finished step', isOff(mikeDone, 'incApproved'));
+  ok('a Crew approval names its date on hover',
+     /title="Approved 2026-09-15/.test(M.incHeadActions(Object.assign({}, approved, { format: 'approved', imported_at: '2026-09-15T19:00:46.820Z' }), true)));
+  ok('a period imported from the old PDFs says so instead of inventing a date',
+     /Paid before approvals moved into Crew/.test(M.incHeadActions(Object.assign({}, approved, { format: 'gen2' }), true)));
+}
+
+console.log('\nNot approved yet — no grayed "Approved" step pretending it is done');
+{
+  ok('running', M.incHeadActions(running, false).indexOf('incApproved') < 0);
+  ok('ended', M.incHeadActions(ended, false).indexOf('incApproved') < 0);
+  ok('pending', M.incHeadActions(pending, false).indexOf('incApproved') < 0);
 }
 
 console.log('\nThe HANDLERS refuse too — a disabled button is only one DOM node');

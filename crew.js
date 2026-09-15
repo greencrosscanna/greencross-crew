@@ -3108,6 +3108,23 @@
                esc(INC_SEND_LABEL) + '</button>');
       }
     }
+    /* THE APPROVE STEP STAYS ON SCREEN ONCE IT IS DONE — grayed, not removed (Sky, 2026-09-15:
+       "after I approve it, the Approve button should be grayed out since that step is done").
+       It used to vanish on approval, so the row lost its first step at exactly the moment the
+       other two lit up and stopped reading as a sequence. Same rule as the dead Print button
+       before approval: a step that disappears teaches nobody where they are.
+       Its OWN id, never `incApprove` — that id is wired to the approve handler, which on a record
+       goes straight to printing. The date comes from the record itself (`format: 'approved'` and
+       `imported_at`), so this needs nothing new from the engine; the 27 periods imported from the
+       payout PDFs predate approval in Crew and say so instead. */
+    if (isImported) {
+      var doneWhy = d.format === 'approved'
+        ? 'Approved' + (d.imported_at ? ' ' + String(d.imported_at).slice(0, 10) : '') +
+          ' — the figures are frozen'
+        : 'Paid before approvals moved into Crew — a closed record from the payout reports';
+      h.push('<button type="button" class="gx-btn" id="incApproved" disabled title="' + esc(doneWhy) +
+             '">Approved ✓</button>');
+    }
     /* PRINT AND EXPORT ARE THE TRAILING PAIR, IN EVERY STATE — emitted here rather than inside the
        branches, which is what makes the row read as the sequence. They used to be scattered: the
        pending branch rendered no Print at all, so the step did not read as "not yet, and here is
