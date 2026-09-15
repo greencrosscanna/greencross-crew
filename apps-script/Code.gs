@@ -487,6 +487,7 @@ function route_(e) {
       // Is the Crew -> Leaderboard hop alive? Shape only, never figures. Secret, not a session,
       // so it can be checked from a shell instead of by a signed-in user hitting an error.
       case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
+      case 'perf_probe': return json_(perfProbe_(p), p.callback);
       // Comp thresholds: GX Core holds them, Crew edits them, Leaderboard reads them.
       case 'incentive_thresholds': return json_(incentiveThresholdsRoute_(p), p.callback);
       // Discount rules: same — GX Core holds the state. Leaderboard is still asked for the
@@ -683,6 +684,41 @@ function deploySecretOk_(p) {
  * Crew's own spreadsheet. Created on first call and remembered in ScriptProperties, so the
  * script stays standalone (no container binding to lose) and nobody has to hand-wire an ID.
  */
+/* ?action=perf_probe (deploy-secret, READ-ONLY) — times the primitives the incentive screen is built
+   from, each on its own, so a slow load can be pinned to a cause instead of guessed at. Every call is
+   a read; nothing here writes except what crewSheet_ itself already does on every call. */
+function perfProbe_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var out = {}, t;
+  function time(label, fn) {
+    t = Date.now();
+    try { fn(); out[label] = Date.now() - t; }
+    catch (e) { out[label] = 'error after ' + (Date.now() - t) + 'ms: ' + String((e && e.message) || e); }
+  }
+  var id = PropertiesService.getScriptProperties().getProperty(CREW_SHEET_ID_PROP);
+  time('openById', function () { SpreadsheetApp.openById(id); });
+  time('openById_again', function () { SpreadsheetApp.openById(id); });
+  time('crewSheet_1', function () { crewSheet_(); });
+  time('crewSheet_2', function () { crewSheet_(); });
+  time('readTab_history', function () { readTab_(HISTORY_TAB, HISTORY_HEADERS); });
+  time('readTab_history_again', function () { readTab_(HISTORY_TAB, HISTORY_HEADERS); });
+  time('readTab_inputs', function () { readTab_(INPUTS_TAB, INPUTS_HEADERS); });
+  time('readTab_workflow', function () { readTab_(WF_TAB, WF_HEADERS); });
+  time('readAttrs_', function () { readAttrs_(); });
+  time('getKv_anchor', function () { GXCore.getKv('cfg.payPeriodAnchor'); });
+  time('getKv_anchor_again', function () { GXCore.getKv('cfg.payPeriodAnchor'); });
+  time('getKv_thresholds', function () { GXCore.getKv('incentiveThresholds'); });
+  time('computedPeriods_', function () { computedPeriods_(); });
+  time('getEmployees', function () { GXCore.getEmployees(); });
+  time('getEmployees_again', function () { GXCore.getEmployees(); });
+  time('getStores', function () { GXCore.getStores(); });
+  time('getSalesDaily_14d', function () { GXCore.getSalesDaily('', '2026-08-31', '2026-09-13'); });
+  time('historyPeriods_', function () { historyPeriods_(); });
+  time('historyBand_', function () { historyBand_(''); });
+  out.ok = true;
+  return out;
+}
+
 function crewSheet_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(CREW_SHEET_ID_PROP);
