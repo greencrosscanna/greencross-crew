@@ -25,6 +25,14 @@ ok('the incentive load is a single call site', !!m && (JS.match(/Engine\.jsonp\(
 ok('its per-attempt budget clears the measured 48s round trip (>= 90s)', m && +m[1] >= 90000);
 ok('it still retries once — the HTML second-hop miss fails fast and needs it', m && +m[2] === 1);
 
+console.log('\nApprove and send — same recompute, same budget\n');
+['incentive_approve', 'incentive_send'].forEach(function (route) {
+  const re = new RegExp("Engine\\.jsonp\\('" + route + "',[\\s\\S]*?\\{ timeoutMs: (\\d+), retries: (\\d+) \\}\\)", 'g');
+  const calls = [...JS.matchAll(re)];
+  ok(route + ' has a call site', calls.length > 0);
+  calls.forEach((c, i) => ok(route + ' call ' + (i + 1) + ' waits >= 90s (got ' + c[1] + ')', +c[1] >= 90000));
+});
+
 console.log('\nEngine\n');
 const body = GS.slice(GS.indexOf('function getIncentive_('), GS.indexOf('function computedPeriods_('));
 ok('the live payload carries per-stage timings', /live\.timings = timings;/.test(body) && /timings\.total = Date\.now\(\) - T0;/.test(body));

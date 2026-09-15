@@ -4098,8 +4098,11 @@
          is a question, not a write. A button that says Approving before you have said yes is worse
          than one that says nothing. */
       var undoBusy = incBusy(btn, 'Checking…');
+      /* 90s, matching the incentive load: both approve calls and the send recompute the whole
+         period, which is the same work that measured a 25-48s round trip on 2026-09-15. At 45s the
+         screen gave up on an answer that was still coming and reported a failure. */
       var pre = await Engine.jsonp('incentive_approve',
-        { token: token(), pp_start: pp }, { timeoutMs: 45000, retries: 1 });
+        { token: token(), pp_start: pp }, { timeoutMs: 90000, retries: 1 });
       /* Restored BEFORE the dialog, so cancelling leaves the row exactly as it was found — the
          confirm is modal, so nothing can be clicked underneath it in the meantime. */
       undoBusy();
@@ -4114,7 +4117,7 @@
       if (btn) { btn.disabled = true; btn.textContent = 'Approving…'; }
       var params = { token: token(), pp_start: pp, confirm: 'yes', request_id: payRequestId() };
       if (appr) params.approve_token = appr;
-      var r = await Engine.jsonp('incentive_approve', params, { timeoutMs: 45000, retries: 1 });
+      var r = await Engine.jsonp('incentive_approve', params, { timeoutMs: 90000, retries: 1 });
       inc.approveToken = ''; inc.approvePp = '';      // single use, whatever the outcome
       if (!r || r.ok === false) throw new Error((r && r.error) || 'approve failed');
       if (r.already_applied && r.status && r.status !== 'approved') {
@@ -4151,7 +4154,7 @@
     try {
       incBusy(btn, 'Sending…');
       var r = await Engine.jsonp('incentive_send',
-        { token: token(), pp_start: pp, request_id: payRequestId() }, { timeoutMs: 45000, retries: 1 });
+        { token: token(), pp_start: pp, request_id: payRequestId() }, { timeoutMs: 90000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not send');
       if (btn) btn.disabled = true;
       /* The warning matters more than the success: "sent" with nobody emailed looks identical to
