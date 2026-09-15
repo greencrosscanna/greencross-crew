@@ -292,14 +292,35 @@ welcome and quick, and the hub session holds the repo alone while it works.
 - **Crew's own engine and repo are still yours.** `clasp push` / `gxengine.sh --deploy` here touch
   only this project.
 
-## Shipping — direct to `main` until launch (decided 2026-08-18)
-GX Crew is **pre-launch**: nobody outside Sky has access yet, so there are no staff to watch a feature
-bake. The shared `/gxbrain` ship policy's *feature → branch + PR + merge-when-done* rule exists to protect
-daily users, and it doesn't apply here yet. **Until Crew launches, commit and push straight to `main`**,
-run `./deploy.sh`, then `dev_ship` the job. Don't open PRs for routine work.
+## Shipping — branch + PR, because Crew is LIVE (corrected 2026-09-15)
 
-**Revert to branch + PR the moment Crew goes live to anyone but Sky** — from then on staff are looking at
-it, and the ordinary policy applies.
+**Crew is live to Sky and Mike.** So the ordinary `/gxbrain` ship policy applies: a **feature** goes on a
+`feat/…` branch with a PR and **Sky merges**. A **small fix** that is correct the moment it lands still
+ships direct to `main`. After a merge: bump the `?v=N` on the `crew.js` tag, `./gxengine.sh --deploy` for
+the engine, then `./deploy.sh`, then `dev_ship` the job if there is one.
+
+*Corrected 2026-09-15, and the correction is the point.* This section said **"GX Crew is pre-launch:
+nobody outside Sky has access yet… until Crew launches, commit and push straight to `main`"**, decided
+2026-08-18. It was true then. It carried its own expiry — *"revert to branch + PR the moment Crew goes
+live to anyone but Sky"* — and **nothing anywhere fires that trigger**, so the paragraph went on
+instructing sessions to push straight to `main` on an app that **pays people**, three weeks after the
+condition it depends on stopped being true. Mike has had access since the week of 2026-08-25; his Monday
+digest opt-in was switched on for the launch, so a first real recipient has existed since then.
+
+That is the same failure as the `spiff_payouts` correction higher up this file (and `version_history`
+in the hub's), in its most expensive form: **a rule whose precondition nothing can contradict.** A doc that names a version rots
+when somebody re-pins; a doc that names a *state* rots the moment the state changes, and silently,
+because there is no version number to look wrong. If a rule here depends on a condition, write what is
+true NOW and re-date it — do not leave an "until X" that no test, route or script will ever evaluate.
+
+**Do not restore the old rule for `crew` on the argument that a change is small or that Mike will not
+notice.** The gate is not about how risky one change looks; it is that the approval, the Capstone export
+and the frozen history are what a person is paid on, and a second reader is the only thing standing
+between a plausible-looking change and that.
+
+**The rule that did NOT change:** it is still per-app. `spiff` is genuinely pre-launch and still works
+direct on `main`. GX Core library cuts stay PR-gated regardless — a bad immutable version breaks every
+spoke silently.
 
 ## System of record — Crew, not the spreadsheet (decided 2026-08-18)
 The HR workbook (`GreenCross_Staff.xlsx`) built the initial roster and is now **history**. **GX Crew,
