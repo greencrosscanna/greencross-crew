@@ -716,6 +716,17 @@ function perfProbe_(p) {
   time('getSalesDaily_14d', function () { GXCore.getSalesDaily('', '2026-08-31', '2026-09-13'); });
   time('historyPeriods_', function () { historyPeriods_(); });
   time('historyBand_', function () { historyBand_(''); });
+  /* What GX Core's snapshot door answers, per period — the screen's fast path depends on it. */
+  ['', String(p.pp_start || '')].forEach(function (pp, i) {
+    if (i && !pp) return;
+    var label = 'incentivePerf' + (pp ? '_' + pp : '_current');
+    var d = null;
+    time(label, function () { d = GXCore.incentivePerf({ pp_start: pp }); });
+    out[label + '_meta'] = d ? { ok: d.ok, snapshot: d.snapshot, error: d.error, pp_start: d.pp_start,
+                                 current: d.payPeriod && d.payPeriod.current, computed_at: d.computed_at,
+                                 age_minutes: d.age_minutes, max_age_minutes: d.max_age_minutes,
+                                 stale: d.stale, cache_policy: d.cache_policy } : null;
+  });
   out.ok = true;
   return out;
 }
