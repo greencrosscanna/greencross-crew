@@ -285,6 +285,7 @@ function doGet(e)  { return route_(e); }
 function doPost(e) { return route_(e); }
 
 function route_(e) {
+  _crewSheetMemo_ = null;   // per request — see crewSheet_
   var p = (e && e.parameter) || {};
   var action = p.action || 'health';
   var body = null;
@@ -719,7 +720,21 @@ function perfProbe_(p) {
   return out;
 }
 
+/* ONE PREPARED ATTRS SHEET PER REQUEST (2026-09-15). crewSheet_ is how every tab is reached —
+   sheetOf_ asks it for the spreadsheet — and each call re-read the header row and re-applied the
+   plain-text format to three columns. perf_probe measured that at 300-600ms a call, even with
+   SpreadsheetApp.openById itself answering in 2-9ms, and one incentive load made five or six of
+   them. The work is the same every time within a request, so it is done once.
+   CLEARED AT THE TOP OF route_ — Apps Script can reuse a warm instance, and a module global
+   outlives the request that filled it. Per request, not per instance, is the whole rule. */
+var _crewSheetMemo_ = null;
 function crewSheet_() {
+  if (_crewSheetMemo_) return _crewSheetMemo_;
+  _crewSheetMemo_ = crewSheetPrepare_();
+  return _crewSheetMemo_;
+}
+
+function crewSheetPrepare_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(CREW_SHEET_ID_PROP);
   var ss;
@@ -784,7 +799,11 @@ function writeAttrs_(rec) {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    var sh = crewSheet_();
+    /* A WRITE PREPARES THE SHEET FRESH, not from the per-request memo. Preparing re-applies the
+       plain-text format down to the sheet's current last row — the thing that keeps employee number
+       "00" from becoming 0 — and a bulk import appends person after person in one request, so each
+       write must see the rows the previous one added. Reads are what the memo is for. */
+    var sh = _crewSheetMemo_ = crewSheetPrepare_();
     var last = sh.getLastRow();
     var targetRow = 0;
     if (last >= 2) {
@@ -3902,9 +3921,11 @@ function historySheet_(pp) {
    company has actually closed — it reads the REAL history and practice is invisible to it. Called
    with a key, it answers "is THIS period already a frozen record", which is the question the
    approve/send/save guards ask and the only one that has to know about practice. */
-function historyPeriods_(pp) {
+function historyPeriods_(pp, rows) {
   var seen = Object.create(null);
-  readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS).forEach(function (r) {
+  /* `rows` lets a caller that already holds the REAL history tab hand it in (getIncentive_, which
+     needs the same rows for historyBand_). Only ever the real tab: a practice key reads its own. */
+  (rows && !pp ? rows : readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS)).forEach(function (r) {
     if (!r.pp_start) return;
     var e = seen[r.pp_start] || (seen[r.pp_start] = { pp_start: r.pp_start, pp_end: r.pp_end,
                                                       rows: 0, bonus: 0, imported_at: r.imported_at,
@@ -5267,7 +5288,10 @@ function getIncentive_(p) {
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   mark('auth');
 
-  var imported = historyPeriods_();
+  /* The real history tab, read ONCE for the screen: the period list, the to-date totals and the
+     history band all come from these rows. The write paths still read their own, fresh. */
+  var historyRows = readTab_(HISTORY_TAB, HISTORY_HEADERS);
+  var imported = historyPeriods_('', historyRows);
   var importedBy = Object.create(null);
   imported.forEach(function (h) { importedBy[h.pp_start] = h; });
   mark('history');
@@ -5433,13 +5457,13 @@ function getIncentive_(p) {
      somebody presses Approve is a bad first sighting of a figure that has been wrong all fortnight;
      the reconciliation is what the preparer should see while there is still time to look into it.
      The screen REPORTS; only the write paths refuse. */
-  live.store_totals = storeTotals_(live);
+  live.store_totals = storeTotals_(live, true);
   mark('store_totals');
   /* The band, not a verdict: the browser holds the period's own totals (it computes every row on
      each keystroke) and compares them itself. Sending the band rather than the answer keeps one
      source for what history says and avoids a second total computed engine-side that could
      disagree with the one on screen. */
-  live.history_band = historyBand_(live.payPeriod.start);
+  live.history_band = historyBand_(live.payPeriod.start, historyRows);
   mark('history_band');
   /* Why this period and not the running one, when nobody asked for a period. '' = asked for, or the
      running one. */
@@ -7387,6 +7411,7 @@ function coverageStoreNames_(slugs) {
  * (`portland-rd`, `river-rd`). Leaderboard's display slugs (`portland`, `river`) are a DIFFERENT
  * vocabulary and comparing the wrong one reports four of six stores missing on a perfectly good
  * period — the same trap rosterCoverage_ carries a warning about. */
+var STORE_TOTALS_CACHE_S = 600;     // screen only — see storeTotals_
 var TOTALS_SALES_TOL_PCT = 0.5;    // measured worst case 0.09%; one absent seller moves 5-15%
 var TOTALS_TXN_TOL_PCT   = 2.0;    // measured worst case 0.9% — orders vs transactions differ slightly
 
@@ -7419,7 +7444,10 @@ function ppDaysBetween_(from, to) {
   return Math.round((b - a) / 86400000) + 1;
 }
 
-function storeTotals_(live) {
+/* `useCache` is passed ONLY by the screen, same rule as SPIFF: approval and the send preview read
+   GX Core's sales cache fresh, because they refuse on the answer. The screen only reports, and a
+   closed period's daily sales are re-read 1.2s at a time on every load for figures that do not move. */
+function storeTotals_(live, useCache) {
   var out = { state: 'unchecked', reason: '', stores: [], mismatches: [],
               tolerance: { sales_pct: TOTALS_SALES_TOL_PCT, txns_pct: TOTALS_TXN_TOL_PCT } };
   var slice = (live && live.stores) || null;
@@ -7439,7 +7467,19 @@ function storeTotals_(live) {
   if (!w) { out.reason = 'the pay period has no usable end date'; return out; }
   out.window = w;
   var rows = null;
-  try { rows = GXCore.getSalesDaily('', w.from, w.to); } catch (e) {
+  var salesCache = null, salesKey = 'crew_sales_daily_' + w.from + '_' + w.to;
+  if (useCache) {
+    try { salesCache = CacheService.getScriptCache(); var hit = salesCache.get(salesKey);
+          if (hit) rows = JSON.parse(hit); } catch (e) { rows = null; }
+  }
+  if (!rows) try {
+    rows = GXCore.getSalesDaily('', w.from, w.to);
+    /* Cached only when it answered with days — an empty read must not be remembered as the answer. */
+    if (salesCache && rows && rows.length) {
+      var body = JSON.stringify(rows);
+      if (body.length < 95000) salesCache.put(salesKey, body, STORE_TOTALS_CACHE_S);
+    }
+  } catch (e) {
     out.reason = 'GX Core\'s daily sales cache could not be read (' +
                  String((e && e.message) || e) + '), so nothing independent confirms these figures';
     return out;
@@ -7574,10 +7614,12 @@ function ceilingProblems_(rows, live, T) {
    report predates that column and every row of it is blank. Counting it would drop the floor to $0
    and make the band meaningless — the same '' -vs- 0 distinction the export and the payout PDF
    already turn on. */
-function historyBand_(excludePp) {
+function historyBand_(excludePp, historyRows) {
   var out = { periods: 0, payroll_min: null, payroll_max: null, paid_min: null, paid_max: null };
-  var rows;
-  try { rows = readTab_(HISTORY_TAB, HISTORY_HEADERS); } catch (e) { out.error = String((e && e.message) || e); return out; }
+  var rows = historyRows || null;
+  if (!rows) {
+    try { rows = readTab_(HISTORY_TAB, HISTORY_HEADERS); } catch (e) { out.error = String((e && e.message) || e); return out; }
+  }
   var by = Object.create(null);
   (rows || []).forEach(function (r) {
     var pp = String(r.pp_start || '');

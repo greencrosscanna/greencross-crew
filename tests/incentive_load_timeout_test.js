@@ -32,5 +32,46 @@ ok('the performance fetch is timed apart from the stamp', /timings\.perf_fetch =
 ok('perfForWrite_ still works without a timings object (both write paths call it bare)',
    /if \(timings\) \{ timings\.perf_fetch/.test(GS) && /perfForWrite_\(pp\)|perfForWrite_\(want\)|perfForWrite_\(/.test(GS));
 
+console.log('\nEngine: the 11 seconds, trimmed (2026-09-15)\n');
+{
+  function fnSrc(src, name) {
+    const i = src.indexOf('function ' + name + '(');
+    let d = 0;
+    for (let k = src.indexOf('{', i); k < src.length; k++) {
+      if (src[k] === '{') d++;
+      else if (src[k] === '}') { d--; if (!d) return src.slice(i, k + 1); }
+    }
+  }
+  /* 1. The attrs sheet is prepared once per request, and the memo cannot outlive the request. */
+  let prepared = 0;
+  const C = new Function('crewSheetPrepare_', 'var _crewSheetMemo_ = null;\n' + fnSrc(GS, 'crewSheet_') +
+    '\n; return { crewSheet_: crewSheet_, reset: function () { _crewSheetMemo_ = null; } };')
+    (() => { prepared++; return { sheet: prepared }; });
+  C.crewSheet_(); C.crewSheet_(); C.crewSheet_();
+  ok('crewSheet_ prepares the sheet once however often it is asked', prepared === 1);
+  C.reset(); C.crewSheet_();
+  ok('…and again after a reset', prepared === 2);
+  ok('an attrs WRITE prepares the sheet fresh, so a bulk import keeps "00" formatted as text on every new row',
+     /var sh = _crewSheetMemo_ = crewSheetPrepare_\(\);/.test(fnSrc(GS, 'writeAttrs_')));
+  ok('route_ resets the memo before doing anything else — a warm instance must not carry it',
+     /function route_\(e\) \{\s*_crewSheetMemo_ = null;/.test(GS));
+
+  /* 2. The screen reads the real history tab once. */
+  const G = fnSrc(GS, 'getIncentive_');
+  ok('getIncentive_ reads the REAL history tab once and shares the rows',
+     /var historyRows = readTab_\(HISTORY_TAB, HISTORY_HEADERS\);/.test(G) &&
+     /historyPeriods_\('', historyRows\)/.test(G) && /historyBand_\(live\.payPeriod\.start, historyRows\)/.test(G));
+  ok('historyPeriods_ only accepts handed-in rows for the real tab, never a practice key',
+     /rows && !pp \? rows : readTab_\(incTab_\(HISTORY_TAB, pp\)/.test(fnSrc(GS, 'historyPeriods_')));
+
+  /* 3. Only the screen may use a cached sales read. */
+  const calls = GS.match(/storeTotals_\(live[^)]*\)/g) || [];
+  ok('exactly one storeTotals_ call uses the cache, and it is the screen\'s',
+     calls.filter((c) => /true/.test(c)).length === 1 && /live\.store_totals = storeTotals_\(live, true\)/.test(G));
+  const ST = fnSrc(GS, 'storeTotals_');
+  ok('an empty sales read is never cached as the answer', /if \(salesCache && rows && rows\.length\)/.test(ST));
+  ok('the cache is consulted only when asked', /if \(useCache\) \{/.test(ST));
+}
+
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nall passed\n');
 process.exit(fail ? 1 : 0);

@@ -277,7 +277,7 @@ console.log('\nWired in: the gate refuses, the screen reports, the email says so
      /nothing to acknowledge past/.test(A));
 
   const G = decomment(fnSrc(SRC, 'getIncentive_'));
-  ok('the screen is given the reconciliation', /live\.store_totals = storeTotals_\(live\)/.test(G));
+  ok('the screen is given the reconciliation', /live\.store_totals = storeTotals_\(live(, true)?\)/.test(G));
   ok('…and the band, not a verdict', /live\.history_band = historyBand_\(/.test(G));
   ok('the screen does not refuse on it — only the write paths do', !/incentiveBlockers_\(/.test(G));
 

@@ -131,7 +131,10 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       /* The independent checks the screen carries since 2026-09-11. Stubbed rather than run: what
          this file tests is the window/key split, and storeTotals_ would need a sales cache. Their
          own rules live in tests/independent_checks_test.js. */
-      'storeTotals_', 'historyBand_', src)(
+      'storeTotals_', 'historyBand_',
+      /* The screen reads the real history tab once and hands the rows to historyPeriods_ and
+         historyBand_ (2026-09-15). Stubbed empty: nothing in this file is a closed real period. */
+      'readTab_', 'HISTORY_TAB', 'HISTORY_HEADERS', src)(
       () => ({ ok: true, user: 'mike', role: 'admin' }),
       (pp) => { seen.history.push(pp); return []; },
       () => ({ ok: true }),
@@ -147,7 +150,8 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       (pp) => { seen.wf = pp; return null; },
       () => ({ ok: true, checked: true, missing: [] }),
       () => ({ state: 'ok', stores: [], mismatches: [] }),
-      () => ({ periods: 0 }));
+      () => ({ periods: 0 }),
+      () => [], 'crew_incentive_history', []);
     return fn({ pp_start: want });
   };
 
