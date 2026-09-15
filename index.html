@@ -601,8 +601,13 @@
     /* Approved-to-date totals: slim chips inline with the Incentive title. "To date" is what says
        they are not this period's figures — those are the tiles below. */
     .crew-inc-titlerow { flex-wrap: wrap; }
+    /* Without a width cap the title column sizes to its widest line and the chips run off a phone
+       screen instead of wrapping. */
+    .crew-inc-headl { min-width: 0; max-width: 100%; }
+    .crew-inc-todate { margin-left: 0; }
+    @media (min-width: 561px) { .crew-inc-todate { margin-left: 8px; } }
     .crew-inc-todate { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
-      margin-left: 8px; cursor: help; }
+      cursor: help; }
     .crew-inc-todate-cap { font-size: 10.5px; color: var(--gx-text-mute); text-transform: uppercase;
       letter-spacing: .06em; margin-right: 2px; }
     .crew-inc-kpi { display: inline-flex; align-items: baseline; gap: 6px; padding: 3px 10px;
@@ -1148,6 +1153,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.392"></script>
+  <script src="crew.js?v=1.393"></script>
 </body>
 </html>
