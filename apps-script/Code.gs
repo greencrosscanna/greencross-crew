@@ -485,6 +485,9 @@ function route_(e) {
       // The dashboard itself: an imported period, or the live one from Leaderboard's slice.
       case 'incentive':      return json_(getIncentive_(p), p.callback);
       case 'incentive_save': return json_(saveIncentiveInput_(p), p.callback);
+      /* Mike's whole attendance list in ONE request. Attendance only — an override is the
+         approver's single decision and still goes one at a time through incentive_save. */
+      case 'incentive_att_batch': return json_(saveAttendanceBatch_(p), p.callback);
       // Is the Crew -> Leaderboard hop alive? Shape only, never figures. Secret, not a session,
       // so it can be checked from a shell instead of by a signed-in user hitting an error.
       case 'incentive_probe': return json_(incentiveProbe_(p), p.callback);
@@ -5804,6 +5807,186 @@ function upsertIncentiveInput_(p, pp, eid, auth) {
   return { ok: true, pp_start: pp, employee_id: eid, saved: { att: cur.att, spiff: cur.spiff, hours: cur.hours } };
 }
 
+/* ?action=incentive_att_batch — MIKE'S WHOLE ATTENDANCE LIST IN ONE REQUEST (2026-09-15)
+ *
+ * The import used to call `incentive_save` once per person. Each call is its own Apps Script round
+ * trip — the engine's own work is milliseconds, but the queue in front of it is seconds — so
+ * nineteen people took a minute or two of watching a spinner. This does the same nineteen writes in
+ * one execution, under ONE lock, from ONE read of the tab.
+ *
+ * ATTENDANCE ONLY, AND THAT IS A DECISION, NOT AN OVERSIGHT. `incentive_save` also carries spiff,
+ * hours and `payroll_override`. The override is the approver's single decision about what one
+ * person was paid, and it needs a typed reason; a route that could set forty of them from one list
+ * is the opposite of what that field is for. So this route refuses anything but `att`, by not
+ * reading anything else.
+ *
+ * THE REFUSALS ARE THE WHOLE BATCH'S, and they are checked before a single row is written: an
+ * imported (closed) period, a period locked pending approval, and the role check. A list that is
+ * half-written into a period that should not have been touched at all is worse than one that was
+ * refused — there is nothing to tell you which half.
+ *
+ * ONE REQUEST ID FOR THE WHOLE IMPORT, not one per person. A copy that stalls and lands after Mike
+ * has changed a tick by hand must not put his file's answer back, and forty ids would each have to
+ * be replayed separately to stop that. Checked and recorded under the same `withPayLock_` as the
+ * writes, exactly as every other pay write does it.
+ *
+ * IT IS NOT ATOMIC AND DOES NOT PRETEND TO BE. Every person is one read-merge-write against their
+ * own row; a row that cannot be written is named in `failed` and the rest still go through. That is
+ * the same guarantee the per-person loop gave — whoever was written has Mike's answer, the rest
+ * keep what they had — and the screen reports exactly who missed rather than claiming all or
+ * nothing. What HAS changed is that a refusal now stops the batch instead of failing forty times.
+ */
+var ATT_BATCH_MAX = 200;
+
+/* `att` is `<employee_id>:<1|0>` pairs, comma separated. Compact on purpose: this arrives as a
+   JSONP GET, so the list travels in a URL, and JSON's quotes and braces triple in length once
+   encoded. Anything it cannot read refuses the WHOLE batch by name — a person quietly dropped from
+   an attendance list is a bonus quietly withheld, which nothing downstream would ever query. */
+function parseAttBatch_(raw) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s) return { error: 'no attendance list arrived with that request, so nothing was saved' };
+  var parts = s.split(','), list = [], seen = Object.create(null);
+  for (var i = 0; i < parts.length; i++) {
+    var t = String(parts[i]).trim();
+    if (!t) continue;
+    var c = t.indexOf(':');
+    if (c < 1) return { error: 'could not read "' + t + '" as a person and a yes/no, so nothing was saved' };
+    var id = t.slice(0, c).trim(), v = t.slice(c + 1).trim();
+    if (!/^[A-Za-z0-9_.-]{1,80}$/.test(id)) {
+      return { error: 'could not read "' + id + '" as an employee id, so nothing was saved' };
+    }
+    if (v !== '0' && v !== '1') {
+      return { error: 'attendance for ' + id + ' arrived as "' + v + '", which is neither yes nor no — nothing was saved' };
+    }
+    if (seen[id]) return { error: id + ' is named twice in that import, so nothing was saved' };
+    seen[id] = 1;
+    list.push({ employee_id: id, att: v === '1' });
+    if (list.length > ATT_BATCH_MAX) {
+      return { error: 'that import names more than ' + ATT_BATCH_MAX + ' people, which is past anything a pay period holds — nothing was saved' };
+    }
+  }
+  if (!list.length) return { error: 'that import names nobody, so nothing was saved' };
+  return { list: list };
+}
+
+function saveAttendanceBatch_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'read-only' };
+
+  var pp = String(p.pp_start || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+
+  /* A LATE RETRY OF A BATCH THAT ALREADY LANDED is answered before the guards below, for the same
+     reason the per-person save is: an import that succeeded and was then sent for approval would
+     otherwise come back from its own retry as "locked", and the screen would report a list that is
+     really written as a list that failed. */
+  var rq = payReqId_(p);
+  if (rq.error) return { ok: false, error: rq.error };
+  var cached = payReqCached_(rq, 'incentive_att_batch');
+  if (cached) return cached;
+
+  var parsed = parseAttBatch_(p.att);
+  if (parsed.error) return { ok: false, error: parsed.error };
+
+  if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
+    return { ok: false, error: pp + ' is an imported (closed) period — its figures are what was paid and cannot be edited' };
+  }
+  var _wf = wfGet_(pp);
+  if (_wf && _wf.status === 'pending') {
+    return { ok: false, error: pp + ' was sent for approval on ' + _wf.sent_at +
+             ' and is locked until it is approved or sent back' };
+  }
+
+  /* Twenty seconds, not ten: this holds the lock for a whole list rather than one field, and it is
+     the same script lock every roster edit waits on. The browser gives the route 90. */
+  return withPayLock_(function () {
+    var seen = payReqSeen_(rq, 'incentive_att_batch');
+    if (seen) return seen;
+    var res = upsertAttendanceBatch_(parsed.list, pp, auth);
+    payReqRecord_(rq, 'incentive_att_batch', pp, auth.user, res);
+    return res;
+  }, 20000);
+}
+
+/* The body of saveAttendanceBatch_, run only while holding withPayLock_. Never call it directly.
+ *
+ * ONE READ OF THE TAB for the whole list, and the index built from it is the only thing that
+ * decides update-vs-append. A second row for one person is a pay bug rather than clutter — later
+ * saves update the FIRST matching row and `inputsFor_` reads the LAST, so an untick made afterwards
+ * silently stops reaching the math — and it is exactly what a per-person loop could produce when
+ * two copies raced (amirah_montaner, 2026-09-01). Here it cannot: an id is queued at most once, and
+ * every new row goes into ONE appended block written after the loop. */
+function upsertAttendanceBatch_(list, pp, auth) {
+  var tab = incTab_(INPUTS_TAB, pp);
+  var sh = sheetOf_(tab, INPUTS_HEADERS);
+  var rows = readTab_(tab, INPUTS_HEADERS);
+  var N = INPUTS_HEADERS.length;
+
+  var at = Object.create(null);
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].pp_start !== pp || !rows[i].employee_id) continue;
+    /* The FIRST matching row, which is the one saveIncentiveInput_ updates. Where a pre-lock race
+       already left two, both routes have to agree about which of them is the live one. */
+    if (at[rows[i].employee_id] === undefined) at[rows[i].employee_id] = i;
+  }
+
+  var stamp = new Date().toISOString(), by = auth.user || '';
+  var saved = [], failed = [], appends = [], appendIds = [], queued = Object.create(null);
+  var appendAt = sh.getLastRow() + 1;
+  var updated = 0;
+
+  list.forEach(function (m) {
+    if (queued[m.employee_id]) {
+      failed.push(m.employee_id + ': named twice in one import, so only the first was saved');
+      return;
+    }
+    queued[m.employee_id] = 1;
+    var idx = at[m.employee_id];
+    /* READ-MERGE-WRITE, one field. Everything else on the row — spiff, hours, the override and its
+       reason — is carried through untouched, because posting a whole record blanks what it omits. */
+    var cur = (idx === undefined)
+      ? { pp_start: pp, employee_id: m.employee_id, att: '', spiff: '', hours: '',
+          payroll_override: '', override_note: '' }
+      : rows[idx];
+    cur.att = m.att ? '1' : '';
+    cur.updated_at = stamp;
+    cur.updated_by = by;
+    var line = INPUTS_HEADERS.map(function (h) { return cur[h] == null ? '' : cur[h]; });
+    if (idx === undefined) {
+      appends.push(line);
+      appendIds.push(m.employee_id);
+      return;
+    }
+    try {
+      sh.getRange(idx + 2, 1, 1, N).setValues([line]);
+      saved.push(m.employee_id);
+      updated++;
+    } catch (e) {
+      failed.push(m.employee_id + ': ' + ((e && e.message) || 'could not be written'));
+    }
+  });
+
+  if (appends.length) {
+    try {
+      sh.getRange(appendAt, 1, appends.length, N).setValues(appends);   // every new row in ONE write
+      saved = saved.concat(appendIds);
+    } catch (e) {
+      appendIds.forEach(function (id) {
+        failed.push(id + ': ' + ((e && e.message) || 'could not be written'));
+      });
+    }
+  }
+  try { sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@'); } catch (e) {}
+
+  /* ok is false when NOBODY was written, so a caller reading only `ok` cannot mistake a batch that
+     wrote nothing for one that worked. A partial run is ok, with `failed` naming who missed. */
+  return { ok: saved.length > 0, pp_start: pp,
+           count: saved.length, updated: updated, appended: appends.length ? appendIds.length : 0,
+           saved: saved, failed: failed,
+           error: saved.length ? undefined : ('nothing was saved — ' + (failed[0] || 'no rows were written')) };
+}
+
 /* ══ Approving a period — the moment live numbers become a record ════════════════════════════════
  *
  * Leaderboard's dashboard has "Approve & Print PDF", and the 27 PDFs in Drive are what it produced.
@@ -7110,7 +7293,9 @@ function payReqCompact_(res) {
     var v = res[k];
     if (v == null || typeof v === 'number' || typeof v === 'boolean' ||
         (typeof v === 'string' && v.length <= 600)) { out[k] = v; return; }
-    if (k === 'split' || k === 'mailed' || k === 'saved') out[k] = v;
+    /* `saved` and `failed` are the attendance batch's answer about WHO — a replay that lost
+       `failed` would tell the screen everybody was written. Both are lists of short strings. */
+    if (k === 'split' || k === 'mailed' || k === 'saved' || k === 'failed') out[k] = v;
   });
   var s = JSON.stringify(out);
   return s.length <= 4000 ? out : { ok: !!(res && res.ok), error: res && res.error ? String(res.error).slice(0, 600) : undefined };
@@ -7155,6 +7340,9 @@ function payReqNow_(action, pp, eid) {
       var i = inputsFor_(pp)[eid];
       return { inputs: i || { att: false, spiff: null, hours: null, payrollOverride: null, overrideNote: '' } };
     }
+    /* A batch has no one person to report, so it reports the whole period's inputs as they stand
+       — which is what the screen needs to adopt after a replay that landed late. */
+    if (action === 'incentive_att_batch') return { inputs_by_id: inputsFor_(pp) };
     if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) return { status: 'approved' };
     var wf = wfGet_(pp);
     return { status: (wf && wf.status) || 'draft' };

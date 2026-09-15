@@ -1082,6 +1082,40 @@ Verified against the real 2026-08-17 file: 40 rows → 13 changes, 17 already co
 4 not on the period, 0 unreadable, 0 missing — and **11 gaining, which is exactly what the file's own
 Summary sheet says** (`Eligible (Yes) = 11`).
 
+#### The whole list saves in ONE request — `incentive_att_batch` (2026-09-15)
+
+It used to call `incentive_save` once per person. The writes are milliseconds; the **queue in front
+of each one** is seconds, so nineteen people took a minute or two of watching a spinner. The engine
+now takes the whole list in one request: one execution, one lock, one read of the inputs tab.
+
+- **The refusals are the BATCH's, checked before a single row is written** — a closed period, one
+  locked pending approval, a read-only session. Half a list written into a period that should not
+  have been touched is worse than a refused one: nothing afterwards says which half.
+- **ATTENDANCE ONLY, and that is a decision.** `incentive_save` also carries spiff, hours and
+  `payroll_override`. The override is the approver's single decision about what one person was
+  paid and it needs a typed reason; a route that could set forty of them from one file is the
+  opposite of what that field is for. The batch route never reads those fields, so posting one
+  alongside the list does nothing.
+- **ONE request id for the whole import**, minted once in the browser, checked and recorded inside
+  the same `withPayLock_` as the writes. Forty ids would each have to be replayed separately to stop
+  a stalled copy putting the file's answer back over a tick Mike has since changed by hand.
+- **It is NOT atomic and does not claim to be.** Each person is one read-merge-write against their
+  own row; a row that cannot be written is named in `failed` and the rest still go through — the
+  same guarantee the per-person loop gave. The double-append that a race once left on this tab
+  (amirah_montaner, 2026-09-01) is impossible here by construction: an id is queued at most once and
+  every new row goes into a single appended block written after the loop.
+- **The list travels as `<id>:<1|0>` pairs**, not JSON, because this is a JSONP GET and the list
+  rides in the URL — JSON's quotes and braces triple in length once encoded, and a forty-person file
+  is real. Anything it cannot read refuses the whole batch **by name**: a person quietly dropped from
+  an attendance list is a bonus quietly withheld, which nothing downstream would ever query.
+- **The preview and its confirm are untouched.** The dollar figures in both directions are what Sky
+  approves, and they are a fact about the file, not about how the rows travel.
+
+Pinned by `tests/attendance_batch_test.js` (the batch's own rules, including a forced mid-batch
+write failure), plus the batch's sections in `tests/pay_period_race_test.js` (two copies at once) and
+`tests/pay_request_id_test.js` (a copy landing after its twin). `tests/attendance_import_test.js`
+pins the browser half: exactly one engine call, one id, and the preview and confirm unchanged.
+
 ### Floaters — one person, one row (2026-09-02)
 
 A floater picks up shifts wherever they are needed, so Leaderboard sends them **once per store**.

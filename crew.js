@@ -5403,9 +5403,24 @@
       if (go) go.addEventListener('click', commit);
     }
 
-    /* ONE CALL PER PERSON, sequential, through the same route the screen's own ticks use. A partial
-       run is safe by construction — whoever was written has Mike's answer and the rest keep what
-       they had — so this reports exactly who failed rather than pretending to be atomic. */
+    /* ONE REQUEST FOR THE WHOLE LIST (2026-09-15). This used to call `incentive_save` once per
+       person, and nineteen people took a minute or two — not because the writes are slow (they are
+       milliseconds) but because each one is its own Apps Script round trip, queued behind the last.
+       `incentive_att_batch` does the same writes in one execution, under one lock, from one read of
+       the inputs tab.
+
+       ONE REQUEST ID FOR THE WHOLE IMPORT, not one per person. A copy that stalls and lands after
+       Mike has changed a tick by hand must not put the file's answer back, and forty separate ids
+       would each have to be replayed on their own to stop that.
+
+       STILL NOT ATOMIC, AND STILL SAYS SO. The engine writes each person's row on its own and
+       returns who was written and who was not; a partial run leaves whoever was written holding
+       Mike's answer and the rest holding what they had. What changed is that a REFUSAL — a closed
+       period, one locked pending approval, a read-only session — now stops the whole batch at the
+       door instead of failing once per person.
+
+       The preview and its confirm are untouched: the dollar figures in both directions are what
+       Sky approves, and nothing about how the rows travel changes what they say. */
     async function commit() {
       var rows = built.change.concat(built.noeffect);
       if (!rows.length) return;
@@ -5426,29 +5441,54 @@
       var foot = box.querySelector('.crew-imp-foot');
       if (foot && !foot.querySelector('.crew-imp-keepopen')) {
         var keep = el('span', 'crew-imp-keepopen');
-        keep.textContent = 'Each person is saved separately and takes a few seconds. Keep this open until it finishes.';
+        keep.textContent = 'The whole list is saved in one go. Keep this open until it finishes.';
         foot.appendChild(keep);
       }
+      status('Saving all ' + rows.length + ' — one request, a few seconds…');
+
+      /* `<id>:<1|0>` pairs. Compact because this is a JSONP GET and the list rides in the URL —
+         JSON's quotes and braces triple in length once encoded, and a forty-person file is real. */
+      var att = rows.map(function (m) { return m.id + ':' + (m.want ? '1' : '0'); }).join(',');
+      var wanted = Object.create(null);
+      rows.forEach(function (m) { wanted[m.id] = m; });
+
       var done = 0, failed = [];
-      for (var i = 0; i < rows.length; i++) {
-        var m = rows[i];
-        status('Saving ' + (i + 1) + ' of ' + rows.length + ' — ' + (m.who || m.name) + '…');
-        try {
-          /* One id per PERSON: each row of Mike's list is its own write, retried on its own. */
-          var r = await Engine.jsonp('incentive_save',
-                    { token: token(), pp_start: pp, employee_id: m.id, att: m.want ? '1' : '',
-                      request_id: payRequestId() },
-                    { timeoutMs: 20000, retries: 1 });
-          if (!r || r.ok === false) throw new Error((r && r.error) || 'save failed');
-          inputs[m.id] = inputs[m.id] || {};
-          /* A late retry reports the person's inputs as they are NOW; trust that over this row. */
-          if (r.already_applied && r.now && r.now.inputs) inputs[m.id] = r.now.inputs;
-          else inputs[m.id].att = !!m.want;
-          done++;
-        } catch (e) {
-          failed.push(m.who + ' (' + ((e && e.message) || 'unknown') + ')');
+      try {
+        /* 90s, not 20: this is one request doing what nineteen used to, and Apps Script holds a
+           request 15-37s before it even starts. The retry is safe because the id rides both
+           attempts — a late copy is answered from the record, never re-applied. */
+        var r = await Engine.jsonp('incentive_att_batch',
+                  { token: token(), pp_start: pp, att: att, request_id: payRequestId() },
+                  { timeoutMs: 90000, retries: 1 });
+        if (!r) throw new Error('no answer from the engine');
+        if (r.ok === false && !(r.saved && r.saved.length)) throw new Error(r.error || 'save failed');
+
+        /* A late retry reports the period's inputs as they stand NOW — somebody may have changed a
+           tick since. Trust that over this file. */
+        if (r.already_applied && r.now && r.now.inputs_by_id) {
+          Object.keys(r.now.inputs_by_id).forEach(function (id) { inputs[id] = r.now.inputs_by_id[id]; });
+          done = (r.saved || []).length;
+        } else {
+          (r.saved || []).forEach(function (id) {
+            if (!wanted[id]) return;
+            inputs[id] = inputs[id] || {};
+            inputs[id].att = !!wanted[id].want;
+            done++;
+          });
         }
+        (r.failed || []).forEach(function (f) {
+          /* The engine names people by id; the reader knows them by name. */
+          var m = wanted[String(f).split(':')[0]];
+          failed.push((m ? (m.who || m.name) : String(f).split(':')[0]) +
+                      ' (' + String(f).slice(String(f).indexOf(':') + 1).trim() + ')');
+        });
+      } catch (e) {
+        /* The request itself did not land, so NOBODY is known to be written. Saying so beats
+           guessing in either direction — the preview is still on screen and can be re-run. */
+        failed = [(e && e.message) || 'the import could not be sent'];
+        done = 0;
       }
+
       busy = false;
       status('');
       paintIncentive();

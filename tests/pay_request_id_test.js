@@ -74,6 +74,80 @@ for (const evict of [false, true]) {
        late.now && late.now.inputs && late.now.inputs.att === false);
   }
 
+  console.log('\nincentive_att_batch — import, hand-edit a tick, then the stalled import lands' + how);
+  {
+    const E = engine(); E.user = 'mike';
+    if (!E.attBatch) { fail++; console.log('  ✗ incentive_att_batch is not in Code.gs'); }
+    else {
+      /* ONE id for the WHOLE list, not one per person — which is the point. Mike imports the file,
+         then unticks somebody by hand because the list was wrong about them. The stalled copy of
+         the import must not put the file's answer back on that one person. */
+      const first = E.attBatch({ pp_start: PP, att: 'e1:1,e2:1', request_id: id('BA') });
+      E.save({ pp_start: PP, employee_id: 'e1', att: '', request_id: id('BX') });
+      maybeEvict(E);
+      const late = E.attBatch({ pp_start: PP, att: 'e1:1,e2:1', request_id: id('BA') });
+      ok('the import went through first', first.ok === true && first.count === 2);
+      ok('the hand untick is what the math reads — NOT re-ticked by the stalled import',
+         E.inputsFor(PP).e1 && E.inputsFor(PP).e1.att === false);
+      ok('the person the hand edit did not touch keeps the file\'s answer',
+         E.inputsFor(PP).e2 && E.inputsFor(PP).e2.att === true);
+      ok('one inputs row each, still', forPP(E, INP).length === 2);
+      ok('the late import is answered as already applied, not as an error',
+         late.ok === true && late.already_applied === true && late.request_id === id('BA'));
+      ok('and carries the first answer, so the screen can say who was written',
+         Array.isArray(late.saved) && late.saved.length === 2);
+      ok('it reports the period\'s inputs as they stand NOW, so the screen shows the untick',
+         late.now && late.now.inputs_by_id && late.now.inputs_by_id.e1 &&
+         late.now.inputs_by_id.e1.att === false);
+    }
+  }
+
+  console.log('\nincentive_att_batch — import, APPROVE, then the stalled import lands' + how);
+  {
+    const E = engine(); E.seedClosed(); E.user = 'mike';
+    if (E.attBatch) {
+      E.attBatch({ pp_start: PP, att: 'e1:1,e2:1', request_id: id('BB') });
+      E.user = 'sky';
+      E.approve({ pp_start: PP, confirm: 'yes', request_id: id('BC') });
+      maybeEvict(E);
+      E.user = 'mike';
+      const late = E.attBatch({ pp_start: PP, att: 'e1:1,e2:1', request_id: id('BB') });
+      /* Either way, the thing that matters holds: nothing is written into the closed period. */
+      ok('the closed record is untouched (2 rows)', forPP(E, HIST).length === 2);
+      if (!evict) {
+        /* The cached hint is read ABOVE the guards, exactly as the per-person save reads it: the
+           import really did land, and answering "that period is closed" would send Mike to re-run
+           a file that is already written. */
+        ok('the late import is told it already happened, not that the period is closed',
+           late.ok === true && late.already_applied === true && !/closed/.test(String(late.error || '')));
+      } else {
+        /* THE LIMIT, and it is the per-person save's too. CacheService may evict whenever it
+           likes; the authoritative record is read INSIDE the lock, which is below the closed-period
+           guard. So an evicted replay of a batch whose period has since been approved is refused
+           rather than replayed. It writes nothing either way — the cost is a confusing message,
+           not a wrong row — and moving the sheet read above the guards would mean a sheet read on
+           every request that carries an id. */
+        ok('LIMIT: with the cache evicted the late import is refused as closed, and still writes nothing',
+           late.ok === false && /closed/.test(late.error));
+      }
+    }
+  }
+  {
+    /* A BATCH THAT WAS REFUSED under the lock stays refused. */
+    const E = engine(); E.user = 'mike';
+    if (E.attBatch) {
+      E.canEdit = false;
+      const refused = E.attBatch({ pp_start: PP, att: 'e1:1', request_id: id('BD') });
+      E.canEdit = true;
+      ok('a read-only batch is refused', refused.ok === false);
+      /* That refusal is decided BEFORE the lock, so it is the documented limit, not a bug: the
+         late copy is decided afresh against whatever the session is then. */
+      const late = E.attBatch({ pp_start: PP, att: 'e1:1', request_id: id('BD') });
+      ok('LIMIT: a pre-lock refusal is not remembered — the late copy is decided afresh',
+         late.ok === true && !late.already_applied);
+    }
+  }
+
   console.log('\nincentive_send — send, send back, then the stalled send lands' + how);
   {
     const E = engine(); E.seedClosed(); E.user = 'mike';
@@ -262,7 +336,7 @@ console.log('\ncrew.js — every pay write sends a request id minted once per ac
   ok('send, return and reopen each carry one',
      ['incentive_send', 'incentive_return', 'incentive_unapprove'].every(a =>
        has(a, c => /request_id: payRequestId\(\)/.test(c.args))));
-  ok('the id is never minted inside a retry loop (the only loop is the per-person import, one id per row)',
+  ok('the id is never minted inside a retry loop — it rides every attempt of one action',
      !/for \(var a = 0; a <= retries/.test(JS));
 
   const gen = new Function('window', 'crypto', JS.slice(JS.indexOf('function payRequestId()'),

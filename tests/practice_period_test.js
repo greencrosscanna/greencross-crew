@@ -272,9 +272,10 @@ console.log('\nNothing that enumerates what the company actually closed can see 
      the pay lock (tests/pay_period_race_test.js). Each of those must pass the key too — a bare
      re-check would ask the real history about a practice period and never find it approved.
      6 since the same evening: payReqNow_, which tells a late retry whether the period is closed
-     NOW — a bare call there would report a closed practice period as still in preparation. */
+     NOW — a bare call there would report a closed practice period as still in preparation.
+     7 since 2026-09-15: the attendance batch, which refuses a closed period for the whole list. */
   ok('while every "is THIS period already closed" guard passes the key (' + single.length + ')',
-     single.length === 6);
+     single.length === 7);
   ok('and no guard asks the bare question about one period',
      !/historyPeriods_\(\)\.some/.test(decomment(GS)));
 

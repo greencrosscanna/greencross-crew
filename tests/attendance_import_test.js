@@ -271,11 +271,71 @@ console.log('\nThe import says it is working (2026-09-15: "it looks like it stal
   ok('a spinner style exists for work in flight', /\.crew-imp-prog\.is-busy::before[\s\S]{0,300}animation: crew-imp-spin/.test(HTML));
   ok('reading the file shows a spinner in the drop zone', /Reading ' \+ esc\(fileName\)/.test(body) && /dz\.classList\.add\('is-busy'\)/.test(body));
   ok('a file that cannot be read puts the drop zone back', (body.match(/toast\([^;]*\);\s*paint\(\);/g) || []).length >= 2);
-  ok('each save names who and how far along', /status\('Saving ' \+ \(i \+ 1\) \+ ' of ' \+ rows\.length \+ ' — '/.test(body));
+  ok('saving says how many are going and that it is one request',
+     /status\('Saving all ' \+ rows\.length/.test(body));
   ok('Close and Choose-a-different-file are DISABLED while saving, not silently ignored',
      /\['#impRedo', '#impCancel', '#impX'\]\.forEach[\s\S]{0,80}disabled = true/.test(body));
   ok('it tells Mike to keep the window open', /Keep this open until it finishes/.test(body));
   ok('the spinner is cleared when the run ends', /busy = false;\s*status\(''\);/.test(body));
+}
+
+console.log('\nONE REQUEST FOR THE WHOLE LIST (2026-09-15)');
+{
+  /* The saving loop was the whole complaint: nineteen people, nineteen Apps Script round trips,
+     a minute or two. What the one-trip version must not quietly change is the preview or the
+     confirm — the dollar figures in both directions are what Sky approves before anything is
+     written, and they are a fact about the FILE, not about how the rows travel. */
+  const JS = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
+  const a = JS.indexOf('function attImport('), bEnd = JS.indexOf('async function loadIncentive(');
+  const body = JS.slice(a, bEnd);
+  const commit = body.slice(body.indexOf('async function commit()'));
+
+  ok('the import posts to the batch route', /Engine\.jsonp\('incentive_att_batch'/.test(commit));
+  ok('exactly ONE engine call in the whole commit — not one per person',
+     (commit.match(/Engine\.jsonp\(/g) || []).length === 1);
+  /* …and it is not inside a loop, checked by bracket depth rather than by a regex that a
+     `rows.forEach` doing something else nearby would trip. */
+  const sendAt = commit.indexOf('Engine.jsonp(');
+  let depth = 0;
+  for (let i = 0; i < sendAt; i++) {
+    const c = commit[i];
+    if (c === '(' || c === '{' || c === '[') depth++;
+    else if (c === ')' || c === '}' || c === ']') depth--;
+  }
+  ok('and it is not nested inside a loop over the rows — one call, once, at the top level of commit',
+     depth <= 3 && !/\bfor \(|\bwhile \(/.test(commit.slice(0, sendAt)));
+  ok('the per-person `incentive_save` call is gone from the import',
+     !/Engine\.jsonp\('incentive_save'/.test(commit));
+
+  ok('ONE request id for the whole import, minted once',
+     (commit.match(/payRequestId\(\)/g) || []).length === 1);
+  ok('the id is minted in the params object, not inside a retry',
+     /request_id: payRequestId\(\) \}/.test(commit));
+
+  ok('the list travels as `<id>:<1|0>` pairs, which is what the engine parses',
+     /m\.id \+ ':' \+ \(m\.want \? '1' : '0'\)/.test(commit) && /\.join\(','\)/.test(commit));
+  ok('the budget is 90s, not the 20s a single-person save gets',
+     /timeoutMs: 90000, retries: 1/.test(commit));
+
+  /* THE PREVIEW AND THE CONFIRM ARE UNCHANGED. */
+  ok('the confirm still names what comes OFF, what goes ON, and the net',
+     /window\.confirm\([\s\S]{0,400}This takes ' \+ m0\(built\.lose\)[\s\S]{0,400}adds ' \+ m0\(built\.gain\)[\s\S]{0,300}Net change to payroll/.test(commit));
+  ok('a declined confirm still writes nothing', /\)\) return;/.test(commit));
+  ok('the confirm still comes BEFORE anything is sent',
+     commit.indexOf('window.confirm') < commit.indexOf('Engine.jsonp('));
+  ok('the button still carries the change count and the net figure',
+     /'Save ' \+ built\.change\.length \+ ' change'[\s\S]{0,120}esc\(m0\(built\.net\)\) \+ ' net'/.test(body));
+
+  /* PARTIAL RUNS ARE STILL REPORTED BY NAME. */
+  ok('whoever the engine says failed is named in the toast',
+     /\(r\.failed \|\| \[\]\)\.forEach/.test(commit) &&
+     /Saved ' \+ done \+ ' of ' \+ rows\.length \+ ' — failed: '/.test(commit));
+  ok('a request that never landed reports nobody as saved, rather than guessing',
+     /catch \(e\) \{[\s\S]{0,400}failed = \[[\s\S]{0,120}done = 0;/.test(commit));
+  ok('only the people the engine SAYS it saved are marked ticked locally',
+     /\(r\.saved \|\| \[\]\)\.forEach/.test(commit));
+  ok('a late replay adopts the period\'s inputs as they stand now, over the file',
+     /r\.already_applied && r\.now && r\.now\.inputs_by_id/.test(commit));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED' : '\nattendance import: all passed');
