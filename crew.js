@@ -5268,7 +5268,15 @@
       var params = { token: token() };
       if (ppStart) params.pp_start = ppStart;
       if (inc.approveToken && ppStart === inc.approvePp) params.approve_token = inc.approveToken;
-      var r = await Engine.jsonp('incentive', params, { timeoutMs: 45000, retries: 1 });
+      /* 90s, NOT 45s (2026-09-15, Sky hit "failed after 2 tries: jsonp timeout"). Measured that
+         morning: the route's own work was ~11s, but Apps Script held requests 15-37s before and
+         around running it, so the whole round trip landed at 25-48s — astride a 45s budget. A
+         timeout there does not detect a failure, it CAUSES one: the first attempt is abandoned just
+         before it answers, and the retry queues a second full computation behind the first.
+         The longer budget costs nothing on the case retries exist for: the second hop's HTML page
+         fires script.onerror instantly and is retried without spending any of it (gx-client.js).
+         The engine now returns `timings` (ms per stage) to tell its own time from the queue's. */
+      var r = await Engine.jsonp('incentive', params, { timeoutMs: 90000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not load');
       inc.data = r;
       inc.pp = r.pp_start || (r.payPeriod && r.payPeriod.start) || '';
