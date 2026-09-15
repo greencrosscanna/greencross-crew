@@ -2811,7 +2811,9 @@
              'tab. Nobody is paid, and the real period is untouched.</div>');
     }
 
-    h.push('<div class="crew-inc-band"><div class="crew-inc-head"><div class="crew-inc-headl">');
+    var gearHtml = incGearHtml(d);
+    h.push('<div class="crew-inc-band' + (gearHtml ? ' has-gear' : '') + '">' + gearHtml +
+           '<div class="crew-inc-head"><div class="crew-inc-headl">');
     h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive</span>' +
            '<span class="crew-inc-badge ' +
              (isPractice ? 'is-practice">Practice'
@@ -3113,6 +3115,20 @@
     return '';
   }
 
+  /* THE SETTINGS GEAR, top right of the header band (Sky, 2026-09-15: "move the settings gear to
+     the top right in the sub nav section"). It had sat last in the action row since 2026-08-28,
+     which put it in line with Approve, Print and Export — the steps of closing a period — and let it
+     wrap into the middle of them on a narrower window. The scheme is not a step in closing a
+     period; it is where the app is configured, so it goes where settings live: pinned to the
+     corner, whatever the row beside it is doing. Approver-only: Mike prepares a period, he does not
+     move the bar people are measured against. */
+  function incGearHtml(d) {
+    if (!d || !d.can_approve) return '';
+    return '<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
+           'title="Incentive settings — targets, tiers, bonus amounts and approval cover" ' +
+           'aria-label="Incentive settings">⚙</button>';
+  }
+
   function incHeadActions(d, isImported) {
     var wf = d.workflow || { status: 'draft' };
     var open = !!(d.payPeriod && d.payPeriod.current);
@@ -3178,15 +3194,6 @@
     if (d.can_edit) {
       h.push('<button type="button" class="gx-btn" id="incAtt" ' +
              'title="Import Mike\'s attendance bonus list for this period">Import attendance…</button>');
-    }
-    /* Last in the row, right of Export. Approver-only: Mike prepares a period, he does not move
-       the bar people are measured against. It sits with the actions rather than floating over the
-       table because the scheme is not something you do to this pay period — but it is still a
-       thing you reach for from here, and a control with no home ends up nowhere. */
-    if (d.can_approve) {
-      h.push('<button type="button" class="gx-btn crew-inc-gear" id="incGear" ' +
-             'title="Incentive settings — targets, tiers and bonus amounts" ' +
-             'aria-label="Incentive settings">⚙</button>');
     }
     /* BREAK GLASS — reopen a period that has already been approved.
        Approver-only, and last in the row on purpose: it is not part of the ordinary flow, it is the

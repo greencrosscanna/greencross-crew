@@ -30,7 +30,7 @@ const M = (function () {
   const cut = src.lastIndexOf(TAIL);
   src = src.slice(0, cut) +
         '\n; return { incBudTable, incMgrTable, incAdminTable, incCsvRows, incDiscPct,\n' +
-        '           incHeadActions, incMMDDYY, legalSortName, CAPSTONE_SECTIONS,\n' +
+        '           incHeadActions, incGearHtml, incMMDDYY, legalSortName, CAPSTONE_SECTIONS,\n' +
         '           incPeriodLabel, incFacts, INC_COLS, incGoal,\n' +
         '           incTrayHtml, incTrayRead, incDiscListHtml,\n' +
         '           calcBud, calcMgr, calcAdmin, inc };\n' + src.slice(cut);
@@ -267,11 +267,16 @@ const sky = headOf({ source: 'live', payPeriod: CLOSED, can_edit: true, can_appr
                      workflow: { status: 'draft' } });
 ok('the approver approves without sending it to themselves',
    sky.includes('id="incApprove"') && !sky.includes('id="incSend"'));
-/* The gear is LAST in the action row, right of Export — Sky, 2026-08-28. It used to float over the
-   table; a control with no home in the row ends up nowhere. */
-ok('the gear sits right of Export Payroll CSV',
-   sky.indexOf('id="incCsv"') > -1 && sky.indexOf('id="incGear"') > sky.indexOf('id="incCsv"'));
-ok('and only the approver gets one', !mike.includes('id="incGear"'));
+/* The gear left the action row for the top-right corner of the header band — Sky, 2026-09-15. It
+   is where the app is configured, not a step in closing a period. */
+ok('the gear is no longer in the action row', !sky.includes('id="incGear"'));
+ok('the header band renders it for the approver', M.incGearHtml({ can_approve: true }).includes('id="incGear"'));
+ok('and only the approver gets one', M.incGearHtml({ can_approve: false }) === '');
+{
+  const JS = require('fs').readFileSync(__dirname + '/../crew.js', 'utf8');
+  ok('the band puts the gear first, outside the head row',
+     /crew-inc-band' \+ \(gearHtml \? ' has-gear' : ''\) \+ '">' \+ gearHtml \+\s*'<div class="crew-inc-head">/.test(JS));
+}
 
 /* Pending: locked for the preparer, decidable for the approver. */
 const pendingMike = headOf({ source: 'live', payPeriod: CLOSED, can_edit: false, can_approve: false,

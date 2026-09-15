@@ -585,6 +585,12 @@
     .crew-inc-actions .gx-btn { padding: 8px 14px; border-radius: 7px; font-size: 12.5px; }
     .crew-inc-gear { width: 34px; height: 34px; padding: 0; display: flex;
       align-items: center; justify-content: center; font-size: 15px; }
+    /* Pinned to the band's top-right corner (2026-09-15), clear of the action row — which gets
+       the gear's width as right padding so a long row of steps wraps before it runs under it. */
+    .crew-inc-band { position: relative; }
+    .crew-inc-band > .crew-inc-gear { position: absolute; top: 14px; right: 22px; }
+    .crew-inc-band.has-gear > .crew-inc-head { padding-right: 46px; }
+    @media (max-width: 720px) { .crew-inc-band > .crew-inc-gear { right: 12px; } }
     .crew-inc-wait { font-size: 12.5px; color: var(--gx-text-mute); align-self: center; }
 
     /* Totals as tiles, the same shape the roster overview uses. */
@@ -1170,6 +1176,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.403"></script>
+  <script src="crew.js?v=1.404"></script>
 </body>
 </html>
