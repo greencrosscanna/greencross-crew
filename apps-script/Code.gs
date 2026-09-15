@@ -517,6 +517,13 @@ function route_(e) {
       // The approval loop: prepare -> send -> approve, or send back with a reason.
       case 'incentive_send':    return json_(incentiveSend_(p), p.callback);
       case 'incentive_return':  return json_(incentiveReturn_(p), p.callback);
+      // The approver marks themselves away (or back). Session, primary approver only.
+      case 'approver_away':     return json_(approverAwayRoute_(p), p.callback);
+      // Run the backup-approver escalation now. Deploy-secret. `force_pp` escalates one PRACTICE
+      // period regardless of how long it has waited — the only way to rehearse it without waiting.
+      case 'approval_escalate':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(escalateApprovals_({ force_pp: p.force_pp || '', dry: isTruthyFlag_(p.dry || '') }), p.callback);
       // Break glass: reopen an approved period. The APPROVER (or the deploy secret) — not any
       // editor — and it voids rather than deletes. See the header on incentiveUnapprove_.
       case 'incentive_unapprove': return json_(incentiveUnapprove_(p), p.callback);
@@ -3640,7 +3647,7 @@ function installNightlyScanUnsafe_(p) {
   var canMail = true;
   try { MailApp.getRemainingDailyQuota(); } catch (e) { canMail = false; }
 
-  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest', 'weeklyBackup']
+  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest', 'weeklyBackup', 'approvalEscalationSweep']
                          : ['nightlyDutchieScan', 'weeklyBackup'];
   var removed = 0;
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -3661,6 +3668,12 @@ function installNightlyScanUnsafe_(p) {
      failed Sunday copy is in Monday's email rather than discovered when somebody needs it. */
   ScriptApp.newTrigger('weeklyBackup').timeBased().onWeekDay(ScriptApp.WeekDay.SUNDAY)
     .atHour(3).inTimezone(STORE_TZ).create();
+  /* Every 15 minutes: a period waiting on the approver reaches the backup within 15 minutes of
+     crossing BACKUP_AFTER_MS. Only mails, so only installed where mail works — same rule as the
+     digest above. The sweep reads one small tab and is a no-op on almost every run. */
+  if (canMail) {
+    ScriptApp.newTrigger('approvalEscalationSweep').timeBased().everyMinutes(15).create();
+  }
   /* PROVE THE CRON PATH, NOW, WHILE SOMEBODY IS WATCHING.
    *
    * Installing a trigger and verifying the scan are two different claims, and the request that
@@ -5399,6 +5412,7 @@ function getIncentive_(p) {
     ph.to_date = incentiveToDate_(imported);
     ph.can_edit = false;
     ph.can_approve = canApprove_(auth);
+    ph.approval_cover = approvalCover_(auth, want);
     ph.inputs = inputsFor_(want);
     /* `source` STAYS 'imported', and this is the whole correction of 2026-09-09.
        It answers ONE question — where do these figures come from, a live computation or a frozen
@@ -5431,6 +5445,7 @@ function getIncentive_(p) {
        available here is the break glass — reopening it. Without this the button can never render on
        the very screen it exists for. */
     h.can_approve = canApprove_(auth);
+    h.approval_cover = approvalCover_(auth, want);
     /* ATTENDANCE IS NOT IN HISTORY_HEADERS, and the inputs tab is the only record of it. Nothing
        anywhere deletes from that tab — checked every deleteRow/deleteRows in this file — so the
        ticks for a period Crew approved are still there, and the closed screen can show WHO earned
@@ -5519,6 +5534,11 @@ function getIncentive_(p) {
                     voided: /^VOIDED:/.test(String(wf.note || '')) };
   mark('workflow');
   live.can_approve = canApprove_(auth);
+  /* `can_approve` stays the PRIMARY approver only — it gates the settings tray, reopening, voided
+     figures and payroll overrides, none of which the backup covers. `can_decide` is the narrower
+     question the Approve and Send back buttons ask: may this person decide THIS period, now. */
+  live.approval_cover = approvalCover_(auth, live.payPeriod.start);
+  live.can_decide = live.approval_cover.can_decide;
   /* Locked while pending — for everyone, including the approver. Sky editing a figure he is about
      to approve is the same problem as Mike editing one he already sent. */
   live.can_edit = canEdit_(auth) && wf.status !== 'pending';
@@ -5928,14 +5948,16 @@ function incentiveApprove_(p) {
      Nothing above the confirm split writes anything, and the figures a dry run returns are the
      same ones already on the preparer's screen, so there is nothing here to withhold from him.
      Approving — the immutable write — is still approver-only, one line down. */
-  if (String(p.confirm || '') === 'yes' && !canApprove_(auth)) {
-    return { ok: false, error: approverIds_().length
-      ? 'only the named approver can approve — use “Send for approval” instead'
-      : noApproverError_() };
-  }
-
   var pp = String(p.pp_start || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
+  /* PER PERIOD since the backup approver (2026-09-15): whether the backup may decide depends on
+     THIS period — how long it has waited — so the gate needs `pp` and sits below it. */
+  var decider = String(p.confirm || '') === 'yes' ? canDecide_(auth, pp) : null;
+  if (decider && !decider.ok) {
+    return { ok: false, error: decider.error || (approverIds_().length
+      ? 'only the named approver can approve — use “Send for approval” instead'
+      : noApproverError_()) };
+  }
   /* The request id matters only on the WRITE. A dry run changes nothing, so it is neither checked
      nor recorded — and incentiveSend_ calls this as its dry run with no id at all. */
   var rq = String(p.confirm || '') === 'yes' ? payReqId_(p) : { id: '' };
@@ -6204,6 +6226,12 @@ function incentiveApprove_(p) {
   var notified = notifyApproved_(pp, String(live.payPeriod.end || ''), wfAtApprove, by,
                                  rows.filter(function (r) { return (Number(r[14]) || 0) > 0; }).length,
                                  Math.round(total * 100) / 100, overrides, pdf);
+  /* A BACKUP DECIDED, SO THE APPROVER HEARS ABOUT IT — nothing is approved behind Sky's back. */
+  if (decider && decider.as === 'backup') {
+    notified.primary = notifyPrimaryOfBackup_(pp, by, 'approved', decider.why,
+                                              wfMoney_(Math.round(total * 100) / 100) + ' to ' +
+                                              rows.filter(function (r) { return (Number(r[14]) || 0) > 0; }).length + ' people');
+  }
   var approved = { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
            thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup,
@@ -7246,6 +7274,251 @@ function canApprove_(auth) {
   return approverIds_().indexOf(me) >= 0;
 }
 
+/* ══ The backup approver (Sky, 2026-09-15) ══════════════════════════════════════════════════════
+ *
+ * "Shawn as backup, but I don't want him getting the email unless he's needed." And then, the same
+ * day: "Shawn is not locked out on the approval … if I forget to change the setting that I'm away,
+ * and Mike does payroll, he can ping Shawn and ask him to approve rather than having to wait 4
+ * hours. Shawn is authorized to approve this and I don't want to be the bottleneck."
+ *
+ * So the backup may ALWAYS approve or send back. What is on standby is his INBOX — he is emailed
+ * only while one of two things is true:
+ *
+ *   away     the approver switched "I'm away" on (script property, set from the settings tray).
+ *   waiting  the period has been PENDING longer than BACKUP_AFTER_MS since it was sent — the case a
+ *            switch cannot cover, because nobody flips a switch on the day they are unreachable.
+ *
+ * The first cut also refused his Approve outside that window. Sky reversed it: a lock that makes
+ * Mike wait four hours for somebody who is standing right there is the bottleneck, not a control.
+ * The control that remains is that the approver hears about every decision the backup makes.
+ *
+ * `canApprove_` is deliberately untouched: it still means the PRIMARY, and it still gates the
+ * settings, reopening, voided figures and payroll overrides. The backup covers the decision on a
+ * period, not the approver's whole job.
+ *
+ * WHO: GX Core kv `cfg.crewBackupApprover` (user_ids, comma-separated), beside `cfg.crewApprover`.
+ * Somebody named in both is the primary. Unset means no backup, and nothing here does anything.
+ *
+ * The approver is ALWAYS told when the backup is brought in by the clock, and whenever the backup
+ * decides anything — notifyPrimaryOfBackup_. */
+var BACKUP_AFTER_MS = 4 * 60 * 60 * 1000;          // Sky: "4 hours is fine"
+var APPROVER_AWAY_PROP = 'CREW_APPROVER_AWAY';
+var ESCALATED_PROP = 'CREW_APPROVAL_ESCALATED';
+
+function backupApproverIds_() {
+  var raw = '';
+  try { raw = String(GXCore.getKv('cfg.crewBackupApprover') || ''); } catch (e) { return []; }
+  var primary = approverIds_();
+  return raw.split(',').map(function (x) { return x.trim().toLowerCase(); })
+            .filter(function (x) { return !!x && primary.indexOf(x) < 0; });
+}
+
+function approverAway_() {
+  try {
+    var v = PropertiesService.getScriptProperties().getProperty(APPROVER_AWAY_PROP);
+    var o = v ? JSON.parse(v) : null;
+    if (o && o.on) return { on: true, by: String(o.by || ''), since: String(o.since || '') };
+  } catch (e) {}
+  return { on: false, by: '', since: '' };
+}
+
+/* Is the backup live for this period, and why. Reads the away switch, then the period's own
+   workflow row. A period that is not pending has nobody waiting on a decision. */
+function backupWindow_(pp, wf) {
+  var away = approverAway_();
+  if (away.on) return { active: true, why: 'away', since: away.since };
+  if (!pp) return { active: false, why: '' };
+  if (wf === undefined) { try { wf = wfGet_(pp); } catch (e) { wf = null; } }
+  if (!wf || wf.status !== 'pending' || !wf.sent_at) return { active: false, why: '' };
+  var t = new Date(wf.sent_at).getTime();
+  if (!isFinite(t)) return { active: false, why: '' };
+  var due = t + BACKUP_AFTER_MS;
+  if (Date.now() >= due) return { active: true, why: 'waiting', since: new Date(due).toISOString() };
+  return { active: false, why: '', backup_at: new Date(due).toISOString() };
+}
+
+/* May this person decide (approve / send back) THIS period? The primary and the backup, always.
+   `why` records whether cover was on at the time — away, waiting, or '' (asked directly) — so the
+   approver's notice can say which. */
+function canDecide_(auth, pp) {
+  if (canApprove_(auth)) return { ok: true, as: 'primary' };
+  var me = String((auth && auth.user) || '').trim().toLowerCase();
+  if (!me || backupApproverIds_().indexOf(me) < 0) return { ok: false };
+  var w = backupWindow_(pp);
+  return { ok: true, as: 'backup', why: w.active ? w.why : '' };
+}
+
+/* What the screen needs: whether this viewer may decide the period, who the backup is, and whether
+   cover is on. Names are user_ids, which `cfg.crewApprover` already publishes. */
+function approvalCover_(auth, pp) {
+  var d = { can_decide: false, as: '', backup: [], away: approverAway_(), backup_active: false, why: '' };
+  try {
+    d.backup = backupApproverIds_();
+    var c = canDecide_(auth, pp);
+    d.can_decide = !!c.ok; d.as = c.as || '';
+    if (d.backup.length) { var w = backupWindow_(pp); d.backup_active = w.active; d.why = w.why || ''; d.backup_at = w.backup_at || ''; }
+  } catch (e) { d.error = String((e && e.message) || e); }
+  return d;
+}
+
+function wfBackupEmails_() {
+  var want = backupApproverIds_();
+  if (!want.length) return [];
+  var out = [];
+  var rows = [];
+  try { rows = rosterJoin_().rows || []; } catch (e) {}
+  want.forEach(function (uid) {
+    var addr = '';
+    rows.forEach(function (r) { if (!addr && String(r.user_id || '').trim().toLowerCase() === uid) addr = accountEmail_(r); });
+    out.push(addr || (uid.indexOf('@') > 0 ? uid : uid + '@' + ACCOUNT_DOMAIN));
+  });
+  return out.filter(function (e) { return /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(e); });
+}
+
+/* ?action=approver_away&on=yes|no — the approver only. Turning it ON runs the sweep at once, so a
+   period that is already waiting reaches the backup now rather than at the next 15-minute tick. */
+function approverAwayRoute_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canApprove_(auth)) return { ok: false, error: 'only the approver can mark themselves away' };
+  if (p.on === undefined || p.on === null || String(p.on) === '') {
+    return { ok: true, away: approverAway_(), backup: backupApproverIds_() };
+  }
+  var on = isTruthyFlag_(p.on);
+  var props = PropertiesService.getScriptProperties();
+  if (on) {
+    if (!backupApproverIds_().length) {
+      return { ok: false, error: 'no backup approver is set — add cfg.crewBackupApprover in the Command Center first' };
+    }
+    props.setProperty(APPROVER_AWAY_PROP, JSON.stringify({ on: true, by: auth.user || '', since: new Date().toISOString() }));
+  } else {
+    props.deleteProperty(APPROVER_AWAY_PROP);
+  }
+  var out = { ok: true, away: approverAway_(), backup: backupApproverIds_() };
+  if (on) out.sweep = escalateApprovals_({});
+  return out;
+}
+
+/* Has the backup already been sent THIS send of THIS period? Keyed on `sent_at`, so a period that
+   is sent back and sent again is a new request and escalates again. Pruned to 60 entries. */
+function escalationSeen_(pp, sentAt) {
+  try {
+    var m = JSON.parse(PropertiesService.getScriptProperties().getProperty(ESCALATED_PROP) || '{}');
+    return m[pp + '|' + sentAt] || null;
+  } catch (e) { return null; }
+}
+function escalationMark_(pp, sentAt, why) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var m = JSON.parse(props.getProperty(ESCALATED_PROP) || '{}');
+    m[pp + '|' + sentAt] = { why: why, at: new Date().toISOString() };
+    var keys = Object.keys(m);
+    if (keys.length > 60) keys.sort(function (a, b) { return String(m[a].at).localeCompare(String(m[b].at)); })
+                              .slice(0, keys.length - 60).forEach(function (k) { delete m[k]; });
+    props.setProperty(ESCALATED_PROP, JSON.stringify(m));
+  } catch (e) {}
+}
+
+/** Time trigger entry point (every 15 minutes). */
+function approvalEscalationSweep() {
+  var out = escalateApprovals_({});
+  Logger.log(JSON.stringify(out));
+  return out;
+}
+
+/* THE SWEEP. Every pending REAL period whose backup window is open, and whose current send has not
+   already reached the backup, gets the backup email. Practice periods are swept only when named in
+   `force_pp` — a rehearsal left pending over a weekend must not page Shawn. Mail failures are
+   reported, not thrown, and an unmailed period is not marked, so the next tick tries again. */
+function escalateApprovals_(o) {
+  o = o || {};
+  var out = { ok: true, backup: [], escalated: [], skipped: [], errors: [] };
+  out.backup = backupApproverIds_();
+  if (!out.backup.length) { out.note = 'no backup approver set'; return out; }
+  var force = String(o.force_pp || '').trim();
+  if (force && !isPracticePeriod_(force)) {
+    return { ok: false, error: 'force_pp only takes a practice period — a real period escalates on its own clock' };
+  }
+  var rows;
+  try {
+    rows = readTab_(incTab_(WF_TAB, ''), WF_HEADERS);
+    if (force) rows = rows.concat(readTab_(incTab_(WF_TAB, force), WF_HEADERS).filter(function (r) { return r.pp_start === force; }));
+  } catch (e) { return { ok: false, error: 'could not read the workflow tab: ' + String((e && e.message) || e) }; }
+  var to = null;
+  rows.forEach(function (wf) {
+    if (wf.status !== 'pending' || !wf.sent_at) return;
+    var forced = force && wf.pp_start === force;
+    var w = forced ? { active: true, why: 'waiting' } : backupWindow_(wf.pp_start, wf);
+    if (!w.active) { out.skipped.push({ pp_start: wf.pp_start, why: 'not yet', backup_at: w.backup_at || '' }); return; }
+    if (escalationSeen_(wf.pp_start, wf.sent_at)) { out.skipped.push({ pp_start: wf.pp_start, why: 'already sent to the backup' }); return; }
+    if (o.dry) { out.escalated.push({ pp_start: wf.pp_start, why: w.why, dry_run: true }); return; }
+    if (to === null) to = wfBackupEmails_();
+    if (!to.length) { out.errors.push({ pp_start: wf.pp_start, error: 'no usable address for the backup' }); return; }
+    try {
+      var isPrac = isPracticePeriod_(wf.pp_start);
+      MailApp.sendEmail({ to: to.join(','), name: 'GX Crew',
+        subject: (isPrac ? '[PRACTICE] ' : '') + 'Backup approval needed — incentive ' +
+                 (isPrac ? practiceSource_(wf.pp_start) : wf.pp_start),
+        htmlBody: wfBackupEmail_(wf, w.why) });
+      escalationMark_(wf.pp_start, wf.sent_at, w.why);
+      var tell = w.why === 'waiting'
+        ? notifyPrimaryOfBackup_(wf.pp_start, out.backup.join(', '), 'was brought in', 'waiting', '')
+        : { skipped: 'the approver turned cover on' };
+      out.escalated.push({ pp_start: wf.pp_start, why: w.why, to: to, primary: tell });
+    } catch (e) {
+      out.errors.push({ pp_start: wf.pp_start, error: String((e && e.message) || e) });
+    }
+  });
+  if (out.errors.length) out.ok = false;
+  return out;
+}
+
+function wfBackupEmail_(wf, why) {
+  var pp = wf.pp_start, isPrac = isPracticePeriod_(pp);
+  var esc = function (x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
+  var reason = why === 'away'
+    ? 'The approver has marked themselves away, so you are covering.'
+    : 'It has waited more than ' + (BACKUP_AFTER_MS / 3600000) + ' hours without a decision, so it has come to you as backup.';
+  var link = CREW_URL + '#' + (wf.token ? 'approve/' + encodeURIComponent(pp) + '/' + wf.token
+                                        : 'incentive/' + encodeURIComponent(pp));
+  return '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px">' +
+    (isPrac ? '<div style="margin:0 0 14px;padding:10px 14px;border:2px solid #000;font-weight:700">' +
+      'PRACTICE PAY PERIOD — a rehearsal. Nobody is paid from this.</div>' : '') +
+    '<h2 style="margin:0 0 4px">Backup approval needed</h2>' +
+    '<p style="margin:0 0 12px;color:#555">Pay period <strong>' + esc(isPrac ? practiceSource_(pp) : pp) +
+      '</strong>, sent by ' + esc(wf.sent_by || 'the preparer') + (wf.sent_total ? ' — ' + wfMoney_(wf.sent_total) : '') + '.</p>' +
+    '<p style="margin:0 0 12px">' + esc(reason) + '</p>' +
+    '<p style="margin:0 0 16px">Review the figures in Crew, then Approve or Send back. The approver is told either way.</p>' +
+    '<p><a href="' + link + '" style="display:inline-block;padding:10px 16px;background:#3a7d44;color:#fff;' +
+      'text-decoration:none;border-radius:6px">Open it in GX Crew</a></p></div>';
+}
+
+/* The approver hears whenever the backup is involved — brought in by the clock, or deciding. Never
+   throws; a failed mail is returned so the caller can show it. */
+function notifyPrimaryOfBackup_(pp, who, what, why, detail) {
+  try {
+    var to = wfApproverEmails_();
+    if (!to.length) return { to: [], skipped: 'no approver address' };
+    var isPrac = isPracticePeriod_(pp);
+    var label = isPrac ? practiceSource_(pp) : pp;
+    var esc = function (x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
+    var line = what === 'was brought in'
+      ? 'It had waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours for your decision, so it was sent to the backup approver (' + esc(who) + ').'
+      : esc(who) + ' ' + esc(what) + ' it as backup approver' +
+        (why === 'away' ? ' while you were marked away.'
+         : why === 'waiting' ? ' after it waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours.' : '.');
+    MailApp.sendEmail({ to: to.join(','), name: 'GX Crew',
+      subject: (isPrac ? '[PRACTICE] ' : '') + 'Backup ' + (what === 'was brought in' ? 'called in' : what) + ' — incentive ' + label,
+      htmlBody: '<div style="font-family:system-ui,sans-serif;max-width:520px">' +
+        '<p style="margin:0 0 12px">Pay period <strong>' + esc(label) + '</strong>: ' + line + '</p>' +
+        (detail ? '<blockquote style="margin:0 0 16px;padding:10px 14px;background:#f5f5f5;border-left:3px solid #999">' + esc(detail) + '</blockquote>' : '') +
+        '<p><a href="' + CREW_URL + '#incentive/' + encodeURIComponent(pp) + '">Open in GX Crew</a></p></div>' });
+    return { to: to };
+  } catch (e) {
+    return { to: [], error: String((e && e.message) || e) };
+  }
+}
+
 /** Addresses for the approvers, from the same one source of truth. */
 function wfApproverEmails_() {
   var want = approverIds_();
@@ -7995,6 +8268,12 @@ function incentiveSend_(p) {
   var to = preview
     ? String(p.to || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean)
     : wfApproverEmails_();
+  /* SKY IS AWAY: the backup is told now, not four hours from now. Recorded against this send's
+     `sent_at` so the escalation sweep does not mail him the same period a second time. */
+  var _awayCover = !preview && approverAway_().on;
+  if (_awayCover) {
+    wfBackupEmails_().forEach(function (e) { if (to.indexOf(e) < 0) to.push(e); });
+  }
   /* The preview echoes the SAME blocks the approval dry run returns. Returning only totals is what
      made this route quietly useless: it could not have told anyone that vendor money was missing,
      that a program was unpayable, or that the period was still open. */
@@ -8037,6 +8316,7 @@ function incentiveSend_(p) {
         subject: (isPracticePeriod_(pp) ? '[PRACTICE] ' : '') + (preview ? '[PREVIEW] ' : '') +
                  'Approve incentive — ' + (isPracticePeriod_(pp) ? practiceSource_(pp) : pp) });
       mailed = to;
+      if (_awayCover) { var _w = wfGet_(pp); if (_w) escalationMark_(pp, _w.sent_at, 'away'); }
     } catch (e) {
       /* A SEND THAT REACHED NOBODY IS NOT A SEND, so it must not leave the period `pending`.
          This used to argue the opposite — "the state is already pending, which is correct — it WAS
@@ -8199,10 +8479,11 @@ function wfApprovalEmail_(pp, pre, sender, token, preview) {
 function incentiveReturn_(p) {
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
-  if (!canApprove_(auth)) return { ok: false, error: 'only the named approver can send a period back' };
   var pp = String(p.pp_start || '').trim();
   var note = String(p.note || '').trim();
   if (!pp) return { ok: false, error: 'pp_start required' };
+  var decider = canDecide_(auth, pp);
+  if (!decider.ok) return { ok: false, error: decider.error || 'only the named approver can send a period back' };
   /* A reason is required. "Sent back" with no note is a period that bounces again for the same
      thing, and the person fixing it has to guess what was wrong. */
   if (!note) return { ok: false, error: 'a reason is required — it is what the sender has to work from' };
@@ -8251,6 +8532,9 @@ function incentiveReturn_(p) {
     } catch (e) { /* the state change is what matters; a failed nudge is not a failed return */ }
   }
   var returned = { ok: true, pp_start: pp, status: 'draft', returned_to: wf.sent_by, note: note, mailed: to };
+  if (decider.as === 'backup') {
+    returned.primary = notifyPrimaryOfBackup_(pp, auth.user, 'sent back', decider.why, note);
+  }
   payReqUpdate_(rq, rqRow, 'incentive_return', returned);
   return returned;
 }

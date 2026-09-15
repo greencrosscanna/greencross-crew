@@ -3077,6 +3077,30 @@
            (gate.ok ? '' : ' disabled title="' + esc(gate.why) + '"') + '>' + label + '</button>';
   }
 
+  /* May this viewer DECIDE this period (Approve / Send back)? `can_decide` includes the backup
+     approver while cover is live; an engine that predates it sends only `can_approve`. */
+  function incCanDecide(d) { return d.can_decide === undefined ? !!d.can_approve : !!d.can_decide; }
+
+  /* The approver-cover banners (2026-09-15). Gold: a person's arrangement, not an error. */
+  function incCoverBanner(d) {
+    var c = d.approval_cover;
+    if (!c || !c.backup || !c.backup.length) return '';
+    var who = c.backup.join(', ');
+    if (d.can_approve && c.away && c.away.on) {
+      return '<div class="crew-inc-returned crew-inc-glassnote"><strong>You are marked away.</strong> ' +
+             'Periods sent for approval go straight to ' + esc(who) + ' until you switch it off. You are emailed ' +
+             'whatever the backup decides. <button type="button" class="crew-inc-glasslink" id="incBack">' +
+             'I’m back</button></div>';
+    }
+    if (c.as === 'backup' && c.can_decide) {
+      return '<div class="crew-inc-returned crew-inc-glassnote"><strong>You are the backup approver</strong>' +
+             (c.why === 'away' ? ' — the approver is marked away.'
+              : c.why === 'waiting' ? ' — this period has waited more than 4 hours for a decision.' : '.') +
+             ' The approver is emailed whatever you decide.</div>';
+    }
+    return '';
+  }
+
   function incHeadActions(d, isImported) {
     var wf = d.workflow || { status: 'draft' };
     var open = !!(d.payPeriod && d.payPeriod.current);
@@ -3088,19 +3112,22 @@
     if (closed && wf.status === 'pending') {
       /* Waiting on the approver. The preparer sees who and when, and no action — the inputs are
          locked server-side too, so there is nothing here that would half-work. */
-      if (d.can_approve) {
+      if (incCanDecide(d)) {
         h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">' +
                esc(INC_APPROVE_LABEL) + '</button>');
         h.push('<button type="button" class="gx-btn" id="incReturn">Send back…</button>');
       } else {
+        var cv = d.approval_cover || {};
         h.push('<span class="crew-inc-wait">Sent to the approver' +
-               (wf.sent_at ? ' ' + esc(wf.sent_at.slice(0, 10)) : '') + ' — locked until they decide</span>');
+               (wf.sent_at ? ' ' + esc(wf.sent_at.slice(0, 10)) : '') + ' — locked until they decide' +
+               (cv.backup && cv.backup.length
+                  ? ' (the backup, ' + esc(cv.backup.join(', ')) + ', can decide too)' : '') + '</span>');
         said = true;   // this already explains the grey buttons; a second line would only repeat it
       }
     } else if (closed) {
       /* Ready to go up. The approver gets to approve directly — making Sky email himself would be
-         ceremony, not a control. */
-      if (d.can_approve) {
+         ceremony, not a control. The backup does too, while covering. */
+      if (incCanDecide(d)) {
         h.push('<button type="button" class="gx-btn gx-btn-green" id="incApprove">' +
                esc(INC_APPROVE_LABEL) + '</button>');
       } else {
@@ -3195,6 +3222,7 @@
        were mis-attributed — the reader needs to see it once and recognise it, rather than find two
        bonuses for one person while checking something else. Gold, not red: a thing to notice, not
        a thing that is wrong. */
+    h.push(incCoverBanner(d));
     if (d.dual_role && d.dual_role.length) {
       h.push('<div class="crew-inc-returned crew-inc-dual"><strong>Also worked the floor:</strong> ' +
              esc(d.dual_role.map(function (x) {
@@ -3699,6 +3727,8 @@
     if (pr) pr.addEventListener('click', function () { incPracticeReset(d); });
     var vd = host.querySelector('#incVoided');
     if (vd) vd.addEventListener('click', function () { incVoidedPanel(d); });
+    var bk = host.querySelector('#incBack');
+    if (bk) bk.addEventListener('click', function () { incSetAway(false, bk); });
     /* Wired BEFORE the `if (!editable) return` below, like the other approver controls: the pencil
        only renders when can_approve && can_edit, so the render decides who sees it and this just
        connects what is there. */
@@ -4232,6 +4262,46 @@
      SAYS IT IS rather than from where it sits. The engine still validates the result. */
   function gstr_(v) { return (Math.round(v * 10) / 10).toString(); }
 
+  /* Switch approver cover on or off. Immediate, not part of the tray's Save — it is not a threshold,
+     and a switch that only takes effect after "Save & recalculate" is one somebody leaves half-set. */
+  async function incSetAway(on, ctl) {
+    if (ctl) ctl.disabled = true;
+    try {
+      var r = await Engine.jsonp('approver_away', { token: token(), on: on ? 'yes' : 'no' },
+                                 { timeoutMs: 45000, retries: 1 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'could not change it');
+      var sent = (r.sweep && r.sweep.escalated || []).length;
+      toast(on ? 'Marked away — periods sent for approval go straight to ' + (r.backup || []).join(', ') +
+                 (sent ? '; sent ' + sent + ' waiting period' + (sent === 1 ? '' : 's') + ' to them now' : '')
+               : 'Welcome back — the backup is on standby again');
+      await loadIncentive(inc.pp);
+      return true;
+    } catch (e) {
+      toast('Could not change it: ' + ((e && e.message) || 'unknown'), true);
+      if (ctl && ctl.type === 'checkbox') ctl.checked = !on;
+      return false;
+    } finally {
+      if (ctl) ctl.disabled = false;
+    }
+  }
+
+  function incCoverTrayHtml(c) {
+    if (!c) return '';
+    var backup = (c.backup || []).join(', ');
+    return '<section class="ist-sec">' +
+        '<div class="ist-seclabel">Approval cover</div>' +
+        (backup
+          ? '<label class="ist-goalrow" style="cursor:pointer"><span class="ist-goallabel">I’m away — let ' +
+              esc(backup) + ' approve</span><input type="checkbox" id="istAway"' +
+              (c.away && c.away.on ? ' checked' : '') + '></label>' +
+            '<p class="ist-sub">' + esc(backup) + ' can approve at any time. This only decides when they are ' +
+              'EMAILED: while it is on, every period sent for approval goes to them straight away; while ' +
+              'it is off, only a period that has waited 4 hours does. You are emailed whenever the backup ' +
+              'is brought in or decides.</p>'
+          : '<p class="ist-sub">No backup approver is set (cfg.crewBackupApprover in the Command Center).</p>') +
+      '</section>';
+  }
+
   function incTrayHtml(T) {
     var B = T.budtender, M = T.manager, A = T.admin;
     var goal = Number(B.discountMaxPct) || 0;
@@ -4259,6 +4329,7 @@
     return '<div class="inc-tray-head"><span>Incentive Settings</span>' +
         '<button class="inc-tray-x" id="incTrayClose" title="Close">✕</button></div>' +
       '<div class="ist-body">' +
+      incCoverTrayHtml(T.__cover) +
 
       '<section class="ist-sec ist-sec-t">' +
         '<div class="ist-seclabel">Discount target</div>' +
@@ -4393,7 +4464,11 @@
 
     var back = el('div', 'inc-tray-back'); back.id = 'incTrayBack';
     var tray = el('aside', 'inc-tray ist-tray'); tray.id = 'incTray';
-    tray.innerHTML = incTrayHtml(T);
+    /* Passed alongside, never saved: incTrayRead reads inputs by data-thr path, and the cover
+       switch carries none, so it cannot leak into the thresholds that get written. */
+    tray.innerHTML = incTrayHtml(Object.assign({}, T, { __cover: d.approval_cover }));
+    var awayCb = tray.querySelector('#istAway');
+    if (awayCb) awayCb.addEventListener('change', function () { incSetAway(awayCb.checked, awayCb); });
     document.body.appendChild(back);
     document.body.appendChild(tray);
     /* Next frame, so the transform transition actually runs rather than the tray appearing. */

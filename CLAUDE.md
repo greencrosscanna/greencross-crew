@@ -779,6 +779,34 @@ Email links carry a single-use 72-hour token bound to the period **and the total
 
 `?action=incentive_send&preview=1&secret=…&to=…` dry-runs the email with no state change.
 
+### The backup approver — always allowed, emailed only when needed (2026-09-15)
+
+Sky: *"Shawn as backup, but I don't want him getting the email unless he's needed."* The backup is
+named in GX Core kv **`cfg.crewBackupApprover`** (`shawn`), beside `cfg.crewApprover`.
+
+**Shawn may approve or send back ANY time.** The first cut refused him outside a window; Sky
+reversed it the same day: *"if I forget to change the setting that I'm away, and Mike does payroll,
+he can ping Shawn … Shawn is authorized to approve this and I don't want to be the bottleneck."*
+**What waits is his inbox** — he is emailed only while:
+
+- **away** — Sky switched *I'm away* on (settings tray, `approver_away`; a script property). A send
+  while away mails Shawn at once, and switching it on sweeps anything already waiting.
+- **waiting** — the period has been `pending` **4 hours** since `sent_at` (`BACKUP_AFTER_MS`). The
+  `approvalEscalationSweep` trigger (every 15 min, installed by `install_triggers`) mails him once
+  per send, keyed `pp|sent_at` in a script property, so a re-send re-arms the clock.
+
+**Sky is emailed whenever the clock brings Shawn in, and whenever Shawn decides anything** — that
+notice is the control that replaced the lock, so do not drop it as noise.
+
+- **`canApprove_` still means the PRIMARY** and still gates the tray, reopening, voided figures and
+  payroll overrides. `canDecide_(auth, pp)` (primary or backup) is what approve/return use; the
+  screen gets `can_decide`. The preparer is still not an approver unless named.
+- **Practice periods never escalate on the clock** — a rehearsal left pending must not page Shawn.
+  `?action=approval_escalate&force_pp=practice-…` (deploy-secret) forces one, and refuses a real period.
+- Shawn's Crew grant is `editor`: approving needs edit rights, so he can also edit the roster.
+
+Pinned by `tests/backup_approver_test.js` (real routes through the pay harness).
+
 ### Two copies of one pay write at once — `withPayLock_` (2026-09-14)
 
 The guards above ("already a closed record", "already sent for approval") stop a **replay that

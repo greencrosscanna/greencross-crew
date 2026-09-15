@@ -47,14 +47,19 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
               'incTab_', 'isPracticePeriod_', 'wfSheet_', 'wfGet_', 'wfSet_', 'wfUnsend_',
               'freezeScheme_', 'schemeFor_', 'sheetOf_', 'readTab_', 'isTruthyFlag_', 'normDate_', 'pad2_',
               'incPayroll_', 'notifyApproved_', 'wfApprovedEmail_',
+              /* The backup approver (2026-09-15). */
+              'backupApproverIds_', 'approverAway_', 'backupWindow_', 'canDecide_', 'approvalCover_',
+              'wfBackupEmails_', 'approverAwayRoute_', 'escalationSeen_', 'escalationMark_',
+              'escalateApprovals_', 'wfBackupEmail_', 'notifyPrimaryOfBackup_',
               /* One-time request ids (2026-09-14). Optional, so CODE_GS can point at the engine from
                  before they existed and the request-id test can be seen to fail there. */
               'payReqId_', 'payReqCompact_', 'payReqReplay_', 'payReqCached_', 'payReqSeen_',
               'payReqRecord_', 'payReqUpdate_', 'payReqCache_', 'payReqNow_'];
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
-const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT'];
-const OPTIONAL = /Locked_|upsert|^payReq|Approved_$/;
+const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT',
+                       'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP'];
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
@@ -62,7 +67,7 @@ const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
 
 /* ── One fresh engine per scenario: real state machine, fake spreadsheet, fake lock ──────────── */
 function engine() {
-  const E = { mails: [], pdfs: 0, backups: 0, events: [], hook: null, user: 'sky' };
+  const E = { mails: [], pdfs: 0, backups: 0, events: [], hook: null, user: 'sky', props: {}, kv: {}, primary: null };
 
   const sheets = Object.create(null);
   function makeSheet(name) {
@@ -141,7 +146,14 @@ function engine() {
     function crewSheet_() { return { getParent: function () { return SS; } }; }
     function requireCrew_() { return { ok: true, user: E.user, role: 'admin' }; }
     function canEdit_() { return true; }
-    function canApprove_() { return true; }
+    /* E.primary unset = everyone is the approver (what every older test assumes). Set it and only
+       that user is — which is what the backup-approver test needs. */
+    function canApprove_(auth) { return E.primary == null ? true : String((auth && auth.user) || '') === E.primary; }
+    var GXCore = { getKv: function (k) { return (E.kv || {})[k] || ''; } };
+    var PropertiesService = { getScriptProperties: function () { return {
+      getProperty: function (k) { return E.props[k] == null ? null : E.props[k]; },
+      setProperty: function (k, v) { E.props[k] = String(v); },
+      deleteProperty: function (k) { delete E.props[k]; } }; } };
     function approverIds_() { return ['sky']; }
     function noApproverError_() { return 'no approver'; }
     function deploySecretOk_() { return false; }
@@ -174,6 +186,9 @@ function engine() {
   const body = stubs + VARS.map(varSrc).join('\n') + '\n' + OPTIONAL_VARS.map(varSrcOpt).join('\n') + '\n' +
     REAL.map(n => fnSrc(n, OPTIONAL.test(n))).join('\n') + '\n' + fnSrc('withPayLock_', true) + '\n' +
     'return { approve: incentiveApprove_, send: incentiveSend_, ret: incentiveReturn_, ' +
+    'away: typeof approverAwayRoute_ === "function" ? approverAwayRoute_ : null, ' +
+    'escalate: typeof escalateApprovals_ === "function" ? escalateApprovals_ : null, ' +
+    'cover: typeof approvalCover_ === "function" ? approvalCover_ : null, ' +
     'unapprove: incentiveUnapprove_, save: saveIncentiveInput_, inputsFor: inputsFor_, ' +
     'wfSet: wfSet_, wfGet: wfGet_, historySheet: historySheet_, ' +
     'withPayLock: typeof withPayLock_ === "function" ? withPayLock_ : null };';
