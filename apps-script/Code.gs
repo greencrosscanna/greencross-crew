@@ -5222,12 +5222,19 @@ function defaultIncentivePeriod_(importedBy) {
 }
 
 function getIncentive_(p) {
+  /* STAGE TIMINGS, returned on the live payload as `timings` (ms). The live load runs close to the
+     browser's 45s JSONP timeout (2026-09-15: 42s measured, and Sky hit the timeout), and a number
+     per stage is the only way to tell GX Core being slow from Crew being slow without guessing. */
+  var T0 = Date.now(), tLast = T0, timings = {};
+  var mark = function (k) { var n = Date.now(); timings[k] = n - tLast; tLast = n; };
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  mark('auth');
 
   var imported = historyPeriods_();
   var importedBy = Object.create(null);
   imported.forEach(function (h) { importedBy[h.pp_start] = h; });
+  mark('history');
 
   var want = String(p.pp_start || '');
 
@@ -5314,7 +5321,8 @@ function getIncentive_(p) {
   /* Shared with both write paths — the fetch (with the practice window split), the stamp and the
      floater fold. See `perfForWrite_`. The screen is not a write path, but it is the thing the
      approver LOOKS at, so it must be shaped by the same code that shapes what gets frozen. */
-  var live = perfForWrite_(want);
+  var live = perfForWrite_(want, timings);
+  tLast = Date.now();
   if (live.ok === false) return live;
   live.source = 'live';
   /* GX Core is the source of truth for the scheme. Leaderboard sends its own read of the same kv
@@ -5330,6 +5338,7 @@ function getIncentive_(p) {
                  + 'read from there and no longer travels in the performance payload.' };
   }
   live.thresholds = coreT.thresholds;
+  mark('thresholds');
   /* The stamp and the floater fold already ran inside `perfForWrite_`, in that order and for the
      reasons recorded there: an input is keyed on employee_id and SPIFF folds onto whichever rows
      exist, so merging afterwards would mean deciding which of two rows kept the attendance tick
@@ -5342,6 +5351,7 @@ function getIncentive_(p) {
      refusal lives on the two paths that write. Also runs after the fold: a floater is booked to
      corporate there, so a store's coverage has to be judged on the rows as they will be frozen. */
   rosterCoverage_(live);
+  mark('coverage');
   /* THE ONLY CACHED SPIFF READ IN THE ENGINE. This route paints a screen; it writes nothing, and
      the round trip it saves is ~4s of a load that was taking 20-30. Approval and the send preview
      deliberately do NOT pass this.
@@ -5350,6 +5360,7 @@ function getIncentive_(p) {
      dates at all — it would silently score every SPIFF at zero, which is the exact shape of failure
      this file spends a section warning about. */
   applySpiffEarnings_(live, live.payPeriod.start, true);
+  mark('spiff');
 
   /* FROM HERE DOWN THE PERIOD IS THE PRACTICE ONE. Everything above needed the real window;
      everything below is STORAGE — inputs, workflow, the key the browser posts back on every save —
@@ -5364,6 +5375,7 @@ function getIncentive_(p) {
   }
 
   live.inputs = inputsFor_(live.payPeriod.start);
+  mark('inputs');
   var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
   live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
                     decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',
@@ -5373,25 +5385,31 @@ function getIncentive_(p) {
                        has figures somebody was already paid. wfSet_ writes this prefix on every
                        void; the flag is derived here so the browser is not parsing prose. */
                     voided: /^VOIDED:/.test(String(wf.note || '')) };
+  mark('workflow');
   live.can_approve = canApprove_(auth);
   /* Locked while pending — for everyone, including the approver. Sky editing a figure he is about
      to approve is the same problem as Mike editing one he already sent. */
   live.can_edit = canEdit_(auth) && wf.status !== 'pending';
   live.periods = periodList_(imported, live.periods);
+  mark('periods');
   live.to_date = incentiveToDate_(imported);
   /* THE INDEPENDENT CHECKS, ON THE SCREEN AND NOT ONLY AT THE GATE. A refusal at the moment
      somebody presses Approve is a bad first sighting of a figure that has been wrong all fortnight;
      the reconciliation is what the preparer should see while there is still time to look into it.
      The screen REPORTS; only the write paths refuse. */
   live.store_totals = storeTotals_(live);
+  mark('store_totals');
   /* The band, not a verdict: the browser holds the period's own totals (it computes every row on
      each keystroke) and compares them itself. Sending the band rather than the answer keeps one
      source for what history says and avoids a second total computed engine-side that could
      disagree with the one on screen. */
   live.history_band = historyBand_(live.payPeriod.start);
+  mark('history_band');
   /* Why this period and not the running one, when nobody asked for a period. '' = asked for, or the
      running one. */
   live.defaulted = defaulted;
+  timings.total = Date.now() - T0;
+  live.timings = timings;
   return live;
 }
 
@@ -7101,11 +7119,15 @@ function incentiveSpiffReport_(live, failed, ack, total) {
  * have to reproduce those differences behind a flag, which is the same two-copies problem wearing
  * a parameter. This is the row SHAPE, which is the thing that broke.
  */
-function perfForWrite_(pp) {
+function perfForWrite_(pp, timings) {
+  var t = Date.now();
   var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
+  if (timings) { timings.perf_fetch = Date.now() - t; t = Date.now(); }
   if (live.ok === false) return live;
   stampEmployeeIds_(live);
+  if (timings) { timings.stamp = Date.now() - t; t = Date.now(); }
   foldFloaters_(live);
+  if (timings) timings.fold = Date.now() - t;
   return live;
 }
 
