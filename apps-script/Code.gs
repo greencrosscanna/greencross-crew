@@ -4298,6 +4298,14 @@ function perfFromSnapshot_(ppStart) {
   catch (e) { return { use: false, why: 'incentivePerf threw: ' + String((e && e.message) || e) }; }
   if (!d || d.ok === false) return { use: false, why: String((d && (d.snapshot || d.error)) || 'no answer') };
   if (!d.pp_start && !(d.payPeriod && d.payPeriod.start)) return { use: false, why: 'snapshot names no period' };
+  /* COMPUTED IN-PROCESS, NOT READ FROM THE SNAPSHOT — measured 2026-09-15 on pin v325. The door
+     decides by looking for Dutchie keys in script properties, and a library reads its OWN script
+     properties, so from Crew it runs gxIncentivePerfCached_: the same computation and the same cache
+     policy the HTTP route answers from (open period 3 min, ended 30 min, closed 6 h), minus the HTTP
+     hop and GX Core's queue. That answer carries `cache_policy` and none of the snapshot's age fields,
+     and it is exactly as fresh as the route — so it is used as-is. The age rules below apply only if
+     the door ever does hand back its snapshot (`snapshot: true`). */
+  if (d.snapshot !== true && d.cache_policy) return { use: true, d: d, age: null, inProcess: true };
   var age = (d.age_minutes === null || d.age_minutes === undefined || d.age_minutes === '')
           ? null : Number(d.age_minutes);
   if (age === null || !isFinite(age)) return { use: false, why: 'snapshot age unknown' };
@@ -4311,6 +4319,8 @@ function perfFromSnapshot_(ppStart) {
 
 function fetchLivePerfFromCore_(ppStart, opts) {
   var snap = (opts && opts.snapshot) ? perfFromSnapshot_(ppStart) : null;
+  if (snap && snap.use && snap.inProcess) return mapCorePerf_(snap.d, { perf_source: 'in-process',
+                                                                      perf_computed_at: String(snap.d.cache_policy || '') });
   if (snap && snap.use) return mapCorePerf_(snap.d, { perf_source: 'snapshot', perf_age_minutes: snap.age,
                                                        perf_computed_at: String(snap.d.computed_at || '') });
   var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');

@@ -97,8 +97,15 @@ console.log('\nEngine: the screen reads GX Core\'s snapshot, within Sky\'s fresh
   const core = { incentivePerf: () => { asked++; return answer; } };
   const P = new Function('GXCore', 'SNAPSHOT_OPEN_MAX_MIN', fnSrc(GS, 'perfFromSnapshot_') + '; return perfFromSnapshot_;')
     (core, 20);
-  const snap = (o) => Object.assign({ ok: true, pp_start: '2026-09-14', payPeriod: { start: '2026-09-14', current: true },
+  const snap = (o) => Object.assign({ snapshot: true, ok: true, pp_start: '2026-09-14', payPeriod: { start: '2026-09-14', current: true },
                                       age_minutes: 5, stale: true }, o);
+  answer = { ok: true, pp_start: '2026-09-14', payPeriod: { start: '2026-09-14', current: true },
+             cached: true, cache_policy: 'open-3min' };
+  ok('an in-process answer under GX Core\'s own cache policy → used, with no age limit applied',
+     P('').use === true && P('').inProcess === true);
+  answer = snap({ snapshot: true, cache_policy: 'open-3min', age_minutes: 25 });
+  ok('…but a real snapshot that also names a policy still obeys the age limit', P('').use === false);
+  const snap0 = snap;
   answer = snap({ age_minutes: 14 });
   ok('running period, 14 min old → used (GX Core calls it stale; Sky\'s limit is what counts)', P('').use === true);
   answer = snap({ age_minutes: 21 });
@@ -122,7 +129,7 @@ console.log('\nEngine: the screen reads GX Core\'s snapshot, within Sky\'s fresh
   /* Sliced to the next function rather than brace-counted: the body compares a character to '{'. */
   const F = GS.slice(GS.indexOf('function fetchLivePerfFromCore_('), GS.indexOf('function mapCorePerf_('));
   ok('the fetch consults the snapshot ONLY when asked', /var snap = \(opts && opts\.snapshot\) \? perfFromSnapshot_\(ppStart\) : null;/.test(F));
-  ok('both doors go through the one mapping', (F.match(/mapCorePerf_\(/g) || []).length === 2);
+  ok('every door goes through the one mapping', (F.match(/mapCorePerf_\(/g) || []).length === 3 && !/body\.forEach|name: *String\(r\.name/.test(F));
   const calls = (GS.match(/perfForWrite_\([^)]*\)/g) || []).filter((c) => !/function|\(pp, timings, opts\)/.test(c));
   ok('exactly one caller asks for the snapshot, and it is the screen',
      calls.filter((c) => /snapshot/.test(c)).length === 1 &&
