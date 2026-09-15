@@ -994,6 +994,18 @@
 .crew-imp-warn b { color: var(--gx-text); }
 .crew-imp-warn.bad { border-left-color: var(--gx-red, #ef4444); background: rgba(239,68,68,.08); }
 .crew-imp-prog { font-size: 12px; color: var(--gx-text-mute); font-variant-numeric: tabular-nums; }
+    /* WORK IN FLIGHT: words plus a small spinner (Sky, 2026-09-15 — the same shape SPIFF uses for a
+       slow save). The import writes one person at a time, each a round trip of several seconds, and a
+       line of gray footer text was reading as a stalled screen. */
+.crew-imp-prog.is-busy { color: var(--gx-text); font-size: 13px; }
+.crew-imp-prog.is-busy::before {
+  content: ''; display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px;
+  border: 2px solid var(--gx-border-strong, var(--gx-border)); border-top-color: var(--gx-green);
+  border-radius: 50%; animation: crew-imp-spin .8s linear infinite;
+}
+@keyframes crew-imp-spin { to { transform: rotate(360deg); } }
+.crew-imp-drop.is-busy { border-style: solid; }
+.crew-imp-keepopen { font-size: 11.5px; color: var(--gx-text-mute); flex-basis: 100%; }
     /* ── A manually-set payroll figure ────────────────────────────────────────────
        AMBER, deliberately — not green and not red. A figure a human overruled is neither good news
        nor an error, it is a DECISION, and the suite already reads gold as "a person did this and
@@ -1158,6 +1170,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.402"></script>
+  <script src="crew.js?v=1.403"></script>
 </body>
 </html>

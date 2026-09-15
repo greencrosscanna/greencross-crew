@@ -5331,9 +5331,24 @@
 
     function rebuild() { built = attBuild(plan, roster, inputs, T); }
 
+    /* The status line: a spinner and words while something is happening, nothing when it is not. */
+    function status(text) {
+      var prog = box.querySelector('#impProg');
+      if (!prog) return;
+      prog.textContent = text || '';
+      prog.classList.toggle('is-busy', !!text);
+    }
+
     async function load(file) {
       if (!file) return;
       fileName = file.name || 'the file';
+      /* Reading is local and usually quick, but a large workbook on a slow laptop is not — and until
+         the preview paints, the drop zone was the only thing on screen and it did not change. */
+      var dz = box.querySelector('#impDrop');
+      if (dz) {
+        dz.classList.add('is-busy');
+        dz.innerHTML = '<span class="crew-imp-prog is-busy">Reading ' + esc(fileName) + '…</span>';
+      }
       try {
         var sheets;
         if (/\.xlsx?$/i.test(fileName) || /sheet|excel/i.test(file.type || '')) {
@@ -5344,11 +5359,13 @@
         var p = attPlan(sheets);
         if (!p) {
           toast('No name and Yes/No columns found — is this the attendance bonus list?', true);
+          paint();
           return;
         }
         plan = p; rebuild(); paint();
       } catch (e) {
         toast('Could not read that file: ' + ((e && e.message) || 'unknown'), true);
+        paint();
       }
     }
 
@@ -5391,12 +5408,24 @@
             built.gaining + '.\n\nNet change to payroll for this period: ' + m0(built.net) +
             '.\n\nSave Mike\'s list?')) return;
       busy = true;
-      var go = box.querySelector('#impGo'), prog = box.querySelector('#impProg');
-      if (go) go.disabled = true;
+      var go = box.querySelector('#impGo');
+      if (go) { go.disabled = true; go.textContent = 'Saving…'; }
+      /* Close and Choose-a-different-file do nothing while this runs (close() refuses when busy), so
+         they are disabled rather than left looking pressable — a button that silently ignores a click
+         is the other half of why this read as frozen. */
+      ['#impRedo', '#impCancel', '#impX'].forEach(function (sel) {
+        var b = box.querySelector(sel); if (b) b.disabled = true;
+      });
+      var foot = box.querySelector('.crew-imp-foot');
+      if (foot && !foot.querySelector('.crew-imp-keepopen')) {
+        var keep = el('span', 'crew-imp-keepopen');
+        keep.textContent = 'Each person is saved separately and takes a few seconds. Keep this open until it finishes.';
+        foot.appendChild(keep);
+      }
       var done = 0, failed = [];
       for (var i = 0; i < rows.length; i++) {
         var m = rows[i];
-        if (prog) prog.textContent = 'Saving ' + (i + 1) + ' of ' + rows.length + '…';
+        status('Saving ' + (i + 1) + ' of ' + rows.length + ' — ' + (m.who || m.name) + '…');
         try {
           /* One id per PERSON: each row of Mike's list is its own write, retried on its own. */
           var r = await Engine.jsonp('incentive_save',
@@ -5414,7 +5443,7 @@
         }
       }
       busy = false;
-      if (prog) prog.textContent = '';
+      status('');
       paintIncentive();
       if (failed.length) {
         toast('Saved ' + done + ' of ' + rows.length + ' — failed: ' + failed.slice(0, 3).join('; ') +

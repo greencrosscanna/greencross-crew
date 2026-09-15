@@ -262,5 +262,21 @@ console.log('\nClose spelling — "Laurel Nelson" is Laural, "Kristen Bailey" is
      M.attBuild(M.attPlan(sheet(HEAD + 'Baseline,Al Nelson,Yes,ok\n')), R2, {}, T).absent.length === 1);
 }
 
+console.log('\nThe import says it is working (2026-09-15: "it looks like it stalls out")');
+{
+  const JS = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
+  const HTML = fs.readFileSync(__dirname + '/../index.html', 'utf8');
+  const a = JS.indexOf('function attImport('), bEnd = JS.indexOf('async function loadIncentive(');
+  const body = JS.slice(a, bEnd);
+  ok('a spinner style exists for work in flight', /\.crew-imp-prog\.is-busy::before[\s\S]{0,300}animation: crew-imp-spin/.test(HTML));
+  ok('reading the file shows a spinner in the drop zone', /Reading ' \+ esc\(fileName\)/.test(body) && /dz\.classList\.add\('is-busy'\)/.test(body));
+  ok('a file that cannot be read puts the drop zone back', (body.match(/toast\([^;]*\);\s*paint\(\);/g) || []).length >= 2);
+  ok('each save names who and how far along', /status\('Saving ' \+ \(i \+ 1\) \+ ' of ' \+ rows\.length \+ ' — '/.test(body));
+  ok('Close and Choose-a-different-file are DISABLED while saving, not silently ignored',
+     /\['#impRedo', '#impCancel', '#impX'\]\.forEach[\s\S]{0,80}disabled = true/.test(body));
+  ok('it tells Mike to keep the window open', /Keep this open until it finishes/.test(body));
+  ok('the spinner is cleared when the run ends', /busy = false;\s*status\(''\);/.test(body));
+}
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nattendance import: all passed');
 process.exit(fail ? 1 : 0);
