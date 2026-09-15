@@ -470,11 +470,6 @@ function route_(e) {
         return json_(sendDigest_(p), p.callback);
 
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
-      // Run BOTH incentive engines for a period and report where they disagree. The thing to look
-      // at before flipping cfg.incentiveEngine, since that switch changes what people are paid on.
-      case 'incentive_compare':
-        return json_(incentiveCompare_(p), p.callback);
-
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(permitCoverage_(p), p.callback);
@@ -4094,7 +4089,7 @@ function incentiveHistory_(p) {
  *
  *   imported  a closed period from the payout PDFs (2025-08-04 .. 2026-08-16). Figures as paid.
  *             Nothing is computed and nothing is editable — see the header on crew_incentive_history.
- *   live      Leaderboard's incentiveperf slice plus Crew's own inputs. The bonus MATH runs in the
+ *   live      GX Core's incentive_perf slice plus Crew's own inputs. The bonus MATH runs in the
  *             browser (crew.js calcBud/calcMgr/calcAdmin) so an attendance or SPIFF edit re-scores
  *             immediately, which is the behavior the Leaderboard dashboard had and staff expect.
  *
@@ -4103,9 +4098,9 @@ function incentiveHistory_(p) {
  * snapshots. GX Crew is the PAYOUT app — the math, the inputs, the thresholds and the Capstone
  * export. Sky's own sentence: SPIFF sets the goals, LB tracks the performance, Crew reads it.
  *
- * The hop to Leaderboard is app-to-app, which the shared brain forbids, and it is TEMPORARY: a
- * brain note asks core-admin to promote the per-employee slice into GX Core, and SPIFF wants the
- * same data. When that lands, only fetchLivePerf_ changes. */
+ * The hop to Leaderboard was app-to-app and temporary. GX Core took the per-employee slice over
+ * (flag flipped 2026-09-01) and the Leaderboard path was deleted 2026-09-14 — see fetchLivePerf_.
+ * Leaderboard's ingest still exists; Crew simply no longer reads it for pay. */
 var INPUTS_TAB = 'crew_incentive_inputs';
 var INPUTS_HEADERS = ['pp_start', 'employee_id', 'att', 'spiff', 'hours', 'updated_at', 'updated_by',
                       /* APPENDED 2026-09-02. THE ONE FIELD ON THIS TAB THAT IS NOT AN INPUT TO THE
@@ -4153,188 +4148,22 @@ function inputsFor_(ppStart) {
   return out;
 }
 
-/* Run BOTH engines for a period and report where they disagree — the thing to look at before
-   flipping cfg.incentiveEngine. Names only and per-person deltas; it is already behind the deploy
-   secret, but there is no reason for a comparison tool to print a roster of salaries.
-
-   Deliberately calls each source directly rather than going through fetchLivePerf_, so it reports
-   what the two ENGINES say and cannot be fooled by whichever one the flag currently selects. */
-function incentiveCompare_(p) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
-  var pp = String((p && p.pp_start) || '').trim();
-
-  var lb = fetchLivePerfLeaderboard_(pp);
-  var gx = fetchLivePerfFromCore_(pp);
-  if (lb.ok === false) return { ok: false, stage: 'leaderboard', error: lb.error };
-  if (gx.ok === false) return { ok: false, stage: 'gxcore', error: gx.error };
-
-  /* STRUCTURE FIRST, NUMBERS SECOND — and this order is the lesson.
-   *
-   * The first version of this compared budtenders and managers, which were the two groups I had in
-   * mind. Leaderboard also sends an `admin` row that the browser renders, scores and exports, and
-   * because nothing compared it, flipping the engine dropped a person off a pay screen while this
-   * tool reported a clean diff. A comparison is only as good as the fields somebody thought to
-   * compare, so it now checks WHICH FIELDS EXIST on each side before looking at any value. */
-  function fieldsOf(o) {
-    return Object.keys(o || {}).filter(function (k) { return o[k] !== undefined && o[k] !== null; }).sort();
-  }
-  /* FIELDS CREW SUPPLIES ITSELF, so their absence from the engine payload is expected and must not
-     trip the guard. A check that cries wolf is one people learn to click past, which is the failure
-     this whole comparison exists to avoid — so each entry here is verified, not assumed:
-
-       periods     Crew computes the calendar in periodList_/computedPeriods_ and deliberately does
-                   NOT borrow it: a null list once stranded the picker on an imported period with no
-                   way back to the current one.
-       thresholds  overlaid from GX Core kv `incentiveThresholds` in the view; confirmed complete
-                   (budtender, manager, admin) on 2026-09-01.
-       saved       nothing reads it on the incentive path. crew.js's only `.saved` is the roster_save
-                   response, an unrelated route. Crew builds its own via inputsFor_().
-       thresholds_source
-                   Leaderboard's own bookkeeping, added there 2026-09-02: 'live' / 'frozen' /
-                   'unrecorded', saying whether a closed period's scheme was the one it was scored
-                   against. GX Core has no counterpart because it computes no thresholds at all —
-                   Crew reads them from Core kv — so its absence is correct, not a gap. Listed here
-                   for the reason the guard exists: a check that reports an expected difference is
-                   one people learn to click past. */
-  var CREW_SUPPLIES = ['periods', 'thresholds', 'thresholds_source', 'saved'];
-
-  var lbFields = fieldsOf(lb), gxFields = fieldsOf(gx);
-  var missingInGx = lbFields.filter(function (k) {
-    return gxFields.indexOf(k) === -1 && CREW_SUPPLIES.indexOf(k) === -1;
-  });
-  var supplied = lbFields.filter(function (k) {
-    return gxFields.indexOf(k) === -1 && CREW_SUPPLIES.indexOf(k) !== -1;
-  });
-  var extraInGx   = gxFields.filter(function (k) { return lbFields.indexOf(k) === -1; });
-
-  // Sub-shapes that matter: a present-but-empty admin or payPeriod is as bad as a missing one.
-  function subFields(o, k) { return o && o[k] ? fieldsOf(o[k]) : []; }
-  var shape = {
-    admin:      { leaderboard: subFields(lb, 'admin'),     gxcore: subFields(gx, 'admin') },
-    payPeriod:  { leaderboard: subFields(lb, 'payPeriod'), gxcore: subFields(gx, 'payPeriod') }
-  };
-
-  function index(payload) {
-    var m = Object.create(null);
-    // ALL THREE groups. The admin row has no `name` in the same sense, so it is keyed explicitly.
-    (payload.budtenders || []).concat(payload.managers || []).forEach(function (r) {
-      var k = nameToKey_(r.name);
-      if (!k) return;
-      m[k] = (m[k] || 0) + (Number(r.sales) || 0);
-    });
-    /* Keyed on the ROLE, not the name. Leaderboard hardcoded 'Mike Kettler'; GX Core reads the
-       roster and gets the legal 'Michael Kettler'. Keying on the name made one row look like two
-       different people appearing and disappearing. The name difference is reported separately,
-       where it is information rather than an alarm. */
-    if (payload.admin) m['(admin)'] = Number(payload.admin.actual) || 0;
-    return m;
-  }
-  var a = index(lb), b = index(gx);
-  var names = Object.create(null);
-  Object.keys(a).forEach(function (k) { names[k] = 1; });
-  Object.keys(b).forEach(function (k) { names[k] = 1; });
-
-  var diffs = [], both = 0, onlyLb = [], onlyGx = [];
-  Object.keys(names).forEach(function (k) {
-    var inA = a[k] !== undefined, inB = b[k] !== undefined;
-    if (inA && inB) {
-      both++;
-      var d = Math.round((b[k] - a[k]) * 100) / 100;
-      if (Math.abs(d) > 0.005) diffs.push({ name_key: k, delta: d });
-    } else if (inA) { onlyLb.push(k); } else { onlyGx.push(k); }
-  });
-  diffs.sort(function (x, y) { return Math.abs(y.delta) - Math.abs(x.delta); });
-
-  /* THE OLD `totals` WAS ONE SUMMED NUMBER, AND IT TRIPLE-COUNTED. Sky spotted it on 2026-09-11:
-     it reported the two engines $1,382 apart on the 8/17 period, which is far too large for what
-     it was being blamed on. The sum added THREE OVERLAPPING VIEWS OF THE SAME SALES — budtender
-     rows, manager rows (which carry their STORE's whole total, not the manager's own selling) and
-     the admin row (the company total again). The real gap is $459, counted three times as $1,382.
-
-     Nothing downstream ever used it; it was a diagnostic, and its one job was to size a difference.
-     So it now reports the three views SEPARATELY and never adds them. `total_delta` is the honest
-     company-wide answer — the admin row, which is one number for the whole company. */
-  var sum = function (o) { return Object.keys(o).reduce(function (t, k) { return t + o[k]; }, 0); };
-  var r2 = function (n) { return Math.round(n * 100) / 100; };
-  var group = function (payload, key) {
-    return r2((payload[key] || []).reduce(function (t, x) { return t + (Number(x.sales) || 0); }, 0));
-  };
-  var lbAdmin = Number(lb.admin && lb.admin.actual) || 0;
-  var gxAdmin = Number(gx.admin && gx.admin.actual) || 0;
-  return {
-    ok: true,
-    pp_start: gx.payPeriod.start, pp_end: gx.payPeriod.end,
-    people: { in_both: both, only_leaderboard: onlyLb, only_gxcore: onlyGx },
-    totals: {
-      /* Three views, never added together. Each is a complete count of the same fortnight. */
-      budtender_rows: { leaderboard: group(lb, 'budtenders'), gxcore: group(gx, 'budtenders'),
-                        delta: r2(group(gx, 'budtenders') - group(lb, 'budtenders')) },
-      store_totals:   { leaderboard: group(lb, 'managers'), gxcore: group(gx, 'managers'),
-                        delta: r2(group(gx, 'managers') - group(lb, 'managers')),
-                        note: 'a manager row carries their STORE\'s total, so this is the six stores' },
-      company:        { leaderboard: r2(lbAdmin), gxcore: r2(gxAdmin), delta: r2(gxAdmin - lbAdmin) },
-      total_delta: r2(gxAdmin - lbAdmin),
-      note: 'these views OVERLAP — the same sales counted three ways. Never add them: doing so is ' +
-            'what once reported a $459 difference as $1,382.'
-    },
-    /* Per-name deltas index the same overlapping rows, so a manager\'s entry here is their store. */
-    per_name_note: 'a manager\'s delta is their STORE\'s, not their own selling',
-    differing_people: diffs.length,
-    largest_deltas: diffs.slice(0, 15),
-    /* Read THIS before the numbers. A field Leaderboard sends and GX Core does not is a feature that
-       disappears on the flip, and it will not show up as a delta — it shows up as nothing at all. */
-    fields_missing_in_gxcore: missingInGx,
-    fields_crew_supplies_itself: supplied,
-    fields_only_in_gxcore: extraInGx,
-    shape: shape,
-    admin_row: { leaderboard: !!lb.admin, gxcore: !!gx.admin,
-                 leaderboard_name: (lb.admin || {}).name || '',
-                 gxcore_name: (gx.admin || {}).name || '',
-                 /* samePerson_ is the ladder the rest of this engine uses to decide whether two
-                    spellings are one human, so the comparison asks it rather than inventing a
-                    second opinion about whether Mike and Michael are the same person. */
-                 same_person: !!(lb.admin && gx.admin &&
-                   samePerson_(lb.admin.name || '', gx.admin.name || '')) },
-    /* The two known, intended reasons the totals can differ. Anything NOT explained by these is
-       what the comparison exists to surface. */
-    gxcore_ignored_returns: (gx.returns_not_counted || []).length,
-    gxcore_return_grace_days: gx.return_grace_days,
-    note: 'GX Core excludes voids and scores returns against the SALE period (+grace); Leaderboard '
-        + 'deducts returns in the period they were processed. Store keys also differ: store_id vs '
-        + 'Leaderboard display slugs.'
-  };
-}
-
-/* ─── THE SAME PAYLOAD, FROM GX CORE ─────────────────────────────────────────────────────────────
+/* ─── LIVE PERFORMANCE COMES FROM GX CORE, AND ONLY FROM GX CORE (2026-09-14) ──────────────────────
  *
- * Leaderboard has been the performance engine and this app the payout app, with Crew reaching into
- * Leaderboard over ?action=incentiveperf — app-to-app, which the shared brain forbids, and which
- * both apps' comments have called TEMPORARY since it was written. GX Core now computes the same
- * slice (?action=incentive_perf), built on the shared sales_by_employee aggregation rather than a
- * second Dutchie pull.
+ * This used to read Leaderboard's ?action=incentiveperf, app-to-app, behind a kv flag
+ * (`cfg.incentiveEngine`) that was flipped to `gxcore` on 2026-09-01. Leaderboard is retiring that
+ * engine, so the flag, the Leaderboard branch and the side-by-side `incentive_compare` tool are gone
+ * (Sky, 2026-09-14). The flag is no longer read; leaving it set in kv does nothing.
  *
- * BEHIND A FLAG, and deliberately. kv `cfg.incentiveEngine` selects the source and defaults to
- * `leaderboard`, so merging this changes nothing. These numbers decide what people are paid; the
- * switch should be a toggle somebody flips after looking at a comparison, and one that can be
- * flipped back in seconds without a deploy.
+ * THE FALLBACK WAS THE DANGEROUS PART, not the dead code. `incentiveEngine_` answered `leaderboard`
+ * whenever the flag was blank OR its read threw — so a GX Core kv hiccup would have silently scored a
+ * live period on a DIFFERENT engine (voids, returns and store keys all differ) rather than failing.
+ * There is now one source: if GX Core cannot answer, the screen and both write paths say so.
  *
- * WHAT DIFFERS, and it is not nothing:
- *   · GX Core excludes VOIDS. Leaderboard counted them until 2026-08-31 — 403.93 in one fortnight
- *     across six stores. Both are fixed now, but an old period recomputed from each side can still
- *     differ if it was scored before that.
- *   · RETURNS follow the sale, and count only within their own period plus a five-day grace.
- *     Leaderboard deducts every return in the period it was PROCESSED.
- *   · store keys are GX Core store_id (bend, hillsboro, portland-rd), not Leaderboard display slugs
- *     (century, baseline, portland). Everything else in this engine already resolves stores through
- *     GXCore.resolveStore, so this moves Crew onto the suite vocabulary — but it is a visible change
- *     to any consumer matching on the old strings, which is the main thing to look at before
- *     flipping.
+ * What the independent check is now: Dutchie's closing report per store (`storeTotals_`), the
+ * scheme ceilings and the history band — see "What independently checks these figures". The
+ * compare tool had already stopped being one; it answered "do two engines agree", a known no.
  * ------------------------------------------------------------------------------------------------ */
-function incentiveEngine_() {
-  try { return String(GXCore.getKv('cfg.incentiveEngine') || '').trim().toLowerCase() || 'leaderboard'; }
-  catch (e) { return 'leaderboard'; }   // unreachable kv must not silently switch a pay source
-}
-
 /* GX Core's incentive_perf, mapped into the shape this engine already consumes. The mapping is the
    whole risk surface, so it is explicit rather than a spread: a renamed field that silently arrives
    as undefined reads downstream as a zero, and a zero here is somebody's bonus. */
@@ -4405,54 +4234,12 @@ function fetchLivePerfFromCore_(ppStart) {
   };
 }
 
-/* Leaderboard's incentiveperf. A failed read RETURNS AN ERROR rather than an empty period: a
- * dashboard that renders "no bonuses" because a fetch failed looks exactly like a fortnight in
- * which nobody earned anything, and this one is about pay. Same rule as the nightly Dutchie scan. */
+/* A failed read RETURNS AN ERROR rather than an empty period: a dashboard that renders "no bonuses"
+ * because a fetch failed looks exactly like a fortnight in which nobody earned anything, and this
+ * one is about pay. Same rule as the nightly Dutchie scan. Kept as its own name because every
+ * caller already uses it. */
 function fetchLivePerf_(ppStart) {
-  return incentiveEngine_() === 'gxcore'
-    ? fetchLivePerfFromCore_(ppStart)
-    : fetchLivePerfLeaderboard_(ppStart);
-}
-
-/* The original app-to-app path. Kept under its own name so incentiveCompare_ can call it directly
-   regardless of which engine the flag selects — a comparison that ran whatever the flag chose would
-   compare one engine against itself and report a clean zero. */
-function fetchLivePerfLeaderboard_(ppStart) {
-
-  /* The URL lives in GX Core's kv, not in this file — the same place Leaderboard's own callers
-     read it from, so a redeploy that mints a new /exec is fixed in one place for the whole suite. */
-  var base = '';
-  try { base = String(GXCore.getKv('lbGoals') || ''); } catch (e) { base = ''; }
-  if (!base) return { ok: false, error: 'no Leaderboard engine URL in GX Core kv (key lbGoals)' };
-  /* INBOUND auth (deploySecretOk_) does not need this property — it falls back to a cached digest
-     of a secret somebody already presented, which is why every other route works without it. This
-     is the one OUTBOUND call in the engine, and it needs the secret's actual VALUE to present to
-     Leaderboard, which only the script property can hold. So the engine can look perfectly healthy
-     and still fail here, and the old message ("not set on this script") did not say where to set
-     it or why only this one route cared. */
-  var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
-  if (!secret) {
-    return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script, so Crew cannot ' +
-      'authenticate to Leaderboard for live performance data. Imported (closed) periods still ' +
-      'work — they need nothing from Leaderboard. To fix: open the Crew Apps Script project → ' +
-      'Project Settings → Script Properties → add GX_DEPLOY_SECRET with the value in ' +
-      '.gx_deploy_secret. https://script.google.com/home/projects/' +
-      '109qNE_Gjz91xK4cTBFCquQo2OKTHenfA2VWIAXnEZlkr7UHF1tPIw9KP/settings',
-      needs: 'GX_DEPLOY_SECRET script property' };
-  }
-  var url = base + '?action=incentiveperf&secret=' + encodeURIComponent(secret) +
-            (ppStart ? '&ppStart=' + encodeURIComponent(ppStart) : '');
-  try {
-    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
-    if (res.getResponseCode() !== 200) {
-      return { ok: false, error: 'Leaderboard returned HTTP ' + res.getResponseCode() };
-    }
-    var d = JSON.parse(res.getContentText());
-    if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'Leaderboard refused' };
-    return d;
-  } catch (e) {
-    return { ok: false, error: 'could not reach Leaderboard: ' + String((e && e.message) || e) };
-  }
+  return fetchLivePerfFromCore_(ppStart);
 }
 
 /* Leaderboard identifies people by its own nameKey ('chris_carney'); GX Core — and therefore every
@@ -4704,9 +4491,12 @@ function dualRoleRows_(live) {
 }
 
 /**
- * ?action=incentive_probe — is the Crew → Leaderboard hop alive? Deploy-secret gated.
+ * ?action=incentive_probe — is the Crew → GX Core performance hop alive? Deploy-secret gated.
  *
- * The live half of this dashboard depends on ANOTHER APP'S deployment, a secret held in this
+ * *It probed Leaderboard until 2026-09-14, and its note said to delete it with that route. It is kept
+ * instead: the hop it checks is GX Core's incentive_perf now, which fails the same silent ways.*
+ *
+ * The live half of this dashboard depends on ANOTHER DEPLOYMENT, a secret held in this
  * script's properties, and an OAuth scope that Apps Script grants silently or not at all. Each can
  * break without anything here changing, and the symptom is identical every time: a signed-in user
  * sees an error on one tab while the engine's own health route says ok. That is a bad way to find
@@ -4714,7 +4504,7 @@ function dualRoleRows_(live) {
  *
  * This answers it with a secret instead of a session, and returns SHAPE, never figures — row counts
  * and the period it got, so it can be called from a deploy script or a cron without putting anyone's
- * pay into a log. Delete it with the incentiveperf route when GX Core takes the slice over.
+ * pay into a log.
  */
 function incentiveProbe_(p) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
@@ -4741,7 +4531,7 @@ function incentiveProbe_(p) {
                           rows_in_window: live.spiff.rows_in_window,
                           unmatched: live.spiff.unmatched,
                           earning: withSpiff.map(function (r) { return r.name; }) } : null,
-    source: live.source || 'leaderboard',
+    source: live.source || 'gxcore',
     pay_period: live.payPeriod,
     managers: (live.managers || []).length,
     budtenders: (live.budtenders || []).length,
@@ -7381,8 +7171,8 @@ function coverageStoreNames_(slugs) {
  * *That $459 was first reported here as $1,382, and Sky refused it as too large — correctly.*
  * `incentive_compare` summed three OVERLAPPING views of the same fortnight (budtender rows, manager
  * rows which carry their store's whole total, and the admin row which is the company total again),
- * so one $459 gap was counted three times. The tool now reports the three separately and refuses to
- * add them. Against DUTCHIE'S OWN closing report the same period reads: GX Core -$55 company-wide,
+ * so one $459 gap was counted three times. (The tool was fixed to report the three separately, then
+ * deleted with Leaderboard's incentive engine on 2026-09-14.) Against DUTCHIE'S OWN closing report the same period reads: GX Core -$55 company-wide,
  * Leaderboard +$404 — so the figures people are paid on are the closer pair, which is the fact that
  * matters and the one the summed number obscured. The returns difference explains only part of the
  * residual (Baseline matches its set-aside returns exactly at $75; the other five stores do not),
@@ -8718,50 +8508,15 @@ function approvalThresholds_(live) {
   }
   var core = coreRes.thresholds;
 
-  /* WHETHER LEADERBOARD AGREES IS A THREE-WAY QUESTION, AND IT USED TO BE ANSWERED AS A BOOLEAN.
-   *
-   * This was `lb_agrees: deepSame_(live.thresholds || null, core)`, which reports FALSE for
-   * "disagrees" and FALSE for "there was nothing to compare" — and since 2026-09-01 the second one
-   * is the only case that ever happens. `cfg.incentiveEngine` was flipped to `gxcore`, so
-   * fetchLivePerf_ routes to GX Core's incentive_perf, and that mapping carries NO thresholds on
-   * purpose: Core computes no scheme, Crew reads it from kv. So `live.thresholds` is undefined,
-   * every comparison is against null, and the dry run has reported "Leaderboard disagrees" on every
-   * period since — about an app it no longer asks.
-   *
-   * That is worse than a wrong value, because the thing it claims is alarming and plausible: the
-   * kiosk grading staff against a scheme they are not paid on. It cost a real investigation on
-   * 2026-09-03 that ended with both schemes fetched and diffed by hand and found BYTE-IDENTICAL,
-   * discountMaxPct 1.0 included. Nothing was wrong except this line.
-   *
-   * The check is still worth having — Leaderboard does still hold its own copy and the board really
-   * would grade people against it — so this reports what it actually knows instead of being
-   * deleted or left lying:
-   *
-   *   true / false   a scheme arrived and was compared
-   *   null           nothing arrived, and `lb_check` says WHY
-   *
-   * A caller must treat null as "not checked", never as agreement. Reading it as a boolean gets
-   * `false`, which is the old behavior — hence the explicit `lb_check` string beside it, so a
-   * consumer that only wants a headline has one that cannot be silently misread. */
-  var lbT = live && live.thresholds;
-  if (lbT && lbT.budtender && lbT.manager && lbT.admin) {
-    return { ok: true, T: core, source: 'gx_core',
-             lb_agrees: deepSame_(lbT, core),
-             lb_check: 'compared' };
-  }
-  if (incentiveEngine_() === 'gxcore') {
-    return { ok: true, T: core, source: 'gx_core', lb_agrees: null,
-             lb_check: 'not applicable — performance comes from GX Core, which sends no scheme to compare' };
-  }
-  /* Leaderboard answered without a usable scheme. For a CLOSED period that is its documented third
-     answer: the 28 snapshots taken before it began recording the scheme have none, and it reports
-     `unrecorded` rather than substituting today's — which is correct, and must not read here as a
-     disagreement. Its own label is carried through when it sent one. */
-  var lbSrc = String((live && live.thresholds_source) || '');
+  /* `lb_agrees` IS ALWAYS NULL NOW, and it is kept rather than deleted so nothing reading it
+   * breaks. It compared the scheme Leaderboard sent with the live slice against Core's, and nothing
+   * sends one any more: GX Core computes no scheme, and Crew no longer asks Leaderboard for
+   * performance (2026-09-14). NULL MEANS NOT CHECKED — never read it for truthiness, which turns it
+   * into "disagrees" (the 2026-09-03 false alarm this field was once three-state to prevent).
+   * Leaderboard's kiosk does still hold its own discount target for coloring the board; that is a
+   * display copy, compared nowhere, and not what anybody is paid on. */
   return { ok: true, T: core, source: 'gx_core', lb_agrees: null,
-           lb_check: lbSrc
-             ? 'Leaderboard sent no scheme for this period (thresholds_source: ' + lbSrc + ')'
-             : 'Leaderboard sent no scheme for this period' };
+           lb_check: 'not applicable — performance comes from GX Core, which sends no scheme to compare' };
 }
 
 /* GX CORE HOLDS THE THRESHOLDS, AND THERE IS NOTHING BEHIND THEM.
@@ -8869,7 +8624,8 @@ function discountRules_() {
  * Leaderboard now publishes its registry to GX Core kv `discountRegistry` on every rebuild (LB
  * v1.810, roughly twice a day). So the order is: Core's published copy → Leaderboard's /exec →
  * the names Core holds an override for. The direct Leaderboard call survives only as the second
- * rung, and only until Leaderboard is deleted — the same retirement `incentive_compare` is waiting on.
+ * rung, and only until Leaderboard is deleted outright. (`incentive_compare` went first, with
+ * Leaderboard's incentive engine, on 2026-09-14; the `discountrules` route is staying until then.)
  *
  * `excluded` is not in the published shape at all; it lives only in `discountRules`. The mapping
  * below drops it anyway, so a future publisher that adds one still cannot become a second source

@@ -545,9 +545,17 @@ route when GX Core exposes the slice.
 ***It no longer does, and this section described the old wiring for two days.*** GX Core got the
 slice: **`cfg.incentiveEngine` has read `gxcore` since 2026-09-01**, so `fetchLivePerf_` routes to
 GX Core's `incentive_perf` and Crew does not call Leaderboard on the incentive path at all. The
-app-to-app hop the paragraph above calls "deliberate and temporary" is the *fallback* now —
-`fetchLivePerfLeaderboard_` still exists, still works, and runs only if the flag is set back. Read
-the flag, never this paragraph.
+app-to-app hop the paragraph above calls "deliberate and temporary" was the *fallback* after that.
+
+***And the fallback is deleted, 2026-09-14 (Sky's call).*** Leaderboard retired its incentive engine
+(`incentiveperf`, `frozenperiod(s)`, `incentive`/`saveincentive`), so Crew deleted
+`fetchLivePerfLeaderboard_`, the `incentiveEngine_` flag reader and the `incentive_compare` tool.
+**`fetchLivePerf_` reads GX Core, full stop; `cfg.incentiveEngine` is no longer read.** The fallback
+was the dangerous part, not the dead code: `incentiveEngine_` answered `leaderboard` on a **blank**
+flag *or* a kv read that **threw**, so a GX Core hiccup would have scored a live period on a
+different engine (voids, returns and store keys all differ) instead of failing. There is one source
+now, and if it cannot answer the screen says so. Leaderboard's 28 frozen closed periods match GX
+Core's `incentive_frozen` archive byte-for-byte (checked by Leaderboard's session before retiring).
 
 **The consequence that bit, because it is the one nothing errors on: GX Core sends NO thresholds.**
 That is correct and deliberate — Core computes no scheme and Crew reads it from kv — but
@@ -561,7 +569,11 @@ The claim is alarming and plausible — the kiosk grading staff against a scheme
 chased across both apps until both schemes were fetched and diffed by hand: **byte-identical**,
 `discountMaxPct` 1.0 included. Nothing was wrong anywhere except one line.
 
-`lb_agrees` is **three-state** now — `true` / `false` / **`null` meaning not checked** — with
+*Since 2026-09-14 nothing can send a scheme, so `lb_agrees` is **always `null`** with
+`lb_check: 'not applicable…'`, and a scheme that turns up on the payload anyway is ignored. The field
+is kept so nothing reading it breaks. The paragraph below is the history of why it was three-state.*
+
+`lb_agrees` was **three-state** — `true` / `false` / **`null` meaning not checked** — with
 `lb_check` beside it saying which of the two "nothing to compare" cases it was: the engine sends no
 scheme (a wiring fact, every period), or Leaderboard had no record for that one closed period (its
 documented `unrecorded` answer for the 28 snapshots that predate scheme-freezing). Same value,
@@ -1129,8 +1141,9 @@ against Dutchie instead. Three checks, at three different layers:
   Approve is a bad first sighting of a figure that has been wrong all fortnight. A **pass is stated
   too**, on screen and in the email — a check visible only when it fails cannot be told apart from
   one that has quietly stopped running.
-- **`incentive_compare` and the Leaderboard fallback stay until Leaderboard is deleted**, but stop
-  being described as a check. They answer "do the two engines agree", which is now a known no.
+- **`incentive_compare` and the Leaderboard fallback are deleted** (2026-09-14, with Leaderboard's
+  incentive engine). They had already stopped being a check — they answered "do the two engines
+  agree", a known no. The three checks in the table are the whole of it now.
 
 ***The $459 was first reported to Sky as $1,382, and he refused it as too large for what it was
 being blamed on — correctly.*** `incentive_compare`'s `totals` **summed three overlapping views of
@@ -1229,7 +1242,9 @@ they bite** — which is not the order they were found in, and the first is the 
    for six hours after **every** future GX Core cut — right after a release, the worst moment for a
    payroll guard to quietly stop running. A check that only works on a cache **miss** is one that
    mostly does not run, and it looks fine in every test and every dry run.
-2. **`cfg.incentiveEngine` can select Leaderboard**, which sends no `stores_failed` at all.
+2. ~~**`cfg.incentiveEngine` can select Leaderboard**, which sends no `stores_failed` at all.~~
+   No longer true since 2026-09-14 — the flag is not read and the Leaderboard engine is deleted.
+   Reasons 1 and 3 are enough on their own.
 3. **`stores_failed` reports a store that ERRORED.** This reports a store that returned nobody for
    **any** reason — a credential that authenticates and hands back an empty set, a 200 with nothing
    in it — which raises nothing anywhere.

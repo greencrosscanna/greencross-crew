@@ -1,51 +1,41 @@
 #!/usr/bin/env node
-/* ─── "Does Leaderboard agree?" is a THREE-way question ────────────────────────────────────────
+/* ─── Leaderboard is not an incentive source any more — and nothing may pretend it is ─────────────
  *
  *   RUN:  node tests/threshold_agreement_test.js     (no deps, no network)
  *
- * WHY THIS EXISTS
- * `approvalThresholds_` reported `lb_agrees: deepSame_(live.thresholds || null, core)` — a boolean
- * over three possible states. It returns FALSE for "Leaderboard disagrees" and FALSE for "there was
- * nothing to compare", and since 2026-09-01 the second is the only one that ever happens:
- * `cfg.incentiveEngine` was flipped to `gxcore`, so performance comes from GX Core's incentive_perf,
- * and that mapping deliberately carries NO thresholds — Core computes no scheme, Crew reads it from
- * kv. So every dry run since has said "Leaderboard disagrees" about an app it no longer asks.
+ * HISTORY, because the file name outlived its first job.
+ * This pinned `lb_agrees` as THREE-state — true / false / null-meaning-not-checked — after a boolean
+ * reported "Leaderboard disagrees" on every dry run following the 2026-09-01 flip to GX Core, and
+ * cost a by-hand diff on 2026-09-03 that found the two schemes byte-identical.
  *
- * THE COST WAS REAL AND IT WAS NOT THE FLAG'S OWN BUDGET. The claim it makes — the kiosk grading
- * staff against a scheme they are not paid on — is alarming and plausible, so on 2026-09-03 it was
- * reported to Sky as a live problem, then chased through both apps until both schemes were fetched
- * and diffed BY HAND and found byte-identical, discountMaxPct 1.0 included. Nothing was wrong
- * anywhere except this one line. A check that cries wolf is the failure this repo names repeatedly;
- * this is the version where somebody actually went and looked.
+ * On 2026-09-14 Leaderboard retired its incentive engine and Crew deleted everything that read it
+ * (Sky's call): the `cfg.incentiveEngine` flag, `fetchLivePerfLeaderboard_`, and the side-by-side
+ * `incentive_compare` tool. So there is nothing left that could ever send a scheme to compare.
  *
- * WHAT MUST HOLD:
- *
- *   1. Nothing to compare is reported as NULL, never as false. This is the bug, exactly.
- *   2. The two reasons for "nothing" are told apart — the engine sends no scheme (structural, every
- *      period, today) versus Leaderboard having no record for one closed period (its documented
- *      `unrecorded` answer for the 28 snapshots that predate scheme-freezing). Same value, opposite
- *      implications: one is a wiring fact, the other is per-period history.
- *   3. A real comparison still happens when a scheme DOES arrive, and still returns false when the
- *      schemes genuinely differ. Fixing a false alarm by never alarming is not a fix — the kiosk
- *      really does hold its own copy.
- *   4. Both reporters carry the reason, so a caller reading only the boolean cannot be silently
- *      misled by a null that coerces to false.
+ * WHAT MUST HOLD NOW:
+ *   1. `lb_agrees` is always NULL with a reason — kept, not deleted, so nothing reading it breaks —
+ *      and no caller reads it for truthiness (null → false is the original false alarm).
+ *   2. A scheme that somehow arrives on the live payload is IGNORED. Approval computes against GX
+ *      Core's scheme and nothing else.
+ *   3. THE FALLBACK IS GONE. The old `incentiveEngine_` answered `leaderboard` on a blank flag or a
+ *      kv read that threw, silently scoring pay on a different engine during a GX Core hiccup.
+ *      Performance must come from GX Core whatever `cfg.incentiveEngine` holds or throws.
+ *   4. Nothing in the engine can reach Leaderboard's incentive routes.
  */
 'use strict';
 const fs = require('fs');
 const assert = require('assert');
 
-let ENGINE = 'gxcore';
-let STORED = null;
+let FLAG = 'gxcore', FLAG_THROWS = false, STORED = null, FETCHES = [];
 
 const GXCoreStub = {
   requireAuth: () => ({ ok: true, user: 'sky', role: 'admin' }),
   roleCanEdit: () => true,
   libVersion: () => 300,
   getKv(key) {
-    if (key === 'cfg.incentiveEngine') return ENGINE;
+    if (key === 'cfg.incentiveEngine') { if (FLAG_THROWS) throw new Error('kv down'); return FLAG; }
     if (key === 'incentiveThresholds') return JSON.stringify(STORED);
-    if (key === 'cfg.crewApprover') return 'sky';
+    if (key === 'lbGoals') return 'https://lb.example/exec';
     return '';
   },
   getEmployees: () => [],
@@ -55,7 +45,8 @@ const GXCoreStub = {
 const stubs = {
   SpreadsheetApp: { openById: () => ({ getSheetByName: () => null, insertSheet: () => null, getId: () => 'fake' }) },
   DriveApp: {}, HtmlService: {}, ContentService: {},
-  UrlFetchApp: { fetch: () => ({ getResponseCode: () => 200, getContentText: () => '{"ok":true}' }) },
+  UrlFetchApp: { fetch: (url) => { FETCHES.push(url);
+    return { getResponseCode: () => 200, getContentText: () => '{"ok":false,"error":"stub"}' }; } },
   CacheService: { getScriptCache: () => ({ get: () => null, put() {}, remove() {} }) },
   MailApp: {}, GmailApp: {}, ScriptApp: {}, Session: {},
   Logger: { log() {} },
@@ -69,7 +60,7 @@ const SRC = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
 const names = Object.keys(stubs);
 let C;
 try {
-  C = new Function(...names, SRC + '\n; return { approvalThresholds_, deepSame_ };')(...names.map((n) => stubs[n]));
+  C = new Function(...names, SRC + '\n; return { approvalThresholds_, deepSame_, fetchLivePerf_ };')(...names.map((n) => stubs[n]));
 } catch (e) {
   console.error('✗ could not load Code.gs:', e && e.message);
   process.exit(1);
@@ -90,85 +81,68 @@ let fail = 0;
 const t = (name, fn) => { try { fn(); console.log('  ✓ ' + name); }
                           catch (e) { fail++; console.log('  ✗ ' + name + '\n      ' + (e && e.message)); } };
 
-console.log('\nNothing to compare is NULL, not false\n');
+console.log('\nlb_agrees is always null, with a reason\n');
 
-t('the GX Core engine sends no scheme — reported as null, not as disagreement', () => {
-  ENGINE = 'gxcore'; STORED = clone(SCHEME);
-  const r = C.approvalThresholds_({ ok: true });          // no `thresholds` key at all
-  assert.strictEqual(r.ok, true);
-  assert.strictEqual(r.lb_agrees, null, 'must be null — false is the bug this file exists for');
-  assert.ok(/not applicable/i.test(r.lb_check), 'lb_check must say why: ' + r.lb_check);
-});
-
-t('...and it still returns GX Core\'s scheme to compute with', () => {
-  ENGINE = 'gxcore'; STORED = clone(SCHEME);
+t('no scheme on the payload → null, not disagreement, and the reason says why', () => {
+  STORED = clone(SCHEME);
   const r = C.approvalThresholds_({ ok: true });
-  assert.strictEqual(r.source, 'gx_core');
-  assert.ok(C.deepSame_(r.T, SCHEME), 'the scheme approval uses must be unchanged by this fix');
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.lb_agrees, null, 'must be null — false is the old false alarm');
+  assert.ok(/not applicable/i.test(r.lb_check), r.lb_check);
 });
 
-t('Leaderboard answering with no scheme is null too — and says so DIFFERENTLY', () => {
-  ENGINE = 'leaderboard'; STORED = clone(SCHEME);
-  const r = C.approvalThresholds_({ ok: true, thresholds: null, thresholds_source: 'unrecorded' });
-  assert.strictEqual(r.lb_agrees, null);
-  assert.ok(/Leaderboard sent no scheme/i.test(r.lb_check), r.lb_check);
-  assert.ok(/unrecorded/.test(r.lb_check), 'carries LB\'s own label through: ' + r.lb_check);
-});
-
-t('the two "nothing to compare" reasons are not the same string', () => {
-  ENGINE = 'gxcore'; STORED = clone(SCHEME);
-  const viaEngine = C.approvalThresholds_({ ok: true }).lb_check;
-  ENGINE = 'leaderboard';
-  const viaLb = C.approvalThresholds_({ ok: true, thresholds: null }).lb_check;
-  assert.notStrictEqual(viaEngine, viaLb,
-    'a wiring fact and a per-period history gap must not read identically');
-});
-
-t('a half-written scheme counts as nothing, not as a disagreement', () => {
-  ENGINE = 'leaderboard'; STORED = clone(SCHEME);
-  const half = { budtender: SCHEME.budtender };      // no manager, no admin
-  const r = C.approvalThresholds_({ ok: true, thresholds: half });
-  assert.strictEqual(r.lb_agrees, null, 'scoring some rows and not others is worse than not scoring');
-});
-
-console.log('\nA real comparison still happens\n');
-
-t('identical schemes agree', () => {
-  ENGINE = 'leaderboard'; STORED = clone(SCHEME);
-  const r = C.approvalThresholds_({ ok: true, thresholds: clone(SCHEME) });
-  assert.strictEqual(r.lb_agrees, true);
-  assert.strictEqual(r.lb_check, 'compared');
-});
-
-t('a genuinely different scheme still reports FALSE — the check is not neutered', () => {
-  ENGINE = 'leaderboard'; STORED = clone(SCHEME);
+t('a scheme that arrives anyway is IGNORED — GX Core\'s is what approval uses', () => {
+  STORED = clone(SCHEME);
   const other = clone(SCHEME); other.budtender.discountMaxPct = 2.75;
   const r = C.approvalThresholds_({ ok: true, thresholds: other });
-  assert.strictEqual(r.lb_agrees, false, 'this is the condition the indicator exists for');
-  assert.strictEqual(r.lb_check, 'compared');
+  assert.strictEqual(r.lb_agrees, null);
+  assert.strictEqual(r.source, 'gx_core');
+  assert.ok(C.deepSame_(r.T, SCHEME), 'approval must compute against Core\'s scheme, never the payload\'s');
 });
 
-t('a one-tier difference deep in the manager scheme is caught', () => {
-  ENGINE = 'leaderboard'; STORED = clone(SCHEME);
-  const other = clone(SCHEME); other.manager.salesTiers[1].bonus = 201;
-  assert.strictEqual(C.approvalThresholds_({ ok: true, thresholds: other }).lb_agrees, false);
+t('an unreadable Core scheme still refuses', () => {
+  STORED = null;
+  assert.strictEqual(C.approvalThresholds_({ ok: true }).ok, false);
 });
 
-console.log('\nThe reason travels with the verdict\n');
+console.log('\nOne source for performance, no fallback\n');
+
+[['flag gxcore', 'gxcore', false], ['flag leaderboard', 'leaderboard', false],
+ ['flag blank', '', false], ['flag read THROWS', 'gxcore', true]].forEach(([label, flag, throws]) => {
+  t(label + ' → GX Core is asked, Leaderboard never is', () => {
+    FLAG = flag; FLAG_THROWS = throws; FETCHES = [];
+    C.fetchLivePerf_('2026-08-31');
+    assert.ok(FETCHES.length > 0 && FETCHES.every((u) => /action=incentive_perf/.test(u)),
+      'fetched: ' + JSON.stringify(FETCHES));
+    assert.ok(!FETCHES.some((u) => /lb\.example|incentiveperf/.test(u)), 'reached Leaderboard');
+  });
+});
+FLAG = 'gxcore'; FLAG_THROWS = false;
+
+console.log('\nThe source itself\n');
+
+t('the Leaderboard engine, the flag reader and the compare tool are gone', () => {
+  ['fetchLivePerfLeaderboard_', 'incentiveEngine_', 'incentiveCompare_'].forEach((fn) =>
+    assert.ok(!new RegExp('function ' + fn + '\\(').test(SRC), fn + ' came back'));
+  assert.ok(!/case 'incentive_compare'/.test(SRC), 'the incentive_compare route came back');
+  assert.ok(!/getKv\('cfg\.incentiveEngine'\)/.test(SRC), 'cfg.incentiveEngine is read again');
+});
+
+t('nothing builds a URL to Leaderboard\'s retired incentive routes', () => {
+  assert.ok(!/['"]\?action=(incentiveperf|frozenperiods?|saveincentive|incentive)&/.test(SRC),
+    'a Leaderboard incentive route is being called');
+});
 
 t('both reporters carry leaderboard_check beside leaderboard_agrees', () => {
-  const src = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
-  const sites = src.match(/leaderboard_agrees\s*:/g) || [];
-  const checks = src.match(/leaderboard_check\s*:/g) || [];
-  assert.ok(sites.length >= 2, 'expected both the approval and the preview reporters');
+  const sites = SRC.match(/leaderboard_agrees\s*:/g) || [];
+  const checks = SRC.match(/leaderboard_check\s*:/g) || [];
   assert.strictEqual(checks.length, sites.length,
     'every place that reports the verdict must also report the reason — a bare null coerces to false');
 });
 
 t('no caller reads lb_agrees as a plain boolean', () => {
-  const src = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
-  assert.ok(!/if\s*\(\s*!?\s*\w*\.?lb_agrees\s*\)/.test(src),
-    'a truthiness test on a three-state value reads null as disagreement, which is the old bug back');
+  assert.ok(!/if\s*\(\s*!?\s*\w*\.?lb_agrees\s*\)/.test(SRC),
+    'a truthiness test on a null reads as disagreement, which is the old bug back');
 });
 
 console.log(fail ? `\n${fail} FAILED\n` : '\nAll threshold-agreement checks passed\n');
