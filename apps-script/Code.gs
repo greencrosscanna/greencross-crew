@@ -3346,10 +3346,20 @@ var FLAG_LABEL_ = { name: 'name', employee_number: 'employee number', hire_date:
 function displayNameOf_(r) {
   var full = String(r.name || r.full_name || '').trim();
   if (!full) return '';
-  var nick = String(r.preferred_name || '').trim();
+  var nick = nickWithoutSurnameInitial_(String(r.preferred_name || '').trim(), full);
   if (!nick) return full;
   var sp = full.indexOf(' ');
   return sp < 0 ? nick : nick + full.slice(sp);
+}
+/* "Zach B" + Babcock reads "Zach Babcock" (Sky, 2026-09-15). The initial lives in the nickname so the
+   Leaderboard kiosk, which prints the nickname alone, can tell two Zachs apart; it is dropped only
+   where the surname beside it already carries it. Same rule as nickWithoutSurnameInitial in crew.js. */
+function nickWithoutSurnameInitial_(nick, full) {
+  var m = /^(.+?)\s+([A-Za-z])\.?$/.exec(nick);
+  if (!m) return nick;
+  var parts = String(full || '').trim().split(/\s+/);
+  var last = parts.length > 1 ? parts[parts.length - 1] : '';
+  return last && last.charAt(0).toLowerCase() === m[2].toLowerCase() ? m[1] : nick;
 }
 
 /* WHICH ACCOUNT is the web app actually running as, and can it send mail?
@@ -4474,7 +4484,12 @@ function stampEmployeeIds_(live) {
        route via gxDisplayName_(), and is simply undefined on the library call this engine makes.
        Reading e.display_name therefore matched nothing and failed silently: the probe reported 37
        of 38 stamped, and the one holdout was exactly the person whose legal name nobody uses. */
-    [e.full_name, displayNameOf_(e)].forEach(function (n) {
+    /* …and the nickname joined AS STORED ("Zach B Babcock"), because displayNameOf_ now drops an
+       initial the surname repeats (2026-09-15) and a source still sending the older form must keep
+       matching. Indexing a name costs nothing; losing a match stamps nobody. */
+    var rawNick = String(e.preferred_name || '').trim();
+    var rawDisplay = rawNick ? rawNick + String(e.full_name || '').trim().replace(/^\S+/, '') : '';
+    [e.full_name, displayNameOf_(e), rawDisplay].forEach(function (n) {
       var k = nameToKey_(n);
       if (k && !byKey[k]) byKey[k] = e.employee_id;
     });

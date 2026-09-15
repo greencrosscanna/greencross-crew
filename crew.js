@@ -441,10 +441,22 @@
   function displayName(row) {
     var full = String(row.name || '').trim();
     if (!full) return '';
-    var nick = String(row.preferred_name || '').trim();
+    var nick = nickWithoutSurnameInitial(String(row.preferred_name || '').trim(), full);
     if (!nick) return full;
     var sp = full.indexOf(' ');
     return sp < 0 ? nick : nick + full.slice(sp);
+  }
+  /* "Zach B" + Babcock reads "Zach Babcock", not "Zach B Babcock" (Sky, 2026-09-15). The initial is
+     in the nickname only so the Leaderboard kiosk, which prints the nickname alone, can tell the two
+     Zachs apart — so the DATA stays, and a trailing initial is dropped only where the surname beside
+     it already says the same thing. An initial that does NOT match the surname is a real part of
+     what the person goes by and is kept. Same rule as displayNameOf_ in Code.gs. */
+  function nickWithoutSurnameInitial(nick, full) {
+    var m = /^(.+?)\s+([A-Za-z])\.?$/.exec(nick);
+    if (!m) return nick;
+    var parts = String(full || '').trim().split(/\s+/);
+    var last = parts.length > 1 ? parts[parts.length - 1] : '';
+    return last && last.charAt(0).toLowerCase() === m[2].toLowerCase() ? m[1] : nick;
   }
   /* The legal first name, and only when it is telling you something. A nickname that IS the
      first name ("Michael" preferring "Michael") would render as a green echo of the word beside

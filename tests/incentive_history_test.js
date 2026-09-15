@@ -106,7 +106,7 @@ function load(sheet) {
     ${grab('schemeFor_')} ${grab('freezeScheme_')}
     ${grab('incentiveImport_')} ${grab('incentiveHistory_')} ${grab('incentiveRelink_')}
     ${grab('nameToKey_')} ${grab('canonFirst_')} ${grab('ratio_')} ${grab('nameParts_')}
-    ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('stampEmployeeIds_')}
+    ${grab('samePerson_')} ${grab('displayNameOf_')} ${grab('nickWithoutSurnameInitial_')} ${grab('stampEmployeeIds_')}
     ${grab('thresholdProblems_')}
     /* stampEmployeeIds_ publishes roster_stores for the coverage guard, and filters it on
        hire_date against the period end, so it needs the real date normalizer. Stubbing it would
