@@ -54,12 +54,16 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
               /* One-time request ids (2026-09-14). Optional, so CODE_GS can point at the engine from
                  before they existed and the request-id test can be seen to fail there. */
               'payReqId_', 'payReqCompact_', 'payReqReplay_', 'payReqCached_', 'payReqSeen_',
-              'payReqRecord_', 'payReqUpdate_', 'payReqCache_', 'payReqNow_'];
+              'payReqRecord_', 'payReqUpdate_', 'payReqCache_', 'payReqNow_',
+              /* Mike's whole attendance list in ONE request (2026-09-15). Optional, so CODE_GS can
+                 point at the engine from before it and the batch tests can be seen to fail there. */
+              'parseAttBatch_', 'saveAttendanceBatch_', 'upsertAttendanceBatch_'];
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT',
-                       'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP'];
-const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$/;
+                       'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP',
+                       'ATT_BATCH_MAX'];
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
@@ -145,7 +149,9 @@ function engine() {
   const stubs = `
     function crewSheet_() { return { getParent: function () { return SS; } }; }
     function requireCrew_() { return { ok: true, user: E.user, role: 'admin' }; }
-    function canEdit_() { return true; }
+    /* E.canEdit unset = everybody can edit (what every older test assumes). Set it false and
+       the session is read-only, which is what the attendance batch's role refusal needs. */
+    function canEdit_() { return E.canEdit !== false; }
     /* E.primary unset = everyone is the approver (what every older test assumes). Set it and only
        that user is — which is what the backup-approver test needs. */
     function canApprove_(auth) { return E.primary == null ? true : String((auth && auth.user) || '') === E.primary; }
@@ -190,6 +196,7 @@ function engine() {
     'escalate: typeof escalateApprovals_ === "function" ? escalateApprovals_ : null, ' +
     'cover: typeof approvalCover_ === "function" ? approvalCover_ : null, ' +
     'unapprove: incentiveUnapprove_, save: saveIncentiveInput_, inputsFor: inputsFor_, ' +
+    'attBatch: typeof saveAttendanceBatch_ === "function" ? saveAttendanceBatch_ : null, ' +
     'wfSet: wfSet_, wfGet: wfGet_, historySheet: historySheet_, ' +
     'withPayLock: typeof withPayLock_ === "function" ? withPayLock_ : null };';
   /* An in-memory script cache that can be EMPTIED, because CacheService may evict at any time and

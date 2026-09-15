@@ -213,6 +213,42 @@ console.log('\nincentive_save — a retried attendance tick');
   ok('SEQUENTIAL replay converges on the same row', b.ok === true && E.rows(INP).length === 1);
 }
 
+/* ══ incentive_att_batch ═══════════════════════════════════════════════════════════════════════ */
+console.log('\nincentive_att_batch — two copies of Mike\'s whole attendance list at once');
+{
+  const E = engine(); E.user = 'mike';
+  if (!E.attBatch) { fail++; console.log('  ✗ incentive_att_batch is not in Code.gs'); }
+  else {
+    E.save({ pp_start: PP, employee_id: 'e2', att: '' });         // a row to interleave the read at
+    E.interleave(INP, () => E.attBatch({ pp_start: PP, att: 'e1:1,e2:1', request_id: 'z'.repeat(24) }));
+    const first = E.attBatch({ pp_start: PP, att: 'e1:1,e2:1', request_id: 'y'.repeat(24) });
+    ok('the second copy really did run between the first one\'s read and its write', !!E.second);
+    ok('exactly ONE copy writes', [first, E.second].filter(r => r && r.ok).length === 1);
+    /* THE PAY BUG THIS STOPS: e1 has no row yet, so unlocked both copies find none and append one
+       each. Later saves update the FIRST, inputsFor_ reads the LAST, and an untick made afterwards
+       silently stops reaching the math. */
+    ok('ONE inputs row for e1, not two — got ' + E.rows(INP).filter(r => r[1] === 'e1').length,
+       E.rows(INP).filter(r => r[1] === 'e1').length === 1);
+    ok('ONE inputs row for e2 as well', E.rows(INP).filter(r => r[1] === 'e2').length === 1);
+    const loser = [first, E.second].find(r => r && !r.ok);
+    ok('the losing copy says nothing was saved, in words', !!loser && /nothing was saved/.test(loser.error));
+    /* And the consequence, proved rather than argued: a later untick has to reach the math. */
+    E.attBatch({ pp_start: PP, att: 'e1:0', request_id: 'x'.repeat(24) });
+    ok('a later UNtick is what the math reads', E.inputsFor(PP).e1 && E.inputsFor(PP).e1.att === false);
+  }
+}
+{
+  /* The lock also stops a batch and a single tick for the same person colliding. */
+  const E = engine(); E.user = 'mike';
+  if (E.attBatch) {
+    E.save({ pp_start: PP, employee_id: 'e2', att: '' });
+    E.interleave(INP, () => E.save({ pp_start: PP, employee_id: 'e1', att: '1' }));
+    E.attBatch({ pp_start: PP, att: 'e1:1', request_id: 'w'.repeat(24) });
+    ok('a batch racing a single tick still leaves ONE row for that person',
+       E.rows(INP).filter(r => r[1] === 'e1').length === 1);
+  }
+}
+
 /* ══ The lock helper itself ════════════════════════════════════════════════════════════════════ */
 console.log('\nwithPayLock_');
 {
