@@ -2780,6 +2780,7 @@
     var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll }
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (paidOf(d.admin, adm) || 0) : 0;
+    var spiffTot = incSpiffTotal(buds.map(budCalc).concat(mgrs.map(mgrCalc)));
 
     var isPractice = incIsPractice(d);
 
@@ -2816,6 +2817,12 @@
     h.push('<dl class="crew-inc-tot">');
     h.push('<div><dd>' + esc(m0(mgrTotal)) + '</dd><dt>Manager bonuses</dt></div>');
     h.push('<div><dd>' + esc(m0(budTotal)) + '</dd><dt>Budtender bonuses</dt></div>');
+    /* SPIFF sits among the payroll tiles (Sky, 2026-09-15) but is NOT part of Total payroll — it is
+       vendor money, in Bonus and never in Payroll — so the label says so. A report that never
+       recorded SPIFF shows a dash, not $0. */
+    h.push('<div class="is-spiff" title="Vendor-funded. Not included in Total payroll.">' +
+           '<dd>' + (spiffTot.any ? esc(m0(spiffTot.total)) : '—') + '</dd>' +
+           '<dt>SPIFF · vendor-funded</dt></div>');
     h.push('<div><dd>' + esc(m0(admPay)) + '</dd><dt>Admin</dt></div>');
     h.push('<div class="is-total"><dd>' + esc(m0(budTotal + mgrTotal + admPay)) +
            '</dd><dt>Total payroll</dt></div>');
@@ -3394,6 +3401,20 @@
     if (!m || !n) return (a || '') + ' → ' + (b || '');
     return INC_MONTHS[+m[2] - 1] + ' ' + (+m[3]) + ' – ' +
            INC_MONTHS[+n[2] - 1] + ' ' + (+n[3]) + ', ' + n[1];
+  }
+
+  /* This period's SPIFF across managers and budtenders, from the same calc results the tables
+     render — live rows computed, imported rows as frozen. The admin row carries none.
+     `any` is false only when no row states a SPIFF figure at all (the 2025-08-04 report has no
+     such column), which is "not recorded" and must not print as $0. A stated 0 is a real zero. */
+  function incSpiffTotal(calcs) {
+    var total = 0, any = false;
+    (calcs || []).forEach(function (c) {
+      if (!c || c.spiff === null || c.spiff === undefined || c.spiff === '') return;
+      any = true;
+      total += Number(c.spiff) || 0;
+    });
+    return { total: Math.round(total * 100) / 100, any: any };
   }
 
   /* WHAT STAFF HAVE BEEN PAID, EVERY APPROVED PERIOD TO DATE (Sky, 2026-09-14). The engine sums the
