@@ -8773,6 +8773,11 @@ function incentiveThresholds_() {
 
 /* ══ Discount rules — GX Core holds the STATE, Leaderboard still supplies the NAMES ═════════════
  *
+ * *Updated 2026-09-14:* the NAMES now reach Crew through GX Core too — Leaderboard publishes its
+ * registry to kv `discountRegistry` and `discountRegistry_` reads that first. Leaderboard is still
+ * the only thing that can BUILD the list; what moved is where Crew reads it. The paragraphs below
+ * describe why the list is Leaderboard's, which is still true.
+ *
  * Which discretionary discounts count against a budtender is a pay-affecting setting, so it lives
  * in GX Core kv (`discountRules`) beside `incentiveThresholds` — same reason, same shape of
  * ownership: comp policy is not the kiosk's ScriptProperty. Deliberately NOT a `cfg.` key, because
@@ -8832,12 +8837,83 @@ function discountRules_() {
   return { ok: true, overrides: d.overrides || {}, present: true };
 }
 
-/**
- * The discount NAMES, from Leaderboard's registry. Read-only, and its `excluded` flags are
- * deliberately DISCARDED — that is Core's answer now, and reading LB's copy is how the two would
- * drift back apart without anybody noticing.
+/* ── The NAMES, from GX Core first (2026-09-14) ──────────────────────────────────────────────────
+ *
+ * Leaderboard now publishes its registry to GX Core kv `discountRegistry` on every rebuild (LB
+ * v1.810, roughly twice a day). So the order is: Core's published copy → Leaderboard's /exec →
+ * the names Core holds an override for. The direct Leaderboard call survives only as the second
+ * rung, and only until Leaderboard is deleted — the same retirement `incentive_compare` is waiting on.
+ *
+ * `excluded` is not in the published shape at all; it lives only in `discountRules`. The mapping
+ * below drops it anyway, so a future publisher that adds one still cannot become a second source
+ * for a pay-affecting decision.
+ *
+ * STALE IS STILL USED, AND SAID. Past DISCOUNT_REGISTRY_STALE_DAYS the list is served with a
+ * warning rather than thrown away: a discount Dutchie added last week is missing from it, but every
+ * name on it is still real, and the tray is useless empty. Stale here means Leaderboard's publish
+ * has been failing for two weeks, which is somebody's problem to go and look at, not a reason to
+ * quietly fall back to the very call this replaced.
  */
+var DISCOUNT_REGISTRY_KV = 'discountRegistry';
+var DISCOUNT_REGISTRY_STALE_DAYS = 14;
+
+/** The published `{discretionary, autoExcluded, counts, builtAt}`, normalized. Pure but for the read. */
+function discountRegistryFromCore_() {
+  var raw;
+  try { raw = GXCore.getKv(DISCOUNT_REGISTRY_KV); }
+  catch (e) { return { ok: false, error: 'could not read discountRegistry from GX Core: ' + String((e && e.message) || e) }; }
+  var s = String(raw == null ? '' : raw).trim();
+  if (!s) return { ok: false, error: 'GX Core has no discountRegistry yet' };
+  var d;
+  try { d = JSON.parse(s); } catch (e) { return { ok: false, error: 'discountRegistry in GX Core kv is not valid JSON' }; }
+  if (!d || typeof d !== 'object' || !Array.isArray(d.discretionary)) {
+    return { ok: false, error: 'discountRegistry in GX Core kv has no discretionary list' };
+  }
+  var names = d.discretionary.map(function (x) {
+    return { name: String((x && x.name) || ''), code: (x && x.code) || '', method: (x && x.method) || '' };
+  }).filter(function (x) { return !!x.name; });
+  /* An empty list is not a registry — Dutchie always has discretionary discounts, and rendering
+     none would read as "nothing to set" rather than "the publish went wrong". */
+  if (!names.length) return { ok: false, error: 'discountRegistry in GX Core kv lists no discretionary discounts' };
+  var auto = d.autoExcluded || {};
+  var builtAt = d.builtAt || null;
+  var ageMs = builtAt ? (new Date().getTime() - new Date(builtAt).getTime()) : NaN;
+  return {
+    ok: true,
+    from: 'gx-core',
+    names: names,
+    autoExcluded: {
+      automatic: Array.isArray(auto.automatic) ? auto.automatic : [],
+      loyalty: Array.isArray(auto.loyalty) ? auto.loyalty : []
+    },
+    counts: d.counts || { automatic: 0, loyalty: 0, discretionary: names.length },
+    builtAt: builtAt,
+    /* No builtAt, or one that does not parse, is treated as stale: an age nobody can state is not
+       a fresh one. */
+    stale: !(ageMs >= 0) || ageMs > DISCOUNT_REGISTRY_STALE_DAYS * 86400000
+  };
+}
+
+/** Core's published copy, else Leaderboard's live one. Says which, and why it had to fall back. */
 function discountRegistry_() {
+  var core = discountRegistryFromCore_();
+  if (core.ok) return core;
+  var lb = discountRegistryFromLeaderboard_();
+  if (lb.ok) {
+    lb.from = 'leaderboard';
+    lb.core_error = core.error;
+    Logger.log('incentive_discounts: fell back to Leaderboard for discount names — ' + core.error);
+    return lb;
+  }
+  return { ok: false, error: core.error + '; and Leaderboard: ' + lb.error };
+}
+
+/**
+ * The discount NAMES, from Leaderboard's registry — the FALLBACK now. Read-only, and its `excluded`
+ * flags are deliberately DISCARDED — that is Core's answer, and reading LB's copy is how the two
+ * would drift back apart without anybody noticing. Delete with Leaderboard.
+ */
+function discountRegistryFromLeaderboard_() {
   var base = '';
   try { base = String(GXCore.getKv('lbGoals') || ''); } catch (e) {}
   if (!base) return { ok: false, error: 'no Leaderboard engine URL in GX Core kv (key lbGoals)' };
@@ -8968,7 +9044,7 @@ function incentiveDiscountsRoute_(p) {
   return out;
 }
 
-/** State from GX Core, names from Leaderboard, and it says which parts it actually got. */
+/** State from GX Core, names from GX Core (else Leaderboard), and it says which parts it actually got. */
 function incentiveDiscountsPayload_(auth) {
   var rules = discountRules_();
   if (!rules.ok) return rules;
@@ -8979,13 +9055,17 @@ function incentiveDiscountsPayload_(auth) {
     discretionary = reg.names.map(function (x) {
       return { name: x.name, code: x.code, method: x.method, excluded: !!rules.overrides[x.name] };
     });
+    if (reg.stale) {
+      warning = 'The discount list was last refreshed ' + (reg.builtAt ? String(reg.builtAt).slice(0, 10) : 'at an unknown date') +
+                ', so a discount added since then is missing. Leaderboard is supposed to refresh it twice a day.';
+    }
   } else {
     /* No registry: show what Core knows an opinion about rather than nothing. Short and incomplete
        — a discount nobody has ever toggled is missing entirely — so the tray says so. Saving still
        works and is still safe, because the merge only touches the names that were on screen. */
     partial = true;
-    warning = 'Leaderboard is unreachable, so this is only the discounts a rule has already been ' +
-              'set for — not the full list. ' + reg.error;
+    warning = 'The full discount list could not be read, so this is only the discounts a rule has ' +
+              'already been set for — not the full list. ' + reg.error;
     discretionary = Object.keys(rules.overrides).sort().map(function (n) {
       return { name: n, code: '', method: '', excluded: !!rules.overrides[n] };
     });
@@ -9003,6 +9083,10 @@ function incentiveDiscountsPayload_(auth) {
     autoExcluded: reg.ok ? reg.autoExcluded : { automatic: [], loyalty: [] },
     counts: reg.ok ? reg.counts : { automatic: 0, loyalty: 0, discretionary: discretionary.length },
     builtAt: reg.ok ? reg.builtAt : null,
+    /* Where the NAMES came from: 'gx-core' | 'leaderboard' | 'overrides-only'. `source` above is
+       where the RULES came from, which is always Core. */
+    names_from: reg.ok ? reg.from : 'overrides-only',
+    stale: !!(reg.ok && reg.stale),
     partial: partial,
     warning: warning,
     can_edit: canApprove_(auth)

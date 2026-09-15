@@ -861,6 +861,23 @@ apart. If Leaderboard is unreachable the tray degrades to the names Core holds a
 flagged `partial` with a warning that says the list is incomplete; saving still works, because the
 merge only touches names that were on screen.
 
+***The read hop moved to GX Core too, 2026-09-14.*** Leaderboard now **publishes** its registry to
+GX Core kv **`discountRegistry`** on every rebuild (LB v1.810, about twice a day), names and classes
+only, no `excluded` flags. `discountRegistry_` reads three rungs: **Core's published copy →
+Leaderboard's `/exec` → the names Core holds an override for**, and the payload's `names_from` says
+which one answered (`gx-core` / `leaderboard` / `overrides-only`). Leaderboard still *builds* the
+list — nothing else has the Dutchie credentials — but Crew no longer calls it while Core has a copy.
+
+- **Older than 14 days is still shown, with a warning naming the date** (`stale: true`). Every name
+  on a stale list is still real; what is missing is whatever Dutchie added since. It deliberately does
+  **not** fall back to Leaderboard on stale — two weeks of failed publishes is a Leaderboard problem
+  to go and look at, not a reason to quietly revive the call this replaced.
+- **An empty, unparseable or list-less Core value falls back**, it does not render an empty tray.
+- **The Leaderboard rung (`discountRegistryFromLeaderboard_`) is deleted with Leaderboard**, same as
+  `incentive_compare`.
+
+Pinned by `tests/discount_rules_test.js`.
+
 **The checkboxes mean COUNTED and the store holds EXCLUDED**; the flip happens in the engine, never
 the browser, because a UI posting one while displaying the other grades every budtender against the
 opposite rule and nothing about the result looks wrong. The browser posts in its own vocabulary —

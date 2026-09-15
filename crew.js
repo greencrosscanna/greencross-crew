@@ -4314,9 +4314,9 @@
       Array.prototype.forEach.call(tray.querySelectorAll('.ist-tog'), function (cb) { if (cb.checked) n++; });
       setText('istCounted', n);
     }
-    /* Loaded when the tray opens, not with the dashboard: the STATE is a GX Core kv read, but the
-       NAMES are still a Leaderboard round trip that rebuilds a discount registry from Dutchie, and
-       nobody waits for that unless they came here to look. */
+    /* Loaded when the tray opens, not with the dashboard. Both halves are GX Core kv reads now, but
+       when Core has no published list the NAMES fall back to a Leaderboard round trip that can
+       rebuild the registry from Dutchie, and nobody waits for that unless they came here to look. */
     (async function () {
       try {
         var r = await Engine.jsonp('incentive_discounts', { token: token() },

@@ -191,6 +191,86 @@ t('reading never asks Leaderboard to save anything', () => {
   assert.strictEqual(coreWrites().length, 0);
 });
 
+console.log('\nNames: GX Core\'s published registry first, Leaderboard only as the fallback\n');
+
+/* Leaderboard's publish shape (greencross-leaderboard/discounts.gs discountRegistryPayload_). It
+   carries NO excluded flags; one is planted here anyway, wrong, to prove it is never read. */
+const coreRegistry = (over) => JSON.stringify(Object.assign({
+  builtAt: new Date(Date.now() - 3600e3).toISOString(),
+  counts: { automatic: 1, loyalty: 1, discretionary: 5 },
+  discretionary: [
+    { name: 'Employee Discount', code: 'EMP', method: 'Manual', excluded: false },
+    { name: '$2 GOOGLE REVIEW PRE-ROLL', code: 'GOOG', method: 'Code' },
+    { name: '5 for $20 Gummies, same strain only', code: 'G5', method: 'Code' },
+    { name: 'Veteran', code: 'VET', method: 'Manual' },
+    { name: 'Industry', code: 'IND', method: 'Manual' },
+  ],
+  autoExcluded: { automatic: ['Vendor Day'], loyalty: ['Points Redemption'] },
+}, over || {}));
+
+t('a published registry in GX Core is used and Leaderboard is NEVER called', () => {
+  fresh(); KV.discountRegistry = coreRegistry();
+  const r = read();
+  assert.strictEqual(r.ok, true, JSON.stringify(r));
+  assert.strictEqual(FETCHES.filter((u) => /action=discountrules/.test(u)).length, 0,
+    'the app-to-app call ran even though Core had the list');
+  assert.strictEqual(r.names_from, 'gx-core');
+  assert.strictEqual(r.discretionary.length, 5);
+  assert.ok(byName(r, 'Industry'), 'a name only Core\'s copy has is on the tray');
+  assert.strictEqual(r.partial, false);
+  assert.strictEqual(r.stale, false);
+  assert.strictEqual(r.warning, '');
+});
+
+t('Core\'s registry supplies names only — the excluded answer still comes from discountRules', () => {
+  fresh(); KV.discountRegistry = coreRegistry();
+  const r = read();
+  assert.strictEqual(byName(r, 'Employee Discount').excluded, true,
+    'the planted excluded:false in the registry must lose to discountRules');
+  assert.strictEqual(byName(r, 'Veteran').excluded, false);
+});
+
+t('a registry older than 14 days is still shown, with a warning naming its date', () => {
+  fresh(); KV.discountRegistry = coreRegistry({ builtAt: '2026-01-02T00:00:00.000Z' });
+  const r = read();
+  assert.strictEqual(r.names_from, 'gx-core');
+  assert.strictEqual(r.stale, true);
+  assert.strictEqual(r.partial, false, 'stale is not incomplete');
+  assert.ok(/2026-01-02/.test(r.warning), r.warning);
+  assert.strictEqual(FETCHES.filter((u) => /action=discountrules/.test(u)).length, 0,
+    'stale must not quietly revive the direct Leaderboard call');
+});
+
+t('a registry with no builtAt is treated as stale, not fresh', () => {
+  fresh(); KV.discountRegistry = coreRegistry({ builtAt: null });
+  assert.strictEqual(read().stale, true);
+});
+
+t('no registry in Core falls back to Leaderboard, says so, and logs why', () => {
+  fresh();
+  const r = read();
+  assert.strictEqual(r.names_from, 'leaderboard');
+  assert.strictEqual(r.discretionary.length, 4);
+  assert.ok(LOGS.some((l) => /fell back to Leaderboard/.test(l)), LOGS.join(' | '));
+});
+
+['{not json', JSON.stringify({ builtAt: 'x' }), JSON.stringify({ discretionary: [] })].forEach((bad) => {
+  t('an unusable Core registry (' + bad.slice(0, 24) + ') falls back rather than showing an empty tray', () => {
+    fresh(); KV.discountRegistry = bad;
+    const r = read();
+    assert.strictEqual(r.names_from, 'leaderboard');
+    assert.strictEqual(r.discretionary.length, 4);
+  });
+});
+
+t('Core registry missing AND Leaderboard down → overrides-only, partial, both reasons named', () => {
+  fresh(); LB_HTTP = 500;
+  const r = read();
+  assert.strictEqual(r.names_from, 'overrides-only');
+  assert.strictEqual(r.partial, true);
+  assert.ok(/no discountRegistry/.test(r.warning) && /Leaderboard/.test(r.warning), r.warning);
+});
+
 console.log('\nDegrading: Leaderboard down, GX Core still authoritative\n');
 
 t('an unreachable Leaderboard degrades to the names Core holds, flagged partial with a warning', () => {
