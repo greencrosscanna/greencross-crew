@@ -4262,7 +4262,46 @@ function inputsFor_(ppStart) {
 /* GX Core's incentive_perf, mapped into the shape this engine already consumes. The mapping is the
    whole risk surface, so it is explicit rather than a spread: a renamed field that silently arrives
    as undefined reads downstream as a zero, and a zero here is somebody's bonus. */
-function fetchLivePerfFromCore_(ppStart) {
+/* THE SCREEN MAY READ GX Core's SNAPSHOT (Sky, 2026-09-15). `GXCore.incentivePerf` is GX Core's
+   in-process door: the same payload the route returns, pre-computed by its warmer (the running and
+   just-ended periods, every 15 minutes), read in well under a second instead of 2-19s over HTTP.
+   Only the SCREEN passes { snapshot: true }. Approval and the send preview never do — they freeze and
+   email figures, and GX Core's own note on that door says both must compute live from ONE source.
+
+   HOW OLD IS ACCEPTABLE:
+   - the RUNNING period: up to SNAPSHOT_OPEN_MAX_MIN. Sky's call — "up to 15 min old is fine" for a
+     fortnight nobody can approve yet. The warmer fires every 15 minutes and a rebuild takes ~16s,
+     so the bound carries 5 minutes of slack; a tighter one would fall back to HTTP just before
+     every refresh.
+   - an ENDED period: only what GX Core itself calls fresh (`stale === false`) — its own cache
+     policy, the same one the HTTP route answers from. No looser than before.
+   Anything else — no door on this pin, a refusal, missing/incomplete/corrupt, too old — falls through
+   to the HTTP route exactly as before, and `snapshot_skip` says why. A slow screen is recoverable; a
+   screen quietly showing an hour-old fortnight is not. */
+var SNAPSHOT_OPEN_MAX_MIN = 20;
+
+function perfFromSnapshot_(ppStart) {
+  if (typeof GXCore.incentivePerf !== 'function') return { use: false, why: 'this GXCore pin has no incentivePerf' };
+  var d = null;
+  try { d = GXCore.incentivePerf({ pp_start: ppStart || '' }); }
+  catch (e) { return { use: false, why: 'incentivePerf threw: ' + String((e && e.message) || e) }; }
+  if (!d || d.ok === false) return { use: false, why: String((d && (d.snapshot || d.error)) || 'no answer') };
+  if (!d.pp_start && !(d.payPeriod && d.payPeriod.start)) return { use: false, why: 'snapshot names no period' };
+  var age = (d.age_minutes === null || d.age_minutes === undefined || d.age_minutes === '')
+          ? null : Number(d.age_minutes);
+  if (age === null || !isFinite(age)) return { use: false, why: 'snapshot age unknown' };
+  var open = !!(d.payPeriod && d.payPeriod.current);
+  if (open ? age > SNAPSHOT_OPEN_MAX_MIN : d.stale !== false) {
+    return { use: false, why: 'snapshot is ' + age + ' min old (' + (open ? 'running period, limit ' +
+             SNAPSHOT_OPEN_MAX_MIN : 'ended period, GX Core calls it stale') + ')' };
+  }
+  return { use: true, d: d, age: age };
+}
+
+function fetchLivePerfFromCore_(ppStart, opts) {
+  var snap = (opts && opts.snapshot) ? perfFromSnapshot_(ppStart) : null;
+  if (snap && snap.use) return mapCorePerf_(snap.d, { perf_source: 'snapshot', perf_age_minutes: snap.age,
+                                                       perf_computed_at: String(snap.d.computed_at || '') });
   var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
   if (!secret) {
     return { ok: false, error: 'GX_DEPLOY_SECRET is not set on the Crew script, so Crew cannot '
@@ -4282,6 +4321,12 @@ function fetchLivePerfFromCore_(ppStart) {
   }
   if (!d) return { ok: false, error: 'GX Core incentive_perf unreachable — ' + lastErr };
   if (d.ok === false) return { ok: false, error: 'GX Core incentive_perf: ' + (d.error || 'refused') };
+  return mapCorePerf_(d, { perf_source: 'live', snapshot_skip: snap ? snap.why : '' });
+}
+
+/* One mapping for both doors — the snapshot is the route's payload plus five additive fields, so
+   the two cannot be allowed to drift into two readings of the same shape. */
+function mapCorePerf_(d, extra) {
 
   var row = function (r) {
     return {
@@ -4325,7 +4370,13 @@ function fetchLivePerfFromCore_(ppStart) {
     // difference appearing as an unexplained few dollars.
     returns_not_counted: d.returns_not_counted || [],
     return_grace_days: d.return_grace_days,
-    unresolved: d.unresolved || []
+    unresolved: d.unresolved || [],
+    /* Where the figures came from: 'snapshot' (with its age) or 'live'. The screen says so when it
+       is the snapshot, so a number that moved after a sale is not mistaken for a bug. */
+    perf_source: (extra && extra.perf_source) || 'live',
+    perf_age_minutes: (extra && extra.perf_age_minutes != null) ? extra.perf_age_minutes : null,
+    perf_computed_at: (extra && extra.perf_computed_at) || '',
+    snapshot_skip: (extra && extra.snapshot_skip) || ''
   };
 }
 
@@ -4333,8 +4384,8 @@ function fetchLivePerfFromCore_(ppStart) {
  * because a fetch failed looks exactly like a fortnight in which nobody earned anything, and this
  * one is about pay. Same rule as the nightly Dutchie scan. Kept as its own name because every
  * caller already uses it. */
-function fetchLivePerf_(ppStart) {
-  return fetchLivePerfFromCore_(ppStart);
+function fetchLivePerf_(ppStart, opts) {
+  return fetchLivePerfFromCore_(ppStart, opts);
 }
 
 /* Leaderboard identifies people by its own nameKey ('chris_carney'); GX Core — and therefore every
@@ -5381,7 +5432,7 @@ function getIncentive_(p) {
   /* Shared with both write paths — the fetch (with the practice window split), the stamp and the
      floater fold. See `perfForWrite_`. The screen is not a write path, but it is the thing the
      approver LOOKS at, so it must be shaped by the same code that shapes what gets frozen. */
-  var live = perfForWrite_(want, timings);
+  var live = perfForWrite_(want, timings, { snapshot: true });
   tLast = Date.now();
   if (live.ok === false) return live;
   live.source = 'live';
@@ -7253,9 +7304,11 @@ function incentiveSpiffReport_(live, failed, ack, total) {
  * have to reproduce those differences behind a flag, which is the same two-copies problem wearing
  * a parameter. This is the row SHAPE, which is the thing that broke.
  */
-function perfForWrite_(pp, timings) {
+/* `opts.snapshot` is the SCREEN's alone (getIncentive_). The two write paths call this bare and so
+   always compute live — see perfFromSnapshot_. */
+function perfForWrite_(pp, timings, opts) {
   var t = Date.now();
-  var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
+  var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp, opts);
   if (timings) { timings.perf_fetch = Date.now() - t; t = Date.now(); }
   if (live.ok === false) return live;
   stampEmployeeIds_(live);

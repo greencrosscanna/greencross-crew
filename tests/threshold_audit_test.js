@@ -45,6 +45,9 @@ const LIB_SURFACE = [
      source from the per-transaction pull the incentive figures come from, which is what makes
      storeTotals_ (2026-09-11) an independent check rather than a restatement. */
   'getSalesDaily',
+  /* gx_dutchie.gs incentivePerf — GX Core's in-process snapshot door, exported at library v313
+     (commit 537d6ee, 2026-09-09). The incentive SCREEN reads it (2026-09-15); approval and send never do. */
+  'incentivePerf',
   /* gx_core.gs:3126, added in aec4bd7 which is BELOW the commit stamping GX_LIB_VERSION 306 — so
      it is in the snapshot appsscript.json pins, which is the only thing that matters. Checked in
      the hub's own history rather than taken from the note announcing it: a library call runs the

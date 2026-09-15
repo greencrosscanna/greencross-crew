@@ -3356,6 +3356,11 @@
        otherwise read "Imported", which is the one word on this screen that means "this was paid". */
     if (incIsPractice(d)) return 'Practice · ' + people;
     if (d.source === 'imported') return 'Imported · ' + people;
+    /* GX Core's pre-computed copy, not a calculation made just now (2026-09-15). Said on the screen
+       so a figure that moves on the next load reads as newer sales, not as a bug. */
+    var asOf = (d.perf_source === 'snapshot' && d.perf_age_minutes != null)
+      ? ' · sales as of ' + (d.perf_age_minutes < 1 ? 'just now' : d.perf_age_minutes + ' min ago') : '';
+    people += asOf;
     if (!pp.current) return 'Closed period · ' + people;
     var end = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(pp.end || ''));
     if (!end) return 'Current period · ' + people;

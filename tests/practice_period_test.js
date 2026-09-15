@@ -229,7 +229,7 @@ console.log('\nincentiveApprove_ splits them the same way — and writes to the 
   const PFW = decomment(fnSrc(GS, 'perfForWrite_'));
   ok('approval delegates the fetch to the one shared shaper', /perfForWrite_\(pp\)/.test(A));
   ok('the performance fetch asks for the source window',
-     /fetchLivePerf_\(isPracticePeriod_\(pp\) \? practiceSource_\(pp\) : pp\)/.test(PFW));
+     /fetchLivePerf_\(isPracticePeriod_\(pp\) \? practiceSource_\(pp\) : pp(, opts)?\)/.test(PFW));
   /* And approval must not have kept a second copy that could drift back apart. */
   ok('...and approval no longer fetches on its own', !/fetchLivePerf_\(/.test(A));
   ok('the frozen rows are keyed on pp — the practice key — not on the window',
