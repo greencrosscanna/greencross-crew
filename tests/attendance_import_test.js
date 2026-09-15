@@ -214,5 +214,53 @@ console.log('\nAlready correct, and the refusals');
         .change.some(c => c.want === true)));
 }
 
+console.log('\nClose spelling — "Laurel Nelson" is Laural, "Kristen Bailey" is Kristin (2026-09-15)');
+{
+  /* The two rows from Mike's 2026-09-15 file that exact matching dropped into "not on this period". */
+  const P2 = JSON.parse(JSON.stringify(PERIOD));
+  P2.budtenders.push(
+    { employee_id: 'laural_nelson',  name: 'Levy Nelson',  full_name: 'Laural Nelson',  storeName: 'Baseline', storeSlug: 'baseline' },
+    { employee_id: 'kristin_bailey', name: 'Rose Bailey',  full_name: 'Kristin Bailey', storeName: 'River',    storeSlug: 'river' },
+    { employee_id: 'zachary_babcock',   name: 'Zach Babcock',   full_name: 'Zachary Babcock',   storeName: 'River', storeSlug: 'river' },
+    { employee_id: 'zachary_rodriguez', name: 'Zach Rodriguez', full_name: 'Zachary Rodriguez', storeName: 'Baseline', storeSlug: 'baseline' });
+  const R2 = M.impRoster(P2);
+  const all = b => [].concat(b.change, b.same, b.noeffect);
+  const b = M.attBuild(M.attPlan(sheet(HEAD +
+    'Baseline,Laurel Nelson,Yes,ok\n' +
+    'River,Kristen Bailey,Yes,ok\n' +
+    'River,Rose Bailey,No,\n')), R2, {}, T);
+  const levy = all(b).find(r => r.name === 'Laurel Nelson');
+  ok('"Laurel Nelson" matches Levy Nelson', !!levy && levy.id === 'laural_nelson');
+  ok('…and is marked as a close match, not an exact one', !!levy && levy.close === true);
+  const kb = M.attBuild(M.attPlan(sheet(HEAD + 'River,Kristen Bailey,Yes,ok\n')), R2, {}, T);
+  const rose = all(kb).find(r => r.name === 'Kristen Bailey');
+  ok('"Kristen Bailey" matches Rose Bailey', !!rose && rose.id === 'kristin_bailey' && rose.close === true);
+  /* "Rose Bailey" names Kristin exactly, further down — so the misspelled row above must NOT take
+     her. It is reported absent, and the exact row is the one that is written. */
+  const roseExact = all(b).find(r => r.name === 'Rose Bailey');
+  ok('an exact row further down wins over a close guess above it', !!roseExact && roseExact.id === 'kristin_bailey' && !roseExact.close);
+  ok('…and the misspelled row is reported, not silently merged', b.absent.some(r => r.name === 'Kristen Bailey'));
+  ok('Laurel Nelson does not land in "not on this pay period"', !b.absent.some(r => /Nelson/.test(r.name)));
+
+  const exact = M.attBuild(M.attPlan(sheet(HEAD + 'Baseline,Levy Nelson,Yes,ok\n')), R2, {}, T);
+  ok('an exact match is still exact', all(exact)[0] && all(exact)[0].close === false);
+
+  const surname = M.attBuild(M.attPlan(sheet(HEAD + 'Baseline,Laurel Nielson,Yes,ok\n')), R2, {}, T);
+  ok('a different SURNAME never close-matches', surname.absent.length === 1);
+  const far = M.attBuild(M.attPlan(sheet(HEAD + 'Baseline,Lauren Nelson,Yes,ok\n' + 'Baseline,Maria Nelson,Yes,ok\n')), R2, {}, T);
+  ok('"Lauren" (two letters off Laural) still matches', all(far).some(r => r.name === 'Lauren Nelson' && r.id === 'laural_nelson'));
+  ok('but "Maria" is too far and is reported as absent', far.absent.some(r => r.name === 'Maria Nelson'));
+
+  const zach = M.attBuild(M.attPlan(sheet(HEAD + 'River,Zack Babcok,Yes,ok\n')), R2, {}, T);
+  ok('one letter off in each half still needs an exact surname — "Babcok" is absent', zach.absent.length === 1);
+  /* Two people who both fit is a guess, and a guess is never picked. */
+  const P3 = JSON.parse(JSON.stringify(P2));
+  P3.budtenders.push({ employee_id: 'kristine_bailey', name: 'Kristine Bailey', full_name: 'Kristine Bailey', storeName: 'Bend', storeSlug: 'bend' });
+  const amb = M.attBuild(M.attPlan(sheet(HEAD + 'River,Kristen Bailey,Yes,ok\n')), M.impRoster(P3), {}, T);
+  ok('two people within reach is NOT a match — reported absent instead', amb.absent.length === 1);
+  ok('a two-letter first name is never fuzzed ("Al Nelson")',
+     M.attBuild(M.attPlan(sheet(HEAD + 'Baseline,Al Nelson,Yes,ok\n')), R2, {}, T).absent.length === 1);
+}
+
 console.log(fail ? '\n' + fail + ' FAILED' : '\nattendance import: all passed');
 process.exit(fail ? 1 : 0);

@@ -5004,6 +5004,45 @@
     return impKey(name).split(' ').filter(function (t) { return t.length > 1; }).sort().join(' ');
   }
 
+  /* CLOSE SPELLING, the rung after exact (Sky, 2026-09-15: "see Rose and Levy"). Mike's list types
+     names by hand — "Laurel Nelson" for Laural, "Kristen Bailey" for Kristin — and exact-or-nothing
+     put both in "not on this pay period", which on a Yes row silently withholds a bonus.
+
+     Deliberately narrow: the SURNAME must match exactly, the first name must be within two letters
+     of that person's legal first name or the name they go by, and exactly ONE person on the period
+     may fit. Two candidates is not a match, it is a guess — reported, never picked. Every hit is
+     marked `close` and shown as such in the preview, because a tick saved against the wrong person
+     moves money for two people. */
+  function impEditDistance(a, b) {
+    if (a === b) return 0;
+    var prev = [], cur, i, j;
+    for (j = 0; j <= b.length; j++) prev[j] = j;
+    for (i = 1; i <= a.length; i++) {
+      cur = [i];
+      for (j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  function impFirstLast(name) {
+    var t = impKey(name).split(' ').filter(Boolean);
+    return t.length < 2 ? null : { first: t[0], last: t[t.length - 1] };
+  }
+  function impCloseMatch(name, roster, used) {
+    var f = impFirstLast(name);
+    if (!f || f.first.length < 3) return null;
+    var fits = roster.filter(function (r) {
+      if (used[r.id]) return false;
+      return [r.legal, r.name].some(function (n) {
+        var g = impFirstLast(n);
+        return g && g.last === f.last && g.first.length >= 3 && impEditDistance(g.first, f.first) <= 2;
+      });
+    });
+    return fits.length === 1 ? fits[0] : null;
+  }
+
   /* Everyone the current period can hold an input for, with the section they sit in — a manager's
      own tick is not what pays them, so the section decides how a row is reported. A row with no
      employee_id is skipped: incentive_save keys on it, so a tick saved against a blank goes
@@ -5083,6 +5122,14 @@
   function attBuild(plan, roster, inputs, T) {
     var used = Object.create(null);
     var change = [], same = [], noeffect = [], absent = [], unreadable = [];
+    /* Everyone some row names EXACTLY, found before any close guess is made — so a misspelled row
+       near the top cannot take a person a correctly spelled row further down is about. */
+    var exactly = Object.create(null);
+    (plan.body || []).forEach(function (r) {
+      var k = impTokens(String(r[plan.nameCol] || '').trim());
+      if (!k) return;
+      roster.forEach(function (p) { if (impTokens(p.name) === k || impTokens(p.legal) === k) exactly[p.id] = 1; });
+    });
 
     (plan.body || []).forEach(function (r) {
       var name = String(r[plan.nameCol] || '').trim();
@@ -5093,14 +5140,18 @@
 
       var want = ATT_YES.test(raw) ? true : ATT_NO.test(raw) ? false : null;
 
-      var tk = impTokens(name), hit = null;
+      var tk = impTokens(name), hit = null, close = false;
       for (var j = 0; j < roster.length && !hit; j++) {
         if (tk && (impTokens(roster[j].name) === tk || impTokens(roster[j].legal) === tk)) hit = roster[j];
+      }
+      if (!hit) {
+        hit = impCloseMatch(name, roster.filter(function (p) { return !exactly[p.id]; }), used);
+        close = !!hit;
       }
 
       var rec = { name: name, raw: raw, want: want, note: note, fileStore: fileStore,
                   who: hit ? hit.name : '', id: hit ? hit.id : '', store: hit ? hit.store : '',
-                  section: hit ? hit.section : '', slug: hit ? hit.slug : '' };
+                  section: hit ? hit.section : '', slug: hit ? hit.slug : '', close: close };
 
       /* An unrecognised value is REPORTED, never guessed. "Pending", "N/A" and a blank all read as
          "not yes", and treating them as No would silently strip a bonus on a typo. */
@@ -5169,7 +5220,10 @@
         return '<tr class="' + cls + '"><td>' + esc(m.name) +
           (m.raw ? ' <span class="crew-imp-tag ' + (m.want ? 'yes' : m.want === false ? 'no' : 'huh') + '">' +
                    esc(m.raw) + '</span>' : '') + '</td>' +
-          '<td>' + esc(m.who || label) + '</td>' +
+          '<td>' + esc(m.who || label) +
+            (m.close ? ' <span class="crew-imp-tag huh" title="Spelled differently in the file — matched ' +
+                       'on surname and a first name within two letters. Check it is the right person.">' +
+                       'spelling differs</span>' : '') + '</td>' +
           '<td class="dim">' + esc(m.store || m.fileStore) + '</td>' +
           '<td class="dim note">' + esc(m.note) + '</td></tr>';
       }).join('');

@@ -1063,10 +1063,16 @@ directions** and a `confirm()` names it before anything is written.
 - **The sheet is CHOSEN, not assumed to be the first** — the Summary sheet has no Name column, and
   reading it would import nobody and report a clean run. The one whose header names a person and a
   yes/no wins; if no header says "attendance", a column whose *values* are all yes/no is used.
-- **Matching is name-only and exact-or-nothing**, against both the display name and the legal one —
-  the file mixes them, saying "Mike Kettler" (the nickname) and "Robert Wydick" (the legal name of
-  the person this roster calls Nate). There is no code column in it at all. Duplicates are reported,
-  never allowed to overwrite.
+- **Matching is name-only: exact first, then close spelling**, against both the display name and the
+  legal one — the file mixes them, saying "Mike Kettler" (the nickname) and "Robert Wydick" (the
+  legal name of the person this roster calls Nate). There is no code column in it at all. Duplicates
+  are reported, never allowed to overwrite.
+- **Close spelling (2026-09-15)** — Mike types names by hand: "Laurel Nelson" for Laural (Levy),
+  "Kristen Bailey" for Kristin (Rose). Exact-or-nothing put both in *not on this pay period*, which on
+  a Yes silently withholds a bonus. The rung is narrow on purpose: **exact surname**, first name
+  **within two letters** of the legal first name or the one they go by, **exactly one** candidate
+  (two is a guess and is never picked), and never a person some other row names exactly. Every hit
+  shows **spelling differs** in the preview. Pinned in `tests/attendance_import_test.js`.
 - **It writes through `incentive_save`**, one person at a time, so that route's existing refusals
   (imported period, locked pending approval, role check) are the only guards. A partial run is safe:
   whoever was written has Mike's answer and the rest keep what they had, so it reports who failed
