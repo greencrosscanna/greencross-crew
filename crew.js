@@ -2623,7 +2623,9 @@
   var incUnlocked = Object.create(null);
   /* View-only, and deliberately not persisted or sent anywhere: it must not survive a period
      change or reach the engine. */
-  var incGrouped = false;
+  /* Grouped by store is the DEFAULT view (Sky, 2026-09-14). It is still a toggle — flat is one click
+     away — and loadIncentive puts it back to grouped on every period change. */
+  var incGrouped = true;
 
   function m0(n) { return '$' + Math.round(n || 0).toLocaleString('en-US'); }
   function m2(n) { return '$' + (Math.round((n || 0) * 100) / 100).toFixed(2); }
@@ -2671,6 +2673,33 @@
      for what is now Baseline) but color the dot by the resolved store_id — so a year of history
      groups by eye against today's stores even though the names moved. */
   function incStoreId(r) { return r.store_id || r.storeSlug || ''; }
+
+  /* Managers and budtenders in ALPHABETICAL STORE ORDER, by the name the screen prints (Sky,
+     2026-09-14) — so the sort follows a rename in Command Center instead of freezing today's names.
+     Corporate and anyone whose store does not resolve go LAST: neither is a shop, and a floater
+     booked to corporate sitting between Commercial and Hillsboro reads as a seventh store.
+     STABLE, and only between stores — within one store the rows keep the order the engine sent.
+     A copy, never an in-place sort: the totals and the facts line read the arrays too.
+     Display only. The Capstone export has its own fixed block order, which is Capstone's. */
+  function incStoreSortName(r) {
+    var id = incStoreId(r), reg = '';
+    try { reg = (window.GXStores && GXStores.name && GXStores.name(id)) || ''; } catch (e) { reg = ''; }
+    return String(reg || r.storeName || r.store_label || id || '');
+  }
+  function incByStore(rows) {
+    return (rows || []).map(function (r, i) { return { r: r, i: i }; }).sort(function (a, b) {
+      var ra = incStoreRank(a.r), rb = incStoreRank(b.r);
+      if (ra !== rb) return ra - rb;
+      var na = incStoreSortName(a.r).toLowerCase(), nb = incStoreSortName(b.r).toLowerCase();
+      if (na !== nb) return na < nb ? -1 : 1;
+      return a.i - b.i;
+    }).map(function (x) { return x.r; });
+  }
+  function incStoreRank(r) {
+    var id = incStoreId(r);
+    if (!id) return 2;
+    return id === 'corporate' ? 1 : 0;
+  }
 
   /* NEVER the label the row arrived with. GX Core's registry is the one place store names live, and
      both sources here disagree with it: an imported row carries the name the 2025 report printed
@@ -3428,7 +3457,7 @@
   }
 
   function incMgrTable(mgrs, calcOf, isImported, editable, T) {
-    var rows = mgrs.map(function (m) {
+    var rows = incByStore(mgrs).map(function (m) {
       var c = calcOf(m);
       var dp = incDiscPct(m);
       var goal = T ? T.budtender.discountMaxPct : null;
@@ -3494,9 +3523,10 @@
       incTh(10, '$/hr') + incTh(11, 'Payroll') + '</tr></thead>';
 
     var rows;
+    buds = incByStore(buds);
     if (incGrouped && !isImported) {
-      /* Rows stay in the order the engine sent them, grouped by store_id — the sort is the
-         engine's business, the grouping is a view. */
+      /* Groups in alphabetical store order (incByStore); within a store the rows keep the order
+         the engine sent them. */
       var order = [], by = Object.create(null);
       buds.forEach(function (b) {
         var k = incStoreId(b) || '(none)';
@@ -5177,9 +5207,9 @@
   }
 
   async function loadIncentive(ppStart) {
-    /* View-only state does not survive a period change — an imported period has no grouping and
-       carrying the toggle into one would leave a lit button doing nothing. */
-    incGrouped = false;
+    /* View-only state does not survive a period change: the view goes back to its default, which is
+       grouped by store. An imported period renders flat (still in store order) whatever this says. */
+    incGrouped = true;
     incUnlocked = Object.create(null);
     inc.loading = true; inc.error = ''; paintIncentive();
     try {

@@ -5386,6 +5386,13 @@ function applySpiffEarnings_(live, ppStart, useCache) {
  * gates its copy on a hardcoded sky/mike username list, a workaround for both being 'director';
  * that list does not come along.
  */
+/* The last completed fortnight when it is not yet in the real history tab, else '' (= the running
+   one). See the note where getIncentive_ calls it. */
+function defaultIncentivePeriod_(importedBy) {
+  var prev = computedPeriods_(1).filter(function (x) { return !x.current; })[0];
+  return (prev && !importedBy[prev.start]) ? prev.start : '';
+}
+
 function getIncentive_(p) {
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
@@ -5395,6 +5402,23 @@ function getIncentive_(p) {
   imported.forEach(function (h) { importedBy[h.pp_start] = h; });
 
   var want = String(p.pp_start || '');
+
+  /* THE PERIOD THE TAB OPENS ON (Sky, 2026-09-14). With no period asked for, the screen used to
+     open on the RUNNING fortnight — so on the Monday after a period ends, the week the close
+     actually happens, it opened on two days of a period nobody is working on and the one waiting
+     to be closed was a click away in the picker. Now: the last COMPLETED fortnight until it is
+     approved, then the running one.
+     "Approved" is read as "in the real history tab" (`importedBy`) and nothing else. Sent for
+     approval is not approved, and a period REOPENED by break glass is back out of history — both
+     keep opening on the old period, which is the one somebody still has to finish.
+     Only the default moves. An explicit pp_start — the picker, the approval-email link, a reload
+     after a save — is honored exactly as before. No anchor configured returns no periods, and
+     that falls through to the running one, which is the old behavior rather than a guess. */
+  var defaulted = '';
+  if (!want) {
+    want = defaultIncentivePeriod_(importedBy);
+    if (want) defaulted = 'unapproved_previous';
+  }
 
   /* A practice period that has been APPROVED is a frozen record too — of a rehearsal. It is served
      the same way a closed period is, from its own history tab, so the read-only "as paid" screen
@@ -5534,6 +5558,9 @@ function getIncentive_(p) {
      source for what history says and avoids a second total computed engine-side that could
      disagree with the one on screen. */
   live.history_band = historyBand_(live.payPeriod.start);
+  /* Why this period and not the running one, when nobody asked for a period. '' = asked for, or the
+     running one. */
+  live.defaulted = defaulted;
   return live;
 }
 

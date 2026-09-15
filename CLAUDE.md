@@ -601,6 +601,25 @@ tray, never from this paragraph.*
 Leaderboard still has this bug in miniature: its performance figures freeze but its thresholds do
 not, so editing the discount goal re-scores every period it already paid.
 
+### Which period the tab opens on, and in what order (2026-09-14)
+
+**With no period asked for, the tab opens on the LAST completed fortnight until it is approved, then
+on the running one** (Sky: on Monday 9/14 you should see the period that just ended). On close week
+the old default was two days of a fortnight nobody is working on. `defaultIncentivePeriod_` decides;
+"approved" means **in the real history tab** and nothing else, so a period that is only *sent* — or
+was **reopened** by break glass — keeps opening on the old period, which is the one still to finish.
+Only the default moves: an explicit `pp_start` (picker, approval-email link, reload after a save) is
+honored exactly. No `cfg.payPeriodAnchor` means the running period, as before. The payload's
+`defaulted` says when it chose.
+
+**Grouped by store is the default view**, and a period change puts it back to grouped. **Managers and
+budtenders are in alphabetical store order** by the name the screen prints (`incByStore`), so a
+rename follows; corporate and unresolved stores go last, because a floater booked to corporate
+between Commercial and Hillsboro reads as a seventh store. Within a store the engine's order stands.
+Display only — the Capstone export keeps Capstone's block order.
+
+Pinned by `tests/incentive_defaults_test.js`.
+
 ### The practice pay period — rehearse the close without paying anybody (2026-09-09)
 
 Approving is immutable, so until now the only way to find out whether the payroll path worked was
