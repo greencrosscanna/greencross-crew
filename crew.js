@@ -2804,7 +2804,7 @@
              (isPractice ? 'is-practice">Practice'
             : isImported ? 'is-imported">As paid'
                          : 'is-live"><span class="crew-inc-dotlive"></span>Live') +
-           '</span></div>');
+           '</span>' + incToDateHtml(d.to_date) + '</div>');
     h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
            '<span class="crew-inc-facts">' + esc(incFacts(d, buds, mgrs)) + '</span></div>');
     h.push('</div><div class="crew-inc-spacer"></div>');
@@ -2819,9 +2819,7 @@
     h.push('<div><dd>' + esc(m0(admPay)) + '</dd><dt>Admin</dt></div>');
     h.push('<div class="is-total"><dd>' + esc(m0(budTotal + mgrTotal + admPay)) +
            '</dd><dt>Total payroll</dt></div>');
-    h.push('</dl>');
-    h.push(incToDateHtml(d.to_date));
-    h.push('</div>');
+    h.push('</dl></div>');
 
     h.push('<div class="crew-inc-body">');
 
@@ -3400,11 +3398,13 @@
 
   /* WHAT STAFF HAVE BEEN PAID, EVERY APPROVED PERIOD TO DATE (Sky, 2026-09-14). The engine sums the
      frozen history (`incentiveToDate_`) — never a recompute, never the running period, never
-     practice — so these do not move when the period picker does, and the caption says so: sitting
-     under this period's tiles, an unlabeled $57k reads as a fortnight.
+     practice — so these do not move when the period picker does.
+     SLIM CHIPS IN THE TITLE ROW, not tiles (Sky, 2026-09-15). The "To date" label is what keeps them
+     from being read as this period's figures, which sit in the tiles just below; the full span is on
+     hover rather than printed.
      THE THREE ADD UP. Performance is what the company paid (the Capstone figure, overrides
      included), SPIFF is what vendors funded, and Total is the two together. SPIFF is not a slice of
-     Performance, and a tile row where two figures overlap is read as a sum anyway. */
+     Performance, and a row of figures side by side is read as a sum anyway. */
   function incToDateHtml(t) {
     if (!t || !t.periods) return '';
     /* BOTH YEARS, unlike incPeriodLabel: a fortnight never crosses one worth naming, but this span
@@ -3413,22 +3413,18 @@
       var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
       return m ? INC_MONTHS[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1] : String(iso || '');
     }
-    var span = day(t.first_start) + ' – ' + day(t.last_end);
-    var n = t.periods + ' approved pay period' + (t.periods === 1 ? '' : 's');
-    var miss = (t.spiff_unrecorded || []).length;
-    var spiffNote = miss
-      ? '<span class="crew-inc-todate-note" title="' +
-          esc('No SPIFF column on the report for: ' + t.spiff_unrecorded.join(', ') +
-              '. Any vendor money those periods paid is inside Performance.') + '">' +
-          'not recorded for ' + miss + ' period' + (miss === 1 ? '' : 's') + '</span>'
-      : '';
-    return '<div class="crew-inc-todate">' +
-      '<div class="crew-inc-todate-cap">All approved pay periods · ' + esc(span) + ' · ' + esc(n) +
-      '</div><dl class="crew-inc-tot">' +
-      '<div><dd>' + esc(m0(t.performance)) + '</dd><dt>Performance bonus</dt></div>' +
-      '<div><dd>' + esc(m0(t.spiff)) + '</dd><dt>SPIFF · vendor-funded</dt>' + spiffNote + '</div>' +
-      '<div class="is-total"><dd>' + esc(m0(t.total)) + '</dd><dt>Total incentives</dt></div>' +
-      '</dl></div>';
+    var span = 'All approved pay periods · ' + day(t.first_start) + ' – ' + day(t.last_end) + ' · ' +
+               t.periods + ' approved pay period' + (t.periods === 1 ? '' : 's');
+    function chip(v, label, cls) {
+      return '<span class="crew-inc-kpi' + (cls ? ' ' + cls : '') + '"><b>' + esc(m0(v)) + '</b>' +
+             esc(label) + '</span>';
+    }
+    return '<span class="crew-inc-todate" title="' + esc(span) + '">' +
+      '<span class="crew-inc-todate-cap">To date</span>' +
+      chip(t.performance, 'Performance bonus') +
+      chip(t.spiff, 'SPIFF') +
+      chip(t.total, 'Total incentives', 'is-total') +
+      '</span>';
   }
 
   function incPeriodSelect(d) {

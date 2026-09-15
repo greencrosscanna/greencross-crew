@@ -120,21 +120,21 @@ const M = (function () {
     (doc, win, store, store, { hostname: 'localhost' }, {});
 })();
 
-console.log('\nThe tiles\n');
+console.log('\nThe chips\n');
 {
   const html = M.incToDateHtml(t);
-  const tiles = [...html.matchAll(/<dd>([^<]*)<\/dd><dt>([^<]*)<\/dt>/g)].map((m) => [m[2], m[1]]);
-  ok('three tiles, in order: Performance bonus, SPIFF, Total incentives',
-     tiles.length === 3 && /^Performance bonus$/.test(tiles[0][0]) && /^SPIFF/.test(tiles[1][0]) &&
-     /^Total incentives$/.test(tiles[2][0]));
-  ok('figures are the engine\'s, unchanged', tiles[0][1] === '$915' && tiles[1][1] === '$112' && tiles[2][1] === '$1,027');
-  ok('Total is the highlighted tile', /<div class="is-total"><dd>\$1,027/.test(html));
-  ok('the caption says these are ALL approved periods, not this one',
-     /All approved pay periods/.test(html) && /3 approved pay periods/.test(html));
-  ok('the span names BOTH years — it crosses one', /Aug 4, 2025 – Aug 30, 2026/.test(html));
-  ok('an unrecorded SPIFF period is disclosed on the SPIFF tile', /not recorded for 1 period/.test(html));
-  ok('no unrecorded periods → no note', !/not recorded/.test(M.incToDateHtml(Object.assign({}, t, { spiff_unrecorded: [] }))));
-  ok('nothing approved yet → renders nothing (no row of $0 tiles)',
+  const chips = [...html.matchAll(/<span class="crew-inc-kpi([^"]*)"><b>([^<]*)<\/b>([^<]*)<\/span>/g)]
+    .map((m) => ({ cls: m[1], v: m[2], label: m[3] }));
+  ok('three chips, in order: Performance bonus, SPIFF, Total incentives',
+     chips.length === 3 && chips[0].label === 'Performance bonus' && chips[1].label === 'SPIFF' &&
+     chips[2].label === 'Total incentives');
+  ok('figures are the engine\'s, unchanged', chips[0].v === '$915' && chips[1].v === '$112' && chips[2].v === '$1,027');
+  ok('Total is the highlighted chip', /is-total/.test(chips[2].cls) && !/is-total/.test(chips[0].cls + chips[1].cls));
+  ok('labeled "To date" so they are not read as this period', /crew-inc-todate-cap">To date</.test(html));
+  ok('hover names ALL approved periods and BOTH years — the span crosses one',
+     /title="All approved pay periods · Aug 4, 2025 – Aug 30, 2026 · 3 approved pay periods"/.test(html));
+  ok('no "not recorded" note (Sky, 2026-09-15)', !/not recorded/.test(html));
+  ok('nothing approved yet → renders nothing (no row of $0 chips)',
      M.incToDateHtml(empty) === '' && M.incToDateHtml(undefined) === '');
 }
 
@@ -143,10 +143,11 @@ console.log('\nPrint\n');
   const HTML = fs.readFileSync(__dirname + '/../index.html', 'utf8');
   const printBlock = HTML.slice(HTML.indexOf('@media print {'));
   const hide = printBlock.slice(0, printBlock.indexOf('{ display: none !important; }'));
-  ok('the to-date row is hidden on the filed payout PDF, which is ONE period\'s record',
+  ok('the to-date chips are hidden on the filed payout PDF, which is ONE period\'s record',
      /\.crew-inc-todate\b/.test(hide));
   const js = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
-  ok('the incentive header actually renders it', /h\.push\(incToDateHtml\(d\.to_date\)\);/.test(js));
+  ok('rendered in the title row, beside the Incentive badge',
+     /'<\/span>' \+ incToDateHtml\(d\.to_date\) \+ '<\/div>'/.test(js));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nall passed\n');
