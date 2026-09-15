@@ -1909,7 +1909,18 @@ function reportBug_(p) {
       priority: b.priority,
       tab:      b.tab,
       appVer:   b.appVer,
-      context:  b.context
+      context:  b.context,
+      /* FORWARD THE PICTURE TOO, not just the words. This literal listed six fields and the url was
+         not one of them, so a screenshot died HERE — one line short of the board, silently, because
+         omitting a key throws nothing. Everything either side of this line already worked: the shared
+         form uploads the image to Core's bug_shot sink and sets payload.screenshot_url, crew.js
+         forwards the whole payload to this engine, and gxIngestBug reads screenshot_url and writes
+         the bug_reports column. Measured 2026-09-15 from live data by core-admin: 140 reports across
+         all seven apps, not one with an image; 6 of Crew's 7 filed after the feature shipped
+         2026-08-26. greencross-leaderboard/dutchie_proxy.gs:1732 is the reference shape — it also
+         forwards the raw image because it POSTs one to its own doPost; Crew uploads through Core, so
+         the url is the whole of it. Gated by the hub's tests/bug_screenshot_forwarding_test.js. */
+      screenshot_url: b.screenshot_url || ''
     }) || {};
     /* A REFUSAL IS NOT A THROW. gxIngestBug returns {ok:false, error} without throwing when it will
        not take a report — an empty one, a missing app key (gx_core.gs: `app required`, `title or
