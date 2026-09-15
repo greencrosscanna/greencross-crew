@@ -3088,14 +3088,14 @@
     var who = c.backup.join(', ');
     if (d.can_approve && c.away && c.away.on) {
       return '<div class="crew-inc-returned crew-inc-glassnote"><strong>You are marked away.</strong> ' +
-             esc(who) + ' can approve or send back pay periods until you switch it off. You are emailed ' +
+             'Periods sent for approval go straight to ' + esc(who) + ' until you switch it off. You are emailed ' +
              'whatever the backup decides. <button type="button" class="crew-inc-glasslink" id="incBack">' +
              'I’m back</button></div>';
     }
     if (c.as === 'backup' && c.can_decide) {
-      return '<div class="crew-inc-returned crew-inc-glassnote"><strong>You are covering as backup ' +
-             'approver</strong> — ' + (c.why === 'away' ? 'the approver is marked away.'
-               : 'this period has waited more than 4 hours for a decision.') +
+      return '<div class="crew-inc-returned crew-inc-glassnote"><strong>You are the backup approver</strong>' +
+             (c.why === 'away' ? ' — the approver is marked away.'
+              : c.why === 'waiting' ? ' — this period has waited more than 4 hours for a decision.' : '.') +
              ' The approver is emailed whatever you decide.</div>';
     }
     return '';
@@ -3120,7 +3120,7 @@
         var cv = d.approval_cover || {};
         h.push('<span class="crew-inc-wait">Sent to the approver' +
                (wf.sent_at ? ' ' + esc(wf.sent_at.slice(0, 10)) : '') + ' — locked until they decide' +
-               (cv.backup_active && cv.backup && cv.backup.length
+               (cv.backup && cv.backup.length
                   ? ' (the backup, ' + esc(cv.backup.join(', ')) + ', can decide too)' : '') + '</span>');
         said = true;   // this already explains the grey buttons; a second line would only repeat it
       }
@@ -4271,7 +4271,7 @@
                                  { timeoutMs: 45000, retries: 1 });
       if (!r || r.ok === false) throw new Error((r && r.error) || 'could not change it');
       var sent = (r.sweep && r.sweep.escalated || []).length;
-      toast(on ? 'Marked away — ' + (r.backup || []).join(', ') + ' can approve' +
+      toast(on ? 'Marked away — periods sent for approval go straight to ' + (r.backup || []).join(', ') +
                  (sent ? '; sent ' + sent + ' waiting period' + (sent === 1 ? '' : 's') + ' to them now' : '')
                : 'Welcome back — the backup is on standby again');
       await loadIncentive(inc.pp);
@@ -4294,9 +4294,10 @@
           ? '<label class="ist-goalrow" style="cursor:pointer"><span class="ist-goallabel">I’m away — let ' +
               esc(backup) + ' approve</span><input type="checkbox" id="istAway"' +
               (c.away && c.away.on ? ' checked' : '') + '></label>' +
-            '<p class="ist-sub">Takes effect immediately. Without it, ' + esc(backup) + ' only gets a period ' +
-              'that has waited 4 hours for your decision. You are emailed whenever the backup is brought in ' +
-              'or decides.</p>'
+            '<p class="ist-sub">' + esc(backup) + ' can approve at any time. This only decides when they are ' +
+              'EMAILED: while it is on, every period sent for approval goes to them straight away; while ' +
+              'it is off, only a period that has waited 4 hours does. You are emailed whenever the backup ' +
+              'is brought in or decides.</p>'
           : '<p class="ist-sub">No backup approver is set (cfg.crewBackupApprover in the Command Center).</p>') +
       '</section>';
   }

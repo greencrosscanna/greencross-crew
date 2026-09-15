@@ -181,17 +181,20 @@ console.log('\nNot approved yet — no grayed "Approved" step pretending it is d
 console.log('\nThe backup approver on the screen (2026-09-15)');
 {
   const cover = (o) => Object.assign({ backup: ['shawn'], away: { on: false }, can_decide: false, as: '', backup_active: false }, o);
-  const shawnIdle = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: false,
-                                                                 approval_cover: cover({}) }), false);
-  ok('on standby, Shawn gets no Approve', shawnIdle.indexOf('id="incApprove"') < 0);
+  /* Sky reversed the lock the same day: Shawn may always decide; only his EMAIL waits. */
+  const shawnIdle = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: true,
+    approval_cover: cover({ can_decide: true, as: 'backup' }) }), false);
+  ok('with no cover on, Shawn still gets Approve', isOn(shawnIdle, 'incApprove'));
+  ok('and is told he is the backup, without a reason that is not true',
+     /You are the backup approver<\/strong>\./.test(shawnIdle) && !/4 hours/.test(shawnIdle));
   const shawnOn = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: true,
     approval_cover: cover({ can_decide: true, as: 'backup', backup_active: true, why: 'waiting' }) }), false);
   ok('covering, Shawn gets Approve and Send back', isOn(shawnOn, 'incApprove') && shawnOn.indexOf('id="incReturn"') > 0);
-  ok('and is told he is covering, and why', /covering as backup/.test(shawnOn) && /4 hours/.test(shawnOn));
+  ok('and is told why he was brought in', /backup approver/.test(shawnOn) && /4 hours/.test(shawnOn));
   ok('but still no settings gear — that is the approver\'s alone', shawnOn.indexOf('incGear') < 0);
   const mike = M.incHeadActions(Object.assign({}, pending, { can_approve: false, can_decide: false,
-    approval_cover: cover({ backup_active: true, why: 'waiting' }) }), false);
-  ok('Mike, waiting, is told the backup can decide too', /the backup, shawn, can decide too/.test(mike));
+    approval_cover: cover({}) }), false);
+  ok('Mike, waiting, is told the backup can decide too — so he knows who to ping', /the backup, shawn, can decide too/.test(mike));
   const skyAway = M.incHeadActions(Object.assign({}, ended, { can_approve: true, can_decide: true,
     approval_cover: cover({ away: { on: true }, can_decide: true, as: 'primary', backup_active: true, why: 'away' }) }), false);
   ok('Sky, marked away, sees it on the screen with a way back', /You are marked away/.test(skyAway) && skyAway.indexOf('id="incBack"') > 0);

@@ -7276,18 +7276,25 @@ function canApprove_(auth) {
 
 /* ══ The backup approver (Sky, 2026-09-15) ══════════════════════════════════════════════════════
  *
- * "Shawn as backup, but I don't want him getting the email unless he's needed." So the backup is
- * STANDBY, and standby is enforced, not merely unannounced: he can approve or send back a period
- * only while one of two things is true —
+ * "Shawn as backup, but I don't want him getting the email unless he's needed." And then, the same
+ * day: "Shawn is not locked out on the approval … if I forget to change the setting that I'm away,
+ * and Mike does payroll, he can ping Shawn and ask him to approve rather than having to wait 4
+ * hours. Shawn is authorized to approve this and I don't want to be the bottleneck."
+ *
+ * So the backup may ALWAYS approve or send back. What is on standby is his INBOX — he is emailed
+ * only while one of two things is true:
  *
  *   away     the approver switched "I'm away" on (script property, set from the settings tray).
  *   waiting  the period has been PENDING longer than BACKUP_AFTER_MS since it was sent — the case a
  *            switch cannot cover, because nobody flips a switch on the day they are unreachable.
  *
- * On an ordinary fortnight neither holds, he receives nothing, and the route refuses him exactly as
- * it refused him before. `canApprove_` is deliberately untouched: it still means the PRIMARY, and it
- * still gates the settings, reopening, voided figures and payroll overrides. The backup covers the
- * decision on a period, not the approver's whole job.
+ * The first cut also refused his Approve outside that window. Sky reversed it: a lock that makes
+ * Mike wait four hours for somebody who is standing right there is the bottleneck, not a control.
+ * The control that remains is that the approver hears about every decision the backup makes.
+ *
+ * `canApprove_` is deliberately untouched: it still means the PRIMARY, and it still gates the
+ * settings, reopening, voided figures and payroll overrides. The backup covers the decision on a
+ * period, not the approver's whole job.
  *
  * WHO: GX Core kv `cfg.crewBackupApprover` (user_ids, comma-separated), beside `cfg.crewApprover`.
  * Somebody named in both is the primary. Unset means no backup, and nothing here does anything.
@@ -7330,18 +7337,15 @@ function backupWindow_(pp, wf) {
   return { active: false, why: '', backup_at: new Date(due).toISOString() };
 }
 
-/* May this person decide (approve / send back) THIS period? The primary always; the backup only
-   inside the window. The refusal names the window, because "only the named approver" is a
-   confusing answer to give the person who IS the named backup. */
+/* May this person decide (approve / send back) THIS period? The primary and the backup, always.
+   `why` records whether cover was on at the time — away, waiting, or '' (asked directly) — so the
+   approver's notice can say which. */
 function canDecide_(auth, pp) {
   if (canApprove_(auth)) return { ok: true, as: 'primary' };
   var me = String((auth && auth.user) || '').trim().toLowerCase();
   if (!me || backupApproverIds_().indexOf(me) < 0) return { ok: false };
   var w = backupWindow_(pp);
-  if (w.active) return { ok: true, as: 'backup', why: w.why };
-  return { ok: false, error: 'you are the backup approver — you can approve once the approver has ' +
-    'marked themselves away, or once a period has waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours' +
-    (w.backup_at ? ' (this one reaches you at ' + w.backup_at + ')' : '') };
+  return { ok: true, as: 'backup', why: w.active ? w.why : '' };
 }
 
 /* What the screen needs: whether this viewer may decide the period, who the backup is, and whether
@@ -7500,7 +7504,9 @@ function notifyPrimaryOfBackup_(pp, who, what, why, detail) {
     var esc = function (x) { return String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;'); };
     var line = what === 'was brought in'
       ? 'It had waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours for your decision, so it was sent to the backup approver (' + esc(who) + ').'
-      : esc(who) + ' ' + esc(what) + ' it as backup approver' + (why === 'away' ? ' while you were marked away.' : ' after it waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours.');
+      : esc(who) + ' ' + esc(what) + ' it as backup approver' +
+        (why === 'away' ? ' while you were marked away.'
+         : why === 'waiting' ? ' after it waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours.' : '.');
     MailApp.sendEmail({ to: to.join(','), name: 'GX Crew',
       subject: (isPrac ? '[PRACTICE] ' : '') + 'Backup ' + (what === 'was brought in' ? 'called in' : what) + ' — incentive ' + label,
       htmlBody: '<div style="font-family:system-ui,sans-serif;max-width:520px">' +

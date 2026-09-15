@@ -4,9 +4,10 @@
  *   RUN:  node tests/backup_approver_test.js
  *
  * Sky: "Shawn as backup, but I don't want him getting the email unless he's needed as the backup."
- * Settled: he may approve or send back ONLY while the approver is marked away, or once a period has
- * waited 4 hours; he is emailed only then; the approver is told whenever he is brought in by the
- * clock or decides anything. Runs the real routes through tests/pay_engine_harness.js.
+ * Then: "Shawn is not locked out on the approval … Mike can ping Shawn and ask him to approve rather
+ * than having to wait 4 hours." Settled: Shawn may ALWAYS approve or send back; he is EMAILED only
+ * while the approver is marked away or once a period has waited 4 hours; the approver is told
+ * whenever he is brought in by the clock or decides anything. Real routes, via the pay harness.
  */
 'use strict';
 const { engine, WF } = require('./pay_engine_harness');
@@ -32,21 +33,43 @@ function ageSend(E, hours) {
 const toShawn = m => /shawn@/.test(m.to);
 const toSky   = m => /sky@/.test(m.to);
 
-console.log('\nAn ordinary fortnight — Shawn hears nothing and can do nothing');
+console.log('\nAn ordinary fortnight — Shawn gets no email, but is NOT locked out');
 {
   const E = setup();
   sendAs(E, 'mike');
   ok('the send went to the approver only', E.mails.length === 1 && toSky(E.mails[0]) && !toShawn(E.mails[0]));
+  const sw = E.escalate({});
+  ok('the sweep inside 4 hours sends Shawn nothing', sw.escalated.length === 0 && !E.mails.some(toShawn));
+  ok('his screen offers Approve anyway — Mike can ping him', E.cover({ user: 'shawn' }, PP).can_decide === true);
   E.user = 'shawn';
   const r = E.approve({ pp_start: PP, confirm: 'yes', request_id: rid() });
-  ok('Shawn\'s approval is refused', !r.ok);
-  ok('and the refusal tells him when he CAN act', /backup approver/.test(r.error) && /4 hours/.test(r.error));
-  const b = E.ret({ pp_start: PP, note: 'nope', request_id: rid() });
-  ok('so is sending it back', !b.ok);
-  ok('nothing was frozen', E.rows('crew_incentive_history').filter(x => x[0] === PP).length === 0);
-  const sw = E.escalate({});
-  ok('the sweep at 1 hour sends him nothing', sw.escalated.length === 0 && !E.mails.some(toShawn));
-  ok('his screen offers no Approve', E.cover({ user: 'shawn' }, PP).can_decide === false);
+  ok('Shawn approves without waiting 4 hours', r.ok && r.written === 2);
+  const note = E.mails.find(m => toSky(m) && /Backup approved/.test(m.subject));
+  ok('Sky is emailed that Shawn approved it', !!note && /shawn approved it as backup approver\./.test(note.html));
+  ok('and Shawn himself was never emailed', !E.mails.some(toShawn));
+  const mike = E.mails.find(m => /mike@/.test(m.to) && /^Approved/.test(m.subject));
+  ok('Mike gets "carry on", naming Shawn as the approver', !!mike && /shawn/.test(mike.html));
+}
+
+console.log('\nShawn sends one back without any cover on');
+{
+  const E = setup();
+  sendAs(E, 'mike');
+  E.user = 'shawn';
+  const b = E.ret({ pp_start: PP, note: 'Bend looks short', request_id: rid() });
+  ok('it goes through', b.ok);
+  ok('and Sky is told, with the reason', E.mails.some(m => toSky(m) && /Backup sent back/.test(m.subject) && /Bend looks short/.test(m.html)));
+}
+
+console.log('\nSomebody who is neither approver nor backup is still refused');
+{
+  const E = setup();
+  sendAs(E, 'mike');
+  E.user = 'tawny';
+  ok('approve refused', !E.approve({ pp_start: PP, confirm: 'yes', request_id: rid() }).ok);
+  ok('send back refused', !E.ret({ pp_start: PP, note: 'x', request_id: rid() }).ok);
+  E.user = 'mike';
+  ok('Mike, who prepared it, cannot approve it', !E.approve({ pp_start: PP, confirm: 'yes', request_id: rid() }).ok);
 }
 
 console.log('\nWaited 4 hours — the sweep brings Shawn in, once, and tells Sky');
@@ -66,10 +89,9 @@ console.log('\nWaited 4 hours — the sweep brings Shawn in, once, and tells Sky
   ok('the next sweep does not mail him again', again.escalated.length === 0 && E.mails.length === before);
 
   E.user = 'shawn';
-  ok('his screen now offers Approve', E.cover({ user: 'shawn' }, PP).can_decide === true);
   const r = E.approve({ pp_start: PP, confirm: 'yes', request_id: rid() });
   ok('Shawn\'s approval goes through', r.ok && r.written === 2);
-  ok('Sky is emailed that Shawn approved it', E.mails.some(m => toSky(m) && /Backup approved/.test(m.subject) && /shawn/.test(m.html)));
+  ok('Sky\'s notice says it had waited 4 hours', E.mails.some(m => toSky(m) && /Backup approved/.test(m.subject) && /after it waited 4 hours/.test(m.html)));
   ok('and Mike still gets his "carry on"', E.mails.some(m => /mike@/.test(m.to) && /^Approved/.test(m.subject)));
 }
 
@@ -113,9 +135,9 @@ console.log('\nSky marks himself away');
   E.user = 'sky';
   const off = E.away({ on: 'no' });
   ok('Sky switches it off', off.ok && off.away.on === false);
+  const before = E.mails.filter(toShawn).length;
   sendAs(E, 'mike');
-  E.user = 'shawn';
-  ok('and Shawn is on standby again straight away', !E.approve({ pp_start: PP, confirm: 'yes', request_id: rid() }).ok);
+  ok('and the next send no longer emails Shawn', E.mails.filter(toShawn).length === before);
 }
 
 console.log('\nAway with a period ALREADY waiting — Shawn gets it now, not at the next tick');
