@@ -3872,14 +3872,52 @@ function historyPeriods_(pp) {
     if (!r.pp_start) return;
     var e = seen[r.pp_start] || (seen[r.pp_start] = { pp_start: r.pp_start, pp_end: r.pp_end,
                                                       rows: 0, bonus: 0, imported_at: r.imported_at,
-                                                      format: r.format });
+                                                      format: r.format, performance: 0, spiff: 0,
+                                                      spiff_recorded: false });
     e.rows++;
     e.bonus += Number(r.bonus || 0) || 0;
+    /* PERFORMANCE = what the company paid, SPIFF = what vendors funded; the two add up to what the
+       person took home. `payroll` is the recorded figure — an override included, so Levy's $25 on
+       2026-08-17 counts as $25 and not the $0 her `bonus` column still carries.
+       A BLANK payroll is "not recorded", not $0: the oldest report (2025-08-04) has no payroll
+       column at all, and reading it as zero would erase a whole fortnight of real bonuses. There
+       the bonus is what was recorded, minus any SPIFF the row does state (none, on that report). */
+    var spiff = r.spiff === '' ? 0 : (Number(r.spiff) || 0);
+    if (r.spiff !== '') e.spiff_recorded = true;
+    e.spiff += spiff;
+    e.performance += r.payroll !== '' ? (Number(r.payroll) || 0)
+                                      : (Number(r.bonus || 0) || 0) - spiff;
   });
   return Object.keys(seen).sort().map(function (k) {
     seen[k].bonus = Math.round(seen[k].bonus * 100) / 100;
+    seen[k].performance = Math.round(seen[k].performance * 100) / 100;
+    seen[k].spiff = Math.round(seen[k].spiff * 100) / 100;
     return seen[k];
   });
+}
+
+/* Running totals across every APPROVED pay period — the Incentive tab's to-date tiles (Sky,
+   2026-09-14: "break out performance bonus, spiff and total incentives").
+   Takes `historyPeriods_()`'s answer rather than reading again: the caller already holds it, and it
+   is the REAL history tab, so a practice rehearsal can never inflate what the company paid.
+   Frozen rows only — a closed period is never recomputed, and the running one is not in here until
+   somebody approves it. `spiff_unrecorded` names the periods whose report had no SPIFF column, so
+   the tile can say its figure starts later instead of implying those fortnights paid none. */
+function incentiveToDate_(imported) {
+  var out = { periods: 0, first_start: '', last_end: '', performance: 0, spiff: 0, total: 0,
+              spiff_unrecorded: [] };
+  (imported || []).forEach(function (h) {
+    out.periods++;
+    if (!out.first_start || h.pp_start < out.first_start) out.first_start = h.pp_start;
+    if (!out.last_end || h.pp_end > out.last_end) out.last_end = h.pp_end;
+    out.performance += Number(h.performance) || 0;
+    out.spiff += Number(h.spiff) || 0;
+    if (!h.spiff_recorded) out.spiff_unrecorded.push(h.pp_start);
+  });
+  out.performance = Math.round(out.performance * 100) / 100;
+  out.spiff = Math.round(out.spiff * 100) / 100;
+  out.total = Math.round((out.performance + out.spiff) * 100) / 100;
+  return out;
 }
 
 /**
@@ -5219,6 +5257,7 @@ function getIncentive_(p) {
       historyPeriods_(want).some(function (h) { return h.pp_start === want; })) {
     var ph = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
     ph.periods = periodList_(imported, null);
+    ph.to_date = incentiveToDate_(imported);
     ph.can_edit = false;
     ph.can_approve = canApprove_(auth);
     ph.inputs = inputsFor_(want);
@@ -5247,6 +5286,7 @@ function getIncentive_(p) {
   if (want && importedBy[want]) {
     var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
     h.periods = periodList_(imported, null);
+    h.to_date = incentiveToDate_(imported);
     h.can_edit = false;
     /* The APPROVER is told who they are even on a read-only period, because the one action still
        available here is the break glass — reopening it. Without this the button can never render on
@@ -5338,6 +5378,7 @@ function getIncentive_(p) {
      to approve is the same problem as Mike editing one he already sent. */
   live.can_edit = canEdit_(auth) && wf.status !== 'pending';
   live.periods = periodList_(imported, live.periods);
+  live.to_date = incentiveToDate_(imported);
   /* THE INDEPENDENT CHECKS, ON THE SCREEN AND NOT ONLY AT THE GATE. A refusal at the moment
      somebody presses Approve is a bad first sighting of a figure that has been wrong all fortnight;
      the reconciliation is what the preparer should see while there is still time to look into it.

@@ -598,6 +598,17 @@
       text-transform: uppercase; letter-spacing: .06em; }
     .crew-inc-tot .is-total { border-color: #24503a; }
     .crew-inc-tot .is-total dd { color: var(--gx-green); }
+    /* Approved-to-date totals: same tiles, three across, under a caption that says they are NOT this
+       period — a big dollar figure under the period's own tiles is otherwise read as a fortnight. */
+    .crew-inc-todate { margin: 14px 0 0; max-width: 820px; }
+    .crew-inc-todate-cap { font-size: 11px; color: var(--gx-text-mute); letter-spacing: .03em; }
+    .crew-inc-todate .crew-inc-tot { grid-template-columns: repeat(3, minmax(160px, 1fr));
+      margin: 6px 0 0; max-width: 615px; }
+    .crew-inc-todate-note { display: block; margin-top: 2px; font-size: 10.5px; color: var(--gx-text-mute);
+      cursor: help; }
+    @media (max-width: 560px) {
+      .crew-inc-todate .crew-inc-tot { grid-template-columns: 1fr; }
+    }
 
     .crew-inc-body { padding: 20px 22px 60px; }
     .crew-inc-sec { display: flex; align-items: center; gap: 9px; margin: 22px 0 8px; }
@@ -697,7 +708,7 @@
       .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner,
       .crew-inc-returned, .inc-tray, .inc-tray-back, .crew-inc-gear,
       .crew-inc-nav, .crew-inc-group, .crew-inc-edit, .crew-inc-revert,
-      .crew-imp-back,
+      .crew-imp-back, .crew-inc-todate,
       .crew-inc-refresh { display: none !important; }
       /* The two explanatory notes are for somebody reading the screen and deciding. The PDF is a
          payroll record that gets filed — it does not need to be told what Payroll means, and one
@@ -1134,6 +1145,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.389"></script>
+  <script src="crew.js?v=1.390"></script>
 </body>
 </html>

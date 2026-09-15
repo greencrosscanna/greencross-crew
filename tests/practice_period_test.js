@@ -122,7 +122,7 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       PREFIX + fnSrc(GS, 'isPracticePeriod_') + fnSrc(GS, 'practiceSource_') + fnSrc(GS, 'practiceInfo_') +
       /* THE SHIPPED perfForWrite_, not a stub. The window/key split moved inside it, and it is the
          thing under test here — a stub would answer whatever this file decided it should. */
-      fnSrc(GS, 'perfForWrite_') +
+      fnSrc(GS, 'perfForWrite_') + fnSrc(GS, 'incentiveToDate_') +
       fnSrc(GS, 'getIncentive_') + '; return getIncentive_;';
     const fn = new Function(
       'requireCrew_', 'historyPeriods_', 'incentiveHistory_', 'periodList_', 'canApprove_',
