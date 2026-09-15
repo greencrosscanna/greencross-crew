@@ -131,6 +131,7 @@ console.log('\nThe tiles\n');
   ok('Total is the highlighted tile', /<div class="is-total"><dd>\$1,027/.test(html));
   ok('the caption says these are ALL approved periods, not this one',
      /All approved pay periods/.test(html) && /3 approved pay periods/.test(html));
+  ok('the span names BOTH years — it crosses one', /Aug 4, 2025 – Aug 30, 2026/.test(html));
   ok('an unrecorded SPIFF period is disclosed on the SPIFF tile', /not recorded for 1 period/.test(html));
   ok('no unrecorded periods → no note', !/not recorded/.test(M.incToDateHtml(Object.assign({}, t, { spiff_unrecorded: [] }))));
   ok('nothing approved yet → renders nothing (no row of $0 tiles)',

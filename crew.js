@@ -3407,7 +3407,13 @@
      Performance, and a tile row where two figures overlap is read as a sum anyway. */
   function incToDateHtml(t) {
     if (!t || !t.periods) return '';
-    var span = incPeriodLabel(t.first_start, t.last_end);
+    /* BOTH YEARS, unlike incPeriodLabel: a fortnight never crosses one worth naming, but this span
+       does, and "Aug 4 – Aug 30, 2026" reads as one month of this year rather than thirteen. */
+    function day(iso) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+      return m ? INC_MONTHS[+m[2] - 1] + ' ' + (+m[3]) + ', ' + m[1] : String(iso || '');
+    }
+    var span = day(t.first_start) + ' – ' + day(t.last_end);
     var n = t.periods + ' approved pay period' + (t.periods === 1 ? '' : 's');
     var miss = (t.spiff_unrecorded || []).length;
     var spiffNote = miss
