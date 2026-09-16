@@ -597,12 +597,24 @@ function login_(p) {
  * `GXCore.requireAuth`, so this list must not be SHORTER than Core's or a credential Core would
  * accept arrives here un-redacted. Longer is harmless; over-redaction is the safe direction.
  *
- * NOT ANCHORED ON THE NAME, which was the second, separate bug in the old regex:
+ * NOT ANCHORED ON THE NAME AT EITHER END, which was the second, separate bug in the old regex:
  * /([?&](?:secret|token|key|pass|password)=)/ walks straight past `connector_secret=`, because
- * there `secret=` is preceded by an underscore. The leading [A-Za-z0-9_-]* is the prefix wildcard
- * that fixes it. Crew carries no _secret= parameter today, so that half was never live exposure
- * here — it was cited suite-wide as the shape not to copy, and copies are how it spread.
- * `approve_token=` — a real Crew parameter and a real single-use credential — now redacts too. */
+ * there `secret=` is preceded by an underscore. Crew carries no _secret= parameter today, so that
+ * half was never live exposure here — it was cited suite-wide as the shape not to copy, and copies
+ * are how it spread. `approve_token=` — a real Crew parameter and a real single-use credential —
+ * now redacts because of the leading wildcard.
+ *
+ * THE TRAILING WILDCARD IS THE 2026-09-16 FOLLOW-UP, and it closes the mirror image of the same
+ * hole: with a wildcard only in FRONT of the word, the name had to END exactly where the list entry
+ * ends, so `session` matched `connector_session=` but NOT `sessionid=`, and `token` missed
+ * `tokenValue=`. GX Core measured both leaking through a scrub that had passed 29 assertions. A
+ * name-character run on BOTH sides is what makes the list a list of WORDS rather than of whole
+ * parameter names — there is deliberately no second list of prefixes or suffixes to keep in step.
+ *
+ * THE ACCEPTED COST, stated so nobody "fixes" it later: a parameter whose name merely CONTAINS a
+ * credential word is redacted too — `?keyword=` loses its value because it contains `key`. Sales
+ * accepted that trade and so did Sky. A redacted diagnostic is an inconvenience; a printed
+ * credential is an incident. */
 var AUTH_PARAM_NAMES_ = ['token', 'session', 'auth'];
 
 /* The ONLY sanctioned way to read the presented credential. Reading `p.token` at a call site is
@@ -622,10 +634,14 @@ function authParamValue_(p) {
    password in `pass=`. */
 var SECRET_PARAM_NAMES_ = ['secret', 'key', 'pass', 'password'].concat(AUTH_PARAM_NAMES_);
 
-/* Built once. The value run stops at & or whitespace or a quote or a backslash, so a redaction
-   inside a serialized JSON body eats one value and never the rest of the reply. */
+/* Built once. A name-character run on BOTH sides of the word (matching Sales and Price Cards), so
+   connector_session=, sessionid=, gx_token= and tokenValue= all redact without any of them being
+   listed. The value run stops at & or whitespace or a quote or a backslash, so a redaction inside a
+   serialized JSON body eats one value and never the rest of the reply. The leading [?&] is what
+   keeps a JSON FIELD named token alone — sign-in returns the session the browser needs. */
 var SECRET_PARAM_RE_ = new RegExp(
-  '([?&][A-Za-z0-9_\\-]*(?:' + SECRET_PARAM_NAMES_.join('|') + ')=)[^&\\s"\'<>\\\\]*', 'gi');
+  '([?&][A-Za-z0-9_.\\-]*(?:' + SECRET_PARAM_NAMES_.join('|') + ')[A-Za-z0-9_.\\-]*=)' +
+  '[^&\\s"\'<>\\\\]*', 'gi');
 
 /* Redact anything credential-shaped before it reaches a screen, an email or a log. */
 function scrubSecrets_(s) {

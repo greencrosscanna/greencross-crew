@@ -62,6 +62,22 @@ const FLOOR_AUTH   = ['token', 'session', 'auth'];
 const FLOOR_SECRET = ['secret', 'key', 'pass', 'password'];
 const FLOOR_PREFIX = ['connector_secret', 'deploy_secret', 'approve_token', 'api_key'];
 
+/* ── THE SUFFIX FLOOR (added 2026-09-16, and it is the half the first fix missed) ──────────────
+ * The shipped regex put a wildcard only in FRONT of the credential word, so the parameter name had
+ * to END exactly where the list entry ends. `session` therefore matched `connector_session=` and
+ * walked straight past `sessionid=`; GX Core measured `sessionid=` and `tokenValue=` leaking
+ * through a scrub that had already passed 29 assertions.
+ *
+ * NOT ONE OF THESE NAMES IS IN EITHER SOURCE LIST, and that is the whole point of choosing them:
+ * the block cannot be satisfied by adding a word to AUTH_PARAM_NAMES_ or SECRET_PARAM_NAMES_,
+ * because each is a name the regex has to reach by WILDCARD or not at all. Only a name-character
+ * run on both sides of the word passes. Proved red by reverting the scratch copy to the
+ * prefix-only form. */
+const FLOOR_SUFFIX  = ['sessionid', 'tokenValue', 'authHeader', 'secretValue', 'keyHash',
+                       'passwordHash'];
+const FLOOR_WRAPPED = ['gc_session_id', 'x_auth_header', 'connector_token_v2',
+                       'deploy_secret_value', 'gx.api_key.v2'];
+
 // A credential-shaped value, built at runtime so no literal of this shape sits in the repo.
 const planted = 'ab' + Buffer.from('gx' + Date.now() + 'crew').toString('hex') + 'ZQ';
 const leakUrl = (name) =>
@@ -136,6 +152,47 @@ FLOOR_PREFIX.forEach((name) => {
   ok('?' + name + '= is redacted too — the regex is not anchored on the bare name',
      out.indexOf(planted) < 0);
 });
+
+// The mirror image, and the hole the first fix left: a name that merely ENDS differently.
+FLOOR_SUFFIX.forEach((name) => {
+  const out = sandbox.scrubSecrets_(leakUrl(name));
+  ok('?' + name + '= is redacted — a trailing wildcard, not just a leading one',
+     out.indexOf(planted) < 0 && /\[redacted\]/.test(out));
+});
+
+FLOOR_WRAPPED.forEach((name) => {
+  const out = sandbox.scrubSecrets_(leakUrl(name));
+  ok('?' + name + '= is redacted — the credential word is reached from both sides',
+     out.indexOf(planted) < 0 && /\[redacted\]/.test(out));
+});
+
+// A suffixed name must behave like every other one at the two exits, not only in the helper.
+ok('a reply carrying ?sessionid= comes out redacted',
+   sandbox.json_({ ok: false, error: leakUrl('sessionid') }).body.indexOf(planted) < 0);
+ok('loginScrub_ redacts ?tokenValue= as well',
+   sandbox.loginScrub_(leakUrl('tokenValue')).indexOf(planted) < 0);
+ok('a suffixed redaction still stops at & — pp_start survives',
+   /pp_start=2026-08-17/.test(sandbox.scrubSecrets_(leakUrl('authHeader'))));
+
+/* THE ACCEPTED COST, asserted rather than left as a surprise. A parameter whose name merely
+   CONTAINS a credential word loses its value: `?keyword=` contains `key`. Sales accepted that
+   trade and so did Sky (2026-09-16). It is pinned here so that narrowing the regex to "fix" an
+   over-redaction turns this file red and makes somebody re-take the decision, instead of quietly
+   restoring the hole above. A redacted diagnostic is an inconvenience; a printed credential is an
+   incident. */
+ok('ACCEPTED: ?keyword= is redacted too, because it contains "key"',
+   sandbox.scrubSecrets_(
+     'Address unavailable: https://x/exec?action=roster&keyword=bonus&pp_start=2026-08-17')
+     .indexOf('keyword=[redacted]') >= 0);
+ok('…and the over-redaction is bounded — the rest of the message is still diagnosable',
+   /action=roster/.test(sandbox.scrubSecrets_(
+     'Address unavailable: https://x/exec?action=roster&keyword=bonus&pp_start=2026-08-17')) &&
+   /pp_start=2026-08-17/.test(sandbox.scrubSecrets_(
+     'Address unavailable: https://x/exec?action=roster&keyword=bonus&pp_start=2026-08-17')));
+// A parameter sharing no credential word is untouched, so the wildcards did not become a wildcard.
+ok('an ordinary parameter is left alone — pp_start, action and store all survive intact',
+   sandbox.scrubSecrets_('https://x/exec?action=roster&store=portland-rd&pp_start=2026-08-17')
+     === 'https://x/exec?action=roster&store=portland-rd&pp_start=2026-08-17');
 
 // The same message through the sign-in path's alias, which is where this first leaked in 2026-09.
 FLOOR_AUTH.forEach((name) => {

@@ -272,12 +272,38 @@ to `GXCore.requireAuth`; longer is harmless, and over-redaction is the safe dire
   the approval dry run), so somebody signed in with `?session=` was refused by those two routes and
   accepted by every other one. `authParamValue_` is the only sanctioned reader.
 
-`tests/error_scrub_test.js` (44 assertions) **executes** the real helpers against a real
+- **THE WILDCARD IS ON BOTH SIDES OF THE CREDENTIAL WORD, and the second side is a separate fix
+  (v1.408, 2026-09-16).** v1.407 shipped a wildcard only in FRONT of the word, which means the
+  parameter name had to END exactly where the list entry ends: `session` matched
+  `connector_session=` and walked straight past **`sessionid=`**, `token` missed **`tokenValue=`**.
+  GX Core measured both leaking through a scrub that had already passed 29 assertions. Neither name
+  is one Crew accepts or sends, so this was a latent hole here rather than a live exposure — but
+  the shape is what gets copied, and Sales and Price Cards already shipped the both-sides form.
+  The list is a list of **words**, not of whole parameter names; there is deliberately no second
+  list of prefixes or suffixes to keep in step with it.
+- **The accepted cost, decided by Sky 2026-09-16: a parameter whose name merely CONTAINS a
+  credential word is redacted too.** `?keyword=` loses its value because it contains `key`. That is
+  the trade Sales took and it is asserted in the test rather than left to be rediscovered — a
+  redacted diagnostic is an inconvenience, a printed credential is an incident. Narrowing the regex
+  to recover an over-redacted parameter turns the test red on purpose, so the decision gets re-taken
+  rather than quietly reversed.
+
+`tests/error_scrub_test.js` (62 assertions) **executes** the real helpers against a real
 `Address unavailable` URL rather than grepping for the fix, and its list of protected names is a
 **hardcoded floor** the implementation cannot reach — a test that iterates the source's own array
 goes green by checking one name fewer the moment a name is deleted, which is the bug itself. Proved
-red four ways before shipping: delete `session` from the list (8 fail), restore the old anchored
+red four ways before v1.407: delete `session` from the list (8 fail), restore the old anchored
 regex (16), drop the scrub from `json_` (5), drop it from the email subject (1).
+
+**The suffix floor is the half that cannot be faked.** Its names — `sessionid`, `tokenValue`,
+`authHeader`, `gc_session_id`, `gx.api_key.v2` and the rest — are in **neither** source list, so no
+edit to `AUTH_PARAM_NAMES_` or `SECRET_PARAM_NAMES_` can satisfy them; only a name-character run on
+both sides of the word does. Reverting a scratch copy to the prefix-only form fails exactly those
+**14** assertions and leaves every v1.407 assertion green, which is the check that matters: the
+buggy version scores what the buggy version scored. Deleting `session` from the list still fails
+(11 now, 8 before), so the removal floor survives the change. Mutations run on a copy under the
+scratch directory, never on `Code.gs` — `CREW_ENGINE_SRC` exists for that and nothing in the repo or
+the push gate sets it.
 
 ## gx-theme is core-admin's — send a request, don't edit (rule from Sky, 2026-08-20)
 **Never edit `greencross-gx-theme` from this chat.** Five apps load `gx-theme.css`, `gx-client.js`,
