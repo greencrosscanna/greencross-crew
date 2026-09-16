@@ -577,16 +577,75 @@ function login_(p) {
   }
 }
 
-/* Redact anything secret-shaped before an engine error reaches a login screen. Apps Script puts
-   whole URLs into exception messages, so a query string is the realistic carrier — this is the
-   2026-09-02 banner leak, kept from recurring on the one route that answers before auth. */
-function loginScrub_(msg) {
-  var s = String(msg == null ? '' : msg);
-  return s.replace(/([?&](?:secret|token|key|pass|password)=)[^&\s]*/gi, '$1[redacted]');
+/* ─── Credential-bearing parameters: ONE list, and the scrub is BUILT from it ──────────────────
+ *
+ * Apps Script puts the WHOLE URL into an exception message — "Address unavailable:
+ * https://…/exec?action=x&session=<live token>" — so a query string is the realistic carrier of a
+ * live credential into an on-screen error. That is the 2026-09-02 banner leak this helper was
+ * written for, and on 2026-09-16 the suite measured the same class of leak again across all four
+ * scrubs that had shipped: three still leaked `session=` and two also leaked `auth=`. Crew was one
+ * of them. What leaks there is a live SESSION token — enough to act as that person until it
+ * expires — and in this app that person is an admin looking at pay.
+ *
+ * The cause was never a forgotten word: the names an app ACCEPTS and the names it REDACTS were two
+ * hand-maintained lists that drifted. So there is ONE list. `requireCrew_` takes the presented
+ * credential from it (through `authParamValue_`), and `SECRET_PARAM_RE_` is built from it — a name
+ * Crew starts accepting is redacted the moment it is accepted, with no second edit to remember.
+ * Adding the word "session" to the old regex would have closed one gap and left the mechanism.
+ *
+ * The three names are GX Core's `GX_AUTH_PARAMS_` (gx_core.gs) — Crew's gate delegates to
+ * `GXCore.requireAuth`, so this list must not be SHORTER than Core's or a credential Core would
+ * accept arrives here un-redacted. Longer is harmless; over-redaction is the safe direction.
+ *
+ * NOT ANCHORED ON THE NAME, which was the second, separate bug in the old regex:
+ * /([?&](?:secret|token|key|pass|password)=)/ walks straight past `connector_secret=`, because
+ * there `secret=` is preceded by an underscore. The leading [A-Za-z0-9_-]* is the prefix wildcard
+ * that fixes it. Crew carries no _secret= parameter today, so that half was never live exposure
+ * here — it was cited suite-wide as the shape not to copy, and copies are how it spread.
+ * `approve_token=` — a real Crew parameter and a real single-use credential — now redacts too. */
+var AUTH_PARAM_NAMES_ = ['token', 'session', 'auth'];
+
+/* The ONLY sanctioned way to read the presented credential. Reading `p.token` at a call site is
+   what puts a name outside the list's reach, and two sites did exactly that: accepting a duplicate
+   in the review queue and the approval dry run both forwarded `p.token` only, so a caller signed in
+   with `?session=` was refused by those two routes and accepted by every other one. */
+function authParamValue_(p) {
+  var params = p || {};
+  for (var i = 0; i < AUTH_PARAM_NAMES_.length; i++) {
+    if (params[AUTH_PARAM_NAMES_[i]]) return String(params[AUTH_PARAM_NAMES_[i]]);
+  }
+  return '';
 }
 
+/* Credential-bearing parameters that are NOT session tokens; the auth names are appended, so the
+   one list above feeds both halves. `pass` is here because Crew's own ungated login route takes the
+   password in `pass=`. */
+var SECRET_PARAM_NAMES_ = ['secret', 'key', 'pass', 'password'].concat(AUTH_PARAM_NAMES_);
+
+/* Built once. The value run stops at & or whitespace or a quote or a backslash, so a redaction
+   inside a serialized JSON body eats one value and never the rest of the reply. */
+var SECRET_PARAM_RE_ = new RegExp(
+  '([?&][A-Za-z0-9_\\-]*(?:' + SECRET_PARAM_NAMES_.join('|') + ')=)[^&\\s"\'<>\\\\]*', 'gi');
+
+/* Redact anything credential-shaped before it reaches a screen, an email or a log. */
+function scrubSecrets_(s) {
+  return String(s == null ? '' : s)
+    .replace(SECRET_PARAM_RE_, '$1[redacted]')
+    .replace(/\b(Basic|Bearer)\s+[A-Za-z0-9+/=._\-]{8,}/gi, '$1 [redacted]');
+}
+
+/* The sign-in path's name for it. Same function — kept because `login_` is the one route that
+   answers before anybody is authenticated, and the one this has already leaked through. */
+function loginScrub_(msg) { return scrubSecrets_(msg); }
+
+/* THE SCRUB GOES ON THE SERIALIZED BODY, not on one catch. Crew has 83 places that hand an object
+   to json_ and 143 catch blocks, and the router's single catch is only one of them — Leaderboard
+   found nine reply sites that never pass through its router catch, Price Cards two that leak on an
+   ok:true reply. This is Crew's ONE reply builder (the only ContentService call in the file), so
+   scrubbing here makes the rule "no reply field may carry a raw credential", which a future route
+   cannot reintroduce by returning an exception from somewhere new. */
 function json_(obj, callback) {
-  var body = JSON.stringify(obj);
+  var body = scrubSecrets_(JSON.stringify(obj));
   if (callback) {
     return ContentService.createTextOutput(callback + '(' + body + ')')
       .setMimeType(ContentService.MimeType.JAVASCRIPT);
@@ -613,8 +672,20 @@ function libVersion_() {
   }
 }
 
+/* Crew mints and checks no credential of its own — GX Core's requireAuth is the gate. What Crew
+   owns is WHICH parameter the credential is read out of, and that is AUTH_PARAM_NAMES_, so the
+   names this app accepts and the names its scrub redacts cannot drift apart again. The request is
+   forwarded with the resolved credential under the canonical `token` name and nothing else
+   dropped: Core reads `token` first, so ?session= and ?auth= authenticate exactly as before. */
 function requireCrew_(p) {
-  return GXCore.requireAuth(p, 'crew');
+  var params = p || {};
+  var tok = authParamValue_(params);
+  // Nothing presented: hand the request straight over so Core phrases the refusal, as it always has.
+  if (!tok) return GXCore.requireAuth(params, 'crew');
+  var q = {};
+  for (var k in params) if (Object.prototype.hasOwnProperty.call(params, k)) q[k] = params[k];
+  q.token = tok;
+  return GXCore.requireAuth(q, 'crew');
 }
 
 /**
@@ -2028,13 +2099,19 @@ function reportBug_(p) {
  * Wrapped and non-fatal, for the reason every send in this file is: mail is the enhancement, the
  * report is the thing.
  */
+/* SCRUBBED, because this is the one email that carries an EXCEPTION MESSAGE out of the app. `why`
+ * is built from a caught error (`Could not reach the central bug log: …`), and an unreachable GX
+ * Core is precisely the case where Apps Script hands back the whole URL it failed on. Price Cards
+ * found the same shape on 2026-09-16: a leaking exit that never touches a router catch and also
+ * goes into an email, which outlives the screen it would otherwise have flashed on. The reply half
+ * is covered by json_; this is the half that leaves the building. */
 function bugNotify_(o) {
   try {
     MailApp.sendEmail({
       to:      'sky@' + ACCOUNT_DOMAIN,
       name:    'GX Crew',
-      subject: o.subject,
-      body: o.lead.concat([
+      subject: scrubSecrets_(o.subject),
+      body: scrubSecrets_(o.lead.concat([
         '',
         'Reporter : ' + (o.b.reporter || ''),
         'Priority : ' + (o.b.priority || 'normal'),
@@ -2044,7 +2121,7 @@ function bugNotify_(o) {
         'Time     : ' + Utilities.formatDate(new Date(), STORE_TZ, 'M/d/yy h:mm a'),
         '',
         o.b.desc || '(no details provided)'
-      ]).join('\n')
+      ]).join('\n'))
     });
   } catch (mailErr) { /* non-fatal */ }
 }
@@ -2119,7 +2196,7 @@ function resolveReview_(p) {
   var applied = '';
   if (choice === 'accept') {
     if (item.kind === 'duplicate') {
-      var m = mergeEmployees_({ token: p.token, keep: item.employee_id,
+      var m = mergeEmployees_({ token: authParamValue_(p), keep: item.employee_id,
                                 merge: item.merge_from, confirm: 'yes' });
       if (!m.ok) return m;
       applied = 'merged ' + item.merge_from_name + ' into ' + item.name;
@@ -8428,7 +8505,7 @@ function incentiveSend_(p) {
                                     _paidCount, historyBand_(pp)),
             would_block: incentiveBlockers_(live, _spiffFailed, _ack, _covAck, _totalsAck) };
   } else {
-    pre = incentiveApprove_({ token: p.token, pp_start: pp });   // dry — validates + totals
+    pre = incentiveApprove_({ token: authParamValue_(p), pp_start: pp });   // dry — validates + totals
     if (pre.ok === false) return pre;
   }
 

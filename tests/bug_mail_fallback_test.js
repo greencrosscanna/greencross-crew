@@ -42,6 +42,20 @@ function grab(name) {
   throw new Error('unterminated ' + name);
 }
 
+/* One statement, by name: `var X = …;` up to the semicolon that closes it. */
+function grabVar(name) {
+  const m = gs.match(new RegExp('^var\\s+' + name + '\\s*=[\\s\\S]*?;\\s*$', 'm'));
+  if (!m) throw new Error('missing var ' + name + ' in Code.gs');
+  return m[0] + '\n';
+}
+
+/* The REAL scrub, lifted rather than stubbed. bugNotify_ runs every line of this email through it —
+   an unreachable GX Core is exactly the case where Apps Script hands back the whole URL it failed
+   on, credentials in the query string included — and a stub would let this file pass over a
+   notifier that leaks one. The scrub's own behavior is pinned by tests/error_scrub_test.js. */
+const SCRUB_SRC = grabVar('AUTH_PARAM_NAMES_') + grabVar('SECRET_PARAM_NAMES_') +
+                  grabVar('SECRET_PARAM_RE_') + grab('scrubSecrets_') + '\n';
+
 /* The engine's own three functions, over stubs that record instead of sending. CacheService is real
    enough to dedupe (a Map), because the dedupe is half of what is being tested. */
 function build(opts) {
@@ -74,7 +88,11 @@ function build(opts) {
     },
     console: console
   };
-  const src = grab('reportBug_') + '\n' + grab('bugNotify_') + '\n' + grab('bugMailOnce_') +
+  /* The REAL scrub, lifted rather than stubbed: bugNotify_ runs every line of this email through it
+     (an unreachable GX Core is exactly when Apps Script hands back the whole URL it failed on), and
+     a stub would let this file pass over a notifier that leaks. tests/error_scrub_test.js is where
+     the scrub's own behavior is pinned. */
+  const src = SCRUB_SRC + grab('reportBug_') + '\n' + grab('bugNotify_') + '\n' + grab('bugMailOnce_') +
               '\n;this.reportBug_ = reportBug_; this.bugMailOnce_ = bugMailOnce_;';
   const fn = new Function('sandbox', 'with (sandbox) { ' + src + ' }');
   fn.call(sandbox, sandbox);

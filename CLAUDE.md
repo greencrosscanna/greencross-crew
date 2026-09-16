@@ -244,6 +244,41 @@ JSONP for **stores** and **config** at boot. Whether those move is his call.
 
 Pinned by `tests/login_transport_test.js`.
 
+### One list of credential parameter names — accepted and redacted by the same array (2026-09-16)
+
+`AUTH_PARAM_NAMES_ = ['token', 'session', 'auth']` in `Code.gs` is the only place those names are
+written. `requireCrew_` takes the presented credential from it (through `authParamValue_`) and
+`SECRET_PARAM_RE_` is **built** from it, so a name Crew starts accepting is redacted the moment it
+is accepted. **Do not add a name to one half.** That is the bug this replaced: the shipped scrub
+covered `token=` only while the gate accepted all three, so an exception carrying a URL —
+Apps Script puts the WHOLE url into `Address unavailable: …` — handed a **live session token** back
+onto the screen. Verified live before the fix: `?action=roster` with a bogus value in any of the
+three names answers `Invalid session` (the value was read), with no credential at all answering
+`Auth required`. Suite-wide the same night, three of four scrubs leaked `session=`.
+
+The names must not be **shorter** than GX Core's `GX_AUTH_PARAMS_`, because Crew's gate delegates
+to `GXCore.requireAuth`; longer is harmless, and over-redaction is the safe direction.
+
+- **The scrub is on the SERIALIZED reply body in `json_`**, not on the router catch. Crew has 83
+  places that hand an object to `json_` and 143 catch blocks; the router's catch is one of them.
+  `json_` is the only `ContentService` call in the engine, so the rule is "no reply field may carry
+  a raw credential" rather than "this one catch is fixed". It matches `?name=` / `&name=` only —
+  **a JSON *field* called `token` is left alone on purpose**, because that is how sign-in returns
+  the session the browser needs.
+- **`bugNotify_` scrubs too, and it is not a reply.** The unfiled-bug email is built from a caught
+  exception and an unreachable GX Core is exactly when that exception carries a URL — an email
+  outlives the screen it would otherwise have flashed on.
+- **Never read `p.token` at a call site.** Two did (accepting a duplicate in the review queue, and
+  the approval dry run), so somebody signed in with `?session=` was refused by those two routes and
+  accepted by every other one. `authParamValue_` is the only sanctioned reader.
+
+`tests/error_scrub_test.js` (44 assertions) **executes** the real helpers against a real
+`Address unavailable` URL rather than grepping for the fix, and its list of protected names is a
+**hardcoded floor** the implementation cannot reach — a test that iterates the source's own array
+goes green by checking one name fewer the moment a name is deleted, which is the bug itself. Proved
+red four ways before shipping: delete `session` from the list (8 fail), restore the old anchored
+regex (16), drop the scrub from `json_` (5), drop it from the email subject (1).
+
 ## gx-theme is core-admin's — send a request, don't edit (rule from Sky, 2026-08-20)
 **Never edit `greencross-gx-theme` from this chat.** Five apps load `gx-theme.css`, `gx-client.js`,
 `gx-topnav.js`, `gx-avatar.js`, `gx-session.js` and `gx-stores.js` **live from Pages**, so a change there

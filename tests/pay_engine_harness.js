@@ -57,13 +57,18 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
               'payReqRecord_', 'payReqUpdate_', 'payReqCache_', 'payReqNow_',
               /* Mike's whole attendance list in ONE request (2026-09-15). Optional, so CODE_GS can
                  point at the engine from before it and the batch tests can be seen to fail there. */
-              'parseAttBatch_', 'saveAttendanceBatch_', 'upsertAttendanceBatch_'];
+              'parseAttBatch_', 'saveAttendanceBatch_', 'upsertAttendanceBatch_',
+              /* The one sanctioned reader of the session parameter (2026-09-16). incentiveSend_'s dry
+                 run forwards the presented credential through it, so the REAL one is lifted — a stub
+                 here would be a second hand-typed list of parameter names, which is the bug that
+                 helper exists to remove. Optional, so CODE_GS can still point at an older engine. */
+              'authParamValue_'];
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT',
                        'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP',
-                       'ATT_BATCH_MAX'];
-const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$/;
+                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_'];
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
