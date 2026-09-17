@@ -54,7 +54,11 @@ function grabVar(name) {
    on, credentials in the query string included — and a stub would let this file pass over a
    notifier that leaks one. The scrub's own behavior is pinned by tests/error_scrub_test.js. */
 const SCRUB_SRC = grabVar('AUTH_PARAM_NAMES_') + grabVar('SECRET_PARAM_NAMES_') +
-                  grabVar('SECRET_PARAM_RE_') + grab('scrubSecrets_') + '\n';
+                  grabVar('SECRET_PARAM_RE_') + grab('scrubSecrets_') + '\n' +
+                  /* And the one MailApp call the engine has (2026-09-17) — bugNotify_ sends through
+                     it like every other send, so a stub here would test a send the real code does
+                     not make. It is also the second scrub this email passes through. */
+                  grab('sendMail_') + '\n';
 
 /* The engine's own three functions, over stubs that record instead of sending. CacheService is real
    enough to dedupe (a Map), because the dedupe is half of what is being tested. */

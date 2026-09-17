@@ -33,7 +33,18 @@ function varSrc(name) {
     const c = SRC[k], n = SRC[k + 1];
     if (c === '/' && n === '*') { k = SRC.indexOf('*/', k + 2) + 1; continue; }
     if (c === '/' && n === '/') { k = SRC.indexOf('\n', k); continue; }
-    if (c === "'" || c === '"') { k = SRC.indexOf(c, k + 1); continue; }
+    /* A BACKSLASH ESCAPE IS NOT THE END OF THE STRING. Scanning to the next bare quote read the
+       `\'` inside SECRET_PARAM_RE_'s character class as a closing quote, and the scanner then ran
+       on past the declaration's own semicolon and swallowed the next few functions whole — the real
+       `requireCrew_` among them, which silently replaced this harness's stub and took five suites
+       down. It only bit once a declaration containing an escaped quote was lifted. */
+    if (c === "'" || c === '"') {
+      for (k = k + 1; k < SRC.length; k++) {
+        if (SRC[k] === '\\') { k++; continue; }
+        if (SRC[k] === c) break;
+      }
+      continue;
+    }
     if (c === '[' || c === '{' || c === '(') d++;
     if (c === ']' || c === '}' || c === ')') d--;
     if (c === ';' && d === 0) return SRC.slice(i + 1, k + 1);
@@ -62,13 +73,19 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
                  run forwards the presented credential through it, so the REAL one is lifted — a stub
                  here would be a second hand-typed list of parameter names, which is the bug that
                  helper exists to remove. Optional, so CODE_GS can still point at an older engine. */
-              'authParamValue_'];
+              'authParamValue_',
+              /* The one MailApp call in the engine (2026-09-17). Every send in here goes through it,
+                 so a stub would mean these suites assert on mail that the real code never builds —
+                 and the scrub it applies is the thing being kept honest. Optional, so CODE_GS can
+                 still point at an engine from before the wrapper existed. */
+              'scrubSecrets_', 'sendMail_'];
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT',
                        'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP',
-                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_'];
-const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$/;
+                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_',
+                       'SECRET_PARAM_NAMES_', 'SECRET_PARAM_RE_'];
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$|^scrubSecrets_$|^sendMail_$/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',

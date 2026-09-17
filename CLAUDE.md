@@ -268,6 +268,30 @@ to `GXCore.requireAuth`; longer is harmless, and over-redaction is the safe dire
 - **`bugNotify_` scrubs too, and it is not a reply.** The unfiled-bug email is built from a caught
   exception and an unreachable GX Core is exactly when that exception carries a URL — an email
   outlives the screen it would otherwise have flashed on.
+
+- **…and since 2026-09-17 EVERY email does, because `sendMail_` is the only `MailApp.sendEmail`
+  call in the engine.** `bugNotify_` scrubbed because it is the send this class of bug was first
+  found in. There were **six others** — the Monday digest, the approval request, the backup-approver
+  escalation, the primary's notice, the sent-back notice — all built from caught exceptions and
+  stored diagnostics in the ordinary way, and none of them scrubbed. Nothing had leaked into one
+  yet; that was the only thing protecting them. Same argument as `json_`: one exit, so a route that
+  starts sending mail has nothing to copy that skips the scrub. An email is the **worse** exit of
+  the two — a screen flashes once, a mailbox keeps it, and Crew's mail goes to the two people who
+  administer payroll.
+
+- **The two Script-Property logs are scrubbed AT THE WRITE, not only at the replay.** The digest's
+  and the backup's `note()` each stringify their whole result into a property (`mail_check`,
+  `backup_check` read them back). Those replies always went through `json_` and were safe; the
+  stored value was not — a property is readable by anyone with editor access to the project and it
+  outlives the failure by months. **The backup log has a reader that is not a reply at all:**
+  `backupHealth_` folds `last.error` into its reason and the Monday recap renders that reason into
+  the red backup card, which is an **email**. Scrubbing the two routes would have left that one
+  open, which is why the fix is on the write.
+
+  *The router's `try` opens above the whole switch, so a pre-auth route's exception is caught there
+  — checked 2026-09-17 after Inventory found `err.stack` reachable pre-auth. Crew returns
+  `err.message` only and references `.stack` nowhere, and every one of its 143 catches returns
+  through `json_`.*
 - **Never read `p.token` at a call site.** Two did (accepting a duplicate in the review queue, and
   the approval dry run), so somebody signed in with `?session=` was refused by those two routes and
   accepted by every other one. `authParamValue_` is the only sanctioned reader.
@@ -288,12 +312,24 @@ to `GXCore.requireAuth`; longer is harmless, and over-redaction is the safe dire
   to recover an over-redacted parameter turns the test red on purpose, so the decision gets re-taken
   rather than quietly reversed.
 
-`tests/error_scrub_test.js` (62 assertions) **executes** the real helpers against a real
+**The regex was already right when the suite note arrived.** Leaderboard's 2026-09-15 note warned
+that Crew's scrub was anchored (`/([?&](?:secret|token|key|pass|password)=)/`) and missed
+`connector_secret=`. That was true of the shipped v1.406 and was fixed the next day in v1.407/v1.408
+— the note crossed with the fix. Re-checked live 2026-09-17 against the note's whole checklist; what
+it turned up was the mail and stored-log gaps above, not the regex.
+
+`tests/error_scrub_test.js` (73 assertions) **executes** the real helpers against a real
 `Address unavailable` URL rather than grepping for the fix, and its list of protected names is a
 **hardcoded floor** the implementation cannot reach — a test that iterates the source's own array
 goes green by checking one name fewer the moment a name is deleted, which is the bug itself. Proved
 red four ways before v1.407: delete `session` from the list (8 fail), restore the old anchored
 regex (16), drop the scrub from `json_` (5), drop it from the email subject (1).
+
+**`scripts/prove-scrub-red.js` does that automatically now**, one scrub at a time, on scratch copies
+under the temp directory — a removal that costs **zero** assertions is printed as a failure, because
+that is a scrub the test is not actually holding. Run 2026-09-17: dropping `sendMail_`'s scrubs
+fails 3, restoring a second raw `MailApp.sendEmail` call site fails 1, each stored-log write fails 1,
+and restoring the anchored regex fails 32.
 
 **The suffix floor is the half that cannot be faked.** Its names — `sessionid`, `tokenValue`,
 `authHeader`, `gc_session_id`, `gx.api_key.v2` and the rest — are in **neither** source list, so no

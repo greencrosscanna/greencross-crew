@@ -115,7 +115,7 @@ function block(kind, name) {
 const WANT = [
   ['var', 'AUTH_PARAM_NAMES_'], ['var', 'SECRET_PARAM_NAMES_'], ['var', 'SECRET_PARAM_RE_'],
   ['fn', 'authParamValue_'], ['fn', 'scrubSecrets_'], ['fn', 'loginScrub_'],
-  ['fn', 'json_'], ['fn', 'requireCrew_'], ['fn', 'bugNotify_']
+  ['fn', 'json_'], ['fn', 'sendMail_'], ['fn', 'requireCrew_'], ['fn', 'bugNotify_']
 ];
 const missing = WANT.filter(([k, n]) => !block(k, n)).map(([, n]) => n);
 ok('every helper this test executes was found in Code.gs' + (missing.length ? ' (missing: ' + missing.join(', ') + ')' : ''),
@@ -296,6 +296,73 @@ ok('the unfiled-bug email is sent', mailed.length === 1);
 ok('its body carries no credential', mailed.length === 1 && mailed[0].body.indexOf(planted) < 0);
 ok('its subject is scrubbed too', mailed.length === 1 && mailed[0].subject.indexOf(planted) < 0);
 ok('the rest of the report survives the scrub', mailed.length === 1 && /Reporter : mike/.test(mailed[0].body));
+
+/* ── 5. EVERY email, not the one somebody looked at (2026-09-17) ──────────────────────────────
+ *
+ * bugNotify_ scrubbed because that is the send this class of bug was found in. Crew had SIX other
+ * sends — the Monday digest, the approval request, the backup-approver escalation, the primary's
+ * notice, the sent-back notice — and not one of them did. They are built from caught exceptions and
+ * stored diagnostics in the ordinary way, so the only thing standing between them and a live
+ * credential was that nobody had happened to leak into one yet.
+ *
+ * `sendMail_` is now the single MailApp call, on the same argument as `json_`: a route that starts
+ * sending mail has nothing to copy that skips the scrub. */
+console.log('\nThe mail builder — sendMail_ is Crew\'s only send');
+
+ok('sendMail_ is the only MailApp.sendEmail call in the engine, so scrubbing there covers every send',
+   // Counted over CODE, not SRC: this fix's own comment names MailApp.sendEmail in prose, and a
+   // count over the raw text would be one that goes red when somebody explains the rule.
+   (CODE.match(/MailApp\.sendEmail/g) || []).length === 1 &&
+   /function sendMail_[\s\S]{0,1200}MailApp\.sendEmail/.test(SRC));
+
+mailed.length = 0;
+sandbox.sendMail_({ to: 'sky@greencrosscanna.com', name: 'GX Crew',
+                    subject: 'Backup approval needed — ' + leakUrl('session'),
+                    htmlBody: '<p>The last backup failed: ' + leakUrl('deploy_secret') + '.</p>' });
+ok('a send through sendMail_ reaches MailApp', mailed.length === 1);
+ok('its subject is redacted', mailed.length === 1 && mailed[0].subject.indexOf(planted) < 0);
+ok('its htmlBody is redacted', mailed.length === 1 && mailed[0].htmlBody.indexOf(planted) < 0);
+ok('the rest of the message survives — a scrubbed email is still worth reading',
+   mailed.length === 1 && /The last backup failed/.test(mailed[0].htmlBody) &&
+   /Backup approval needed/.test(mailed[0].subject));
+ok('every other field is forwarded untouched',
+   mailed.length === 1 && mailed[0].to === 'sky@greencrosscanna.com' && mailed[0].name === 'GX Crew');
+
+// A plain-text send (the bug notice's shape) goes through the same door.
+mailed.length = 0;
+sandbox.sendMail_({ to: 'x@y.z', subject: 's', body: 'could not reach SPIFF: ' + leakUrl('secret') });
+ok('a plain-text body is redacted too', mailed.length === 1 && mailed[0].body.indexOf(planted) < 0);
+
+// It must not invent fields — MailApp treats a present-but-empty htmlBody differently from an absent one.
+mailed.length = 0;
+sandbox.sendMail_({ to: 'x@y.z', subject: 's', body: 'b' });
+ok('a message with no htmlBody does not gain one',
+   mailed.length === 1 && !('htmlBody' in mailed[0]));
+
+/* ── 6. The two logs that OUTLIVE the request ─────────────────────────────────────────────────
+ *
+ * The digest's and the backup's `note()` each JSON.stringify their whole result into a Script
+ * Property. Both are replayed through json_ (`mail_check`, `backup_check`), so the REPLY was always
+ * scrubbed — but the stored value was not, and a Script Property is readable by anyone with editor
+ * access, months after the failure.
+ *
+ * The backup log has a second reader that is not a reply at all: `backupHealth_` folds `last.error`
+ * into its reason and the Monday recap renders that reason into the red backup card — an EMAIL. So
+ * the write is where this has to be closed; scrubbing the two routes would have left the card open.
+ *
+ * A shape assertion rather than an executed one, deliberately and with its limits stated: both
+ * writers are closures inside 400-line functions that touch Drive, Mail and the spreadsheet, and
+ * lifting one means re-writing it, which tests the copy. What it pins is that neither property is
+ * ever handed a raw JSON.stringify — the exact edit that would reopen it. */
+console.log('\nThe stored logs — scrubbed at the write, not only at the replay');
+
+['LAST_DIGEST_PROP', 'BACKUP_LAST_PROP'].forEach((prop) => {
+  const writes = CODE.match(new RegExp('setProperty\\(\\s*' + prop + '\\s*,[^\\n]*', 'g')) || [];
+  ok(prop + ' is written at least once', writes.length > 0);
+  ok(prop + ' is never handed a raw JSON.stringify — the scrub is on the write' +
+     (writes.length ? '' : ' (no write found)'),
+     writes.length > 0 && writes.every((w) => /scrubSecrets_\(/.test(w)));
+});
 
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nAll assertions passed.\n');
 process.exit(fail ? 1 : 0);

@@ -669,6 +669,35 @@ function json_(obj, callback) {
   return ContentService.createTextOutput(body).setMimeType(ContentService.MimeType.JSON);
 }
 
+/* THE SAME ARGUMENT AS json_, APPLIED TO THE OTHER EXIT (2026-09-17).
+ *
+ * `json_` made the rule "no reply field may carry a raw credential" true by construction. Mail was
+ * still seven hand-written `MailApp.sendEmail` calls, and exactly ONE of them scrubbed — the
+ * unfiled-bug notice, which is the only one anybody had gone looking at. The other six are built
+ * from caught exceptions and stored diagnostics in the ordinary way, and an unreachable GX Core or
+ * SPIFF is precisely when those carry `Address unavailable: <the whole url>`.
+ *
+ * An email is the WORSE exit of the two. A screen flashes an error at one person and is gone; a
+ * message sits in a mailbox, gets forwarded, and is searchable years later — and Crew's mail goes to
+ * the two people who administer payroll.
+ *
+ * So this is the only MailApp call in the engine, pinned by the test the same way json_'s
+ * ContentService count is. A route that starts sending mail cannot reintroduce the hole by writing
+ * its own send, because there is nothing to copy that skips this.
+ *
+ * `bugNotify_` still scrubs its own subject and body. Scrubbing is idempotent, and that one is the
+ * send this whole class of bug was first found in — leaving it stated there costs nothing and
+ * survives somebody refactoring this wrapper. */
+function sendMail_(o) {
+  var m = o || {};
+  var out = {};
+  for (var k in m) if (Object.prototype.hasOwnProperty.call(m, k)) out[k] = m[k];
+  if (out.subject != null)  out.subject  = scrubSecrets_(out.subject);
+  if (out.body != null)     out.body     = scrubSecrets_(out.body);
+  if (out.htmlBody != null) out.htmlBody = scrubSecrets_(out.htmlBody);
+  return MailApp.sendEmail(out);
+}
+
 // ─── Auth ───────────────────────────────────────────────────────────────────────
 
 /**
@@ -2123,7 +2152,7 @@ function reportBug_(p) {
  * is covered by json_; this is the half that leaves the building. */
 function bugNotify_(o) {
   try {
-    MailApp.sendEmail({
+    sendMail_({
       to:      'sky@' + ACCOUNT_DOMAIN,
       name:    'GX Crew',
       subject: scrubSecrets_(o.subject),
@@ -3601,13 +3630,18 @@ function sendDigest_(p) {
      message that landed in spam, or from a wrong address. Now there is. */
   function note(res) {
     try {
-      PropertiesService.getScriptProperties().setProperty(LAST_DIGEST_PROP, JSON.stringify(res));
+      /* SCRUBBED ON THE WAY IN, not only on the way out. `mail_check` replays this through json_,
+         so the REPLY was already safe — what was not is the value at rest: a Script Property is
+         readable by anyone with editor access to the project, it outlives the failure by months,
+         and it is the last place anybody thinks to look for a credential. Same reason bugNotify_
+         scrubs: a stored diagnostic outlives the screen it would otherwise have flashed on. */
+      PropertiesService.getScriptProperties().setProperty(LAST_DIGEST_PROP, scrubSecrets_(JSON.stringify(res)));
     } catch (e) { /* the record is a nicety; never fail the send over it */ }
     return res;
   }
   var at = new Date().toISOString();
   try {
-    MailApp.sendEmail({ to: recipients.join(','), subject: subject, htmlBody: html,
+    sendMail_({ to: recipients.join(','), subject: subject, htmlBody: html,
                         name: 'GX Crew' });
   } catch (e) {
     return note({ ok: false, at: at, source: source, to: recipients, needs_authorization: true,
@@ -6578,7 +6612,7 @@ function notifyApproved_(pp, ppEnd, wf, by, paidCount, total, overrides, pdf) {
     if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(to)) return { to: [], error: 'no usable address for ' + sender };
     var isPrac = isPracticePeriod_(pp);
     var label = (isPrac ? practiceSource_(pp) : pp) + (ppEnd ? ' → ' + ppEnd : '');
-    MailApp.sendEmail({ to: to, name: 'GX Crew',
+    sendMail_({ to: to, name: 'GX Crew',
       subject: (isPrac ? '[PRACTICE] ' : '') + 'Approved — incentive ' + (isPrac ? practiceSource_(pp) : pp),
       htmlBody: wfApprovedEmail_(pp, label, by, paidCount, total, overrides, pdf) });
     return { to: [to] };
@@ -7037,7 +7071,10 @@ function backupCrewSheet_(kind) {
   var at = new Date();
   var out = { ok: false, at: at.toISOString(), kind: kind };
   function note(res) {
-    try { PropertiesService.getScriptProperties().setProperty(BACKUP_LAST_PROP, JSON.stringify(res)); }
+    /* Scrubbed at the write — and this log has a SECOND reader that is not a reply. `backupHealth_`
+       folds `last.error` into its reason, and the Monday recap renders that reason into an EMAIL
+       (the red backup card). A scrub applied only at `backup_check` would have left that one open. */
+    try { PropertiesService.getScriptProperties().setProperty(BACKUP_LAST_PROP, scrubSecrets_(JSON.stringify(res))); }
     catch (e) { /* the record is a nicety; never fail the backup over it */ }
     return res;
   }
@@ -7763,7 +7800,7 @@ function escalateApprovals_(o) {
     if (!to.length) { out.errors.push({ pp_start: wf.pp_start, error: 'no usable address for the backup' }); return; }
     try {
       var isPrac = isPracticePeriod_(wf.pp_start);
-      MailApp.sendEmail({ to: to.join(','), name: 'GX Crew',
+      sendMail_({ to: to.join(','), name: 'GX Crew',
         subject: (isPrac ? '[PRACTICE] ' : '') + 'Backup approval needed — incentive ' +
                  (isPrac ? practiceSource_(wf.pp_start) : wf.pp_start),
         htmlBody: wfBackupEmail_(wf, w.why) });
@@ -7814,7 +7851,7 @@ function notifyPrimaryOfBackup_(pp, who, what, why, detail) {
       : esc(who) + ' ' + esc(what) + ' it as backup approver' +
         (why === 'away' ? ' while you were marked away.'
          : why === 'waiting' ? ' after it waited ' + (BACKUP_AFTER_MS / 3600000) + ' hours.' : '.');
-    MailApp.sendEmail({ to: to.join(','), name: 'GX Crew',
+    sendMail_({ to: to.join(','), name: 'GX Crew',
       subject: (isPrac ? '[PRACTICE] ' : '') + 'Backup ' + (what === 'was brought in' ? 'called in' : what) + ' — incentive ' + label,
       htmlBody: '<div style="font-family:system-ui,sans-serif;max-width:520px">' +
         '<p style="margin:0 0 12px">Pay period <strong>' + esc(label) + '</strong>: ' + line + '</p>' +
@@ -8619,7 +8656,7 @@ function incentiveSend_(p) {
          A body banner is read after the decision to open; a subject prefix is read before it.
          Practice is announced FIRST because it is the stronger claim: a practice preview is still,
          above all, not real. */
-      MailApp.sendEmail({ to: to.join(','), name: 'GX Crew', htmlBody: html,
+      sendMail_({ to: to.join(','), name: 'GX Crew', htmlBody: html,
         subject: (isPracticePeriod_(pp) ? '[PRACTICE] ' : '') + (preview ? '[PREVIEW] ' : '') +
                  'Approve incentive — ' + (isPracticePeriod_(pp) ? practiceSource_(pp) : pp) });
       mailed = to;
@@ -8826,7 +8863,7 @@ function incentiveReturn_(p) {
   var to = sender ? accountEmail_(sender) : '';
   if (to) {
     try {
-      MailApp.sendEmail({ to: to, subject: 'Incentive ' + pp + ' sent back', name: 'GX Crew',
+      sendMail_({ to: to, subject: 'Incentive ' + pp + ' sent back', name: 'GX Crew',
         htmlBody: '<div style="font-family:system-ui,sans-serif;max-width:520px">' +
           '<h2 style="margin:0 0 4px">Sent back for a fix</h2>' +
           '<p style="margin:0 0 12px;color:#555">Pay period <strong>' + pp + '</strong>, returned by ' +
