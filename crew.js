@@ -5561,14 +5561,20 @@
     try {
       /* The roster reads two Google Sheets through the GXCore library; a cold call measured
          ~12s, well past gx-client's 8s default, so every attempt timed out and the view never
-         loaded. The engine caches the join for 2 minutes, but the FIRST call still has to pay
-         full price — so give it a real budget instead of retrying into the same wall. */
+         loaded. The engine caches the join for 10 minutes (2026-09-17, was 2), but the FIRST
+         call still has to pay full price — so give it a real budget instead of retrying into
+         the same wall. */
       /* Retired rows are asked for ONCE and then kept. The Retired scope needs them and the
          other two do not, but re-reading a ten-second join every time somebody flicks the
          segmented control back and forth is the kind of cost that teaches people not to look. */
       var wantRetired = state.scope === 'retired' || state.fetchedRetired;
+      /* `parts=` asks the engine to fold the review queue and the EoM log into THIS response,
+         built from the same roster join instead of two more Crew-engine executions queued
+         behind it (2026-09-17). Feature-detected below, not version-gated: an engine that
+         predates this ignores the unknown param and the two keys are simply absent, so boot
+         falls through to the separate background loads it always made. */
       var r = await Engine.jsonp('roster',
-        { token: token(), include_retired: wantRetired ? '1' : '' },
+        { token: token(), include_retired: wantRetired ? '1' : '', parts: 'review,eom_history' },
         { timeoutMs: 45000, retries: 2 });
       if (!r || !r.ok) {
         // An expired/revoked session should drop to the login form, not a dead-end error.
@@ -5588,20 +5594,54 @@
       state.fetchedRetired = wantRetired;
       state.hrSheetUrl = r.hr_sheet_url || '';
 
+      /* Fold `review` and `eom_history` in when the engine sent them, applying exactly what
+         foldRosterParts computed — a pure function so the fold logic is testable without a DOM,
+         a network or boot() itself. */
+      var fold = foldRosterParts(r);
+      if (fold.gotReview) {
+        state.review = fold.review; state.reviewCounts = fold.reviewCounts; state.reviewErr = fold.reviewErr;
+      }
+      if (fold.gotEom) {
+        state.eomHistory = fold.eomHistory; state.eomHistoryErr = fold.eomHistoryErr; state.eom = fold.eom;
+      }
+
       /* Rebuild the shell only when there isn't one. A refetch after a merge, a retire or an
          accepted question repaints the slots in place, so the search box keeps its text and its
          cursor and the people list keeps its scroll. */
       if (ui) { paintSubnav(); paintRail(); paintPane(); }
       else render();
 
-      /* Both of these fill the OVERVIEW, and both are slow reads against the same sheets — so
-         they load behind the roster rather than in front of it, and paint themselves in when
-         they arrive. The roster is usable without either. */
-      if (state.review === null) loadReview();
-      if (state.eom === undefined) loadEom();
+      /* Whatever the engine did NOT fold in (an older deployment, or this one part failing to
+         parse) falls back to its own background load — both are slow reads against the same
+         sheets, so they load behind the roster rather than in front of it, and paint themselves
+         in when they arrive. The roster is usable without either. */
+      if (!fold.gotReview && state.review === null) loadReview();
+      if (!fold.gotEom && state.eom === undefined) loadEom();
     } catch (e) {
       renderFailure('⚠️ Could not load the roster: ' + esc((e && e.message) || 'unknown error'));
     }
+  }
+
+  /* PURE: given the `roster` response, what to apply to `state` for the `review` and `eom_history`
+     parts it may have folded in (2026-09-17). No DOM, no network, no state mutation of its own —
+     boot() applies the result. Split out so the fold can be tested directly instead of only
+     through a full boot() call, which needs a live engine and a rendered page to reach it.
+     Mirrors exactly what loadReview()/loadEom() have always set on a successful or failed load,
+     so a client talking to an engine that folds nothing behaves identically to one that does. */
+  function foldRosterParts(r) {
+    var out = { gotReview: !!(r && r.review), gotEom: !!(r && r.eom_history) };
+    if (out.gotReview) {
+      out.review = r.review.items || [];
+      out.reviewCounts = r.review.counts || {};
+      out.reviewErr = r.review.ok === false ? (r.review.error || 'could not load the review queue') : '';
+    }
+    if (out.gotEom) {
+      out.eomHistory = (r.eom_history.ok && r.eom_history.history) ? r.eom_history.history : [];
+      out.eomHistoryErr = r.eom_history.ok ? '' : (r.eom_history.error || 'could not load the history');
+      // undefined = not loaded yet, null = nobody holds it — same sentinel loadEom() has always set.
+      out.eom = r.eom_history.hasOwnProperty('current_holder') ? r.eom_history.current_holder : null;
+    }
+    return out;
   }
 
   /* The clock is chrome, not session state -- start it once at boot so it is never showing placeholder
