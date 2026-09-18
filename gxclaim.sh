@@ -2,7 +2,11 @@
 # ─── gxclaim — one session owns this checkout at a time ──────────────────────────────────────────
 #
 #   sh ./gxclaim.sh claim [label]   take (or refresh) this session's claim on the repo
-#   sh ./gxclaim.sh check [context] enforcement — exit 1 if a DIFFERENT live session holds it
+#   sh ./gxclaim.sh check [context] enforcement — exit 1 if a DIFFERENT live session holds it.
+#                                   Claims an unclaimed repo and renews the holder: call it ONLY
+#                                   right before real work here (commit, push, branch change).
+#   sh ./gxclaim.sh peek            read-only twin of check — same exit codes, never claims or renews.
+#                                   What a sweep, a dry run or a test uses to ask "is anyone here?"
 #   sh ./gxclaim.sh release [--force]
 #   sh ./gxclaim.sh status          who holds it, and whether the gate is actually installed
 #   sh ./gxclaim.sh install         (re)install the git hooks that enforce it
@@ -48,9 +52,56 @@ set -u
 CMD="${1:-status}"
 [ $# -gt 0 ] && shift
 
+# ─── THE REPO IS WHERE THIS SCRIPT LIVES, NOT WHERE THE SHELL HAPPENS TO BE ─────────────────────
+# Until 2026-09-17 the repo came from the caller's cwd. So `sh /path/to/spoke/gxclaim.sh release`,
+# run from a hub session, released the HUB's claim and printed nothing — the holder believed it had
+# freed five spokes, and its follow-up `status` calls reported "not claimed" about the hub, not the
+# spokes. Every copy of this script sits at the root of the repo it guards (gx-sync.sh puts it there,
+# and the hooks call ./gxclaim.sh from the root), so the script's own directory is the unambiguous
+# answer. When that differs from the caller's repo, say so on stderr so nobody is surprised twice.
+_CALLER_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+_SELF_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)"
+if [ -n "$_SELF_DIR" ] && cd "$_SELF_DIR" 2>/dev/null; then
+  _SELF_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$_CALLER_TOP" ] && [ -n "$_SELF_TOP" ] \
+     && [ "$(cd "$_CALLER_TOP" && pwd -P)" != "$(cd "$_SELF_TOP" && pwd -P)" ]; then
+    echo "gxclaim: acting on $_SELF_TOP (where this script lives), not $_CALLER_TOP (your current folder)" >&2
+  fi
+fi
+
 GITDIR="$(git rev-parse --git-dir 2>/dev/null)" || { echo "gxclaim: not a git repository" >&2; exit 2; }
-CLAIM="$GITDIR/gx-claim"
+
+# ─── ONE REPO, ONE CLAIM, ONE SET OF HOOKS — resolved against the COMMON git dir ─────────────────
+# `--git-dir` is PER-WORKTREE: .git in a main checkout, .git/worktrees/<name> inside a linked
+# worktree. Until 2026-09-17 both the claim file and the hook install used it, which split this gate
+# two ways and made both halves lie confidently.
+#
+#   THE CLAIM. claim, who, release and release --force all acted on a different file depending on
+#   where they ran, and none could see the other. Found live in greencross-spiff on 2026-09-16:
+#   a session in a worktree held the MAIN checkout's claim, was asked to release it, ran release from
+#   its worktree, removed the worktree-local file and reported "released" in good faith — while the
+#   main checkout still held the claim and refused the other session's commit. Both sessions were
+#   reading true answers about two different files. The dangerous direction is the other one: a
+#   worktree session that arms at session start writes its claim where nobody looks, so a second
+#   session in the main folder sees "free" and edits the same tree. That is exactly the
+#   two-sessions-one-tree failure this script was written for after GX Core v284 shipped unreviewed.
+#
+#   THE HOOKS, and this half was not in the report. Git reads hooks from the COMMON dir — measured,
+#   not assumed: `git rev-parse --git-path hooks` inside a worktree returns <common>/hooks, a
+#   pre-commit placed there fires in the worktree, and one placed at the worktree git-dir NEVER RUNS.
+#   So `install` from a worktree wrote all three gates to a path git ignores and printed success. The
+#   SessionStart hook re-runs install every session precisely because this filesystem drops
+#   executable bits, so in a worktree that re-arming silently armed nothing.
+#
+# --path-format=absolute keeps this honest regardless of cwd; --git-common-dir alone can come back
+# relative. The fallback matters for an ancient git, not for ours.
+COMMONDIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+[ -n "$COMMONDIR" ] || COMMONDIR="$GITDIR"
+CLAIM="$COMMONDIR/gx-claim"
 REPO="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+# In a linked worktree the toplevel is the worktree's own folder (e.g. "sweet-jemison-ffb030"), but the
+# claim is the MAIN repo's — name that, so the output says which repo was locked or freed.
+case "$COMMONDIR" in */.git) REPO="$(basename "$(dirname "$COMMONDIR")")" ;; esac
 HOST="$(hostname -s 2>/dev/null || echo unknown)"
 ME="${CLAUDE_PID:-}"
 MY_SESSION="${CLAUDE_CODE_SESSION_ID:-}"
@@ -319,15 +370,33 @@ case "$CMD" in
     ;;
 
   release)
+    # Every outcome names the repo. A silent success is how "released" got reported about the hub
+    # while the five spokes it was meant for stayed locked (2026-09-17).
     if [ "${1:-}" = "--force" ]; then
-      read_claim && echo "released $REPO (was held by $(describe_holder))"
+      if read_claim; then echo "released $REPO (was held by $(describe_holder))"
+      else echo "$REPO: no claim to release"; fi
       rm -f "$CLAIM"; exit 0
     fi
     if read_claim && [ -n "$ME" ] && [ "$c_pid" != "$ME" ]; then
       echo "gxclaim: $REPO is held by another session — not releasing. Use --force if it is gone." >&2
       exit 1
     fi
+    if [ -f "$CLAIM" ]; then echo "released $REPO"; else echo "$REPO: no claim to release"; fi
     rm -f "$CLAIM"; exit 0
+    ;;
+
+  peek)
+    # ── A READ MUST NEVER LOCK ───────────────────────────────────────────────────────────────────
+    # `check` claims an unclaimed repo and renews its holder — right for a commit, wrong for a look.
+    # On 2026-09-17 a hub test ran gxfanout's DRY RUN against every spoke on every file save, and the
+    # dry run asked each spoke `check`. Two hub sessions that never edited a spoke ended up holding
+    # all five, renewed every minute, and blocked an approved GX Core re-pin three times. Sky's rule
+    # from that night: reads must not lock. Same answer as check, no write of any kind.
+    if held_by_other; then
+      echo "$REPO: held by $(describe_holder)" >&2
+      exit 1
+    fi
+    exit 0
     ;;
 
   who)
@@ -365,7 +434,7 @@ case "$CMD" in
     ;;
 
   install)
-    HOOKS="$GITDIR/hooks"
+    HOOKS="$COMMONDIR/hooks"   # NOT $GITDIR — git reads hooks from the common dir; see the header
     mkdir -p "$HOOKS"
 
     # pre-push already exists in every GX repo and runs that repo's test/preflight gate. Keep whatever
@@ -431,7 +500,7 @@ HOOK_EOF
     ;;
 
   status)
-    HOOKS="$GITDIR/hooks"
+    HOOKS="$COMMONDIR/hooks"   # NOT $GITDIR — status must report on the hooks git will actually run
     echo "gxclaim — $REPO"
     if live_claim; then
       _mine=""
@@ -517,7 +586,7 @@ HOOK_EOF
     ;;
 
   *)
-    echo "gxclaim: unknown command '$CMD' — use claim | check | expect | release | who | status | install" >&2
+    echo "gxclaim: unknown command '$CMD' — use claim | check | peek | expect | release | who | status | install" >&2
     exit 2
     ;;
 esac
