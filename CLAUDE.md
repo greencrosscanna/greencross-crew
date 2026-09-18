@@ -205,6 +205,65 @@ there is a **reference prototype**, not shippable code; its runtime is a preview
   `gx-sync.sh`, filled from `.gx_app` (= `crew`). Re-run `./gx-sync.sh` to refresh them. This CLAUDE.md is
   intentionally **not** synced — keep it app-specific.
 
+## Boot is one Crew-engine call now, not three (2026-09-18)
+
+Opening the roster used to block on `roster` (the 2-Google-Sheets join, ~9.8s cold) and then fire
+`review` and `eom_history` behind it — three queued executions of Crew's own `/exec` for one
+screen open, plus a fourth call straight to GX Core (`GXCore.jsonp('config', {key:'cfg.eom'})`)
+just to learn who currently holds Employee of the Month. Apps Script serializes execution per
+script the same way the sign-in section above already explains, so those three Crew calls did not
+even run in parallel — the second and third each waited behind whichever one was still running.
+
+**`roster` now takes `parts=review,eom_history`** and folds both into its own response, built from
+the SAME `rosterJoin_()` the roster itself already paid for — not a second cache read, cached or
+not. Each part is its own try/catch server-side (`reviewPayload_`, `eomHistoryPayload_` in
+`Code.gs`), so a broken review queue or EoM log arrives as `{ok:false, error}` on its own key
+rather than taking the roster's `rows` down with it. `eom_history`'s payload also now carries
+`current_holder` (the id `cfg.eom` currently names, read via `GXCore.getKv` — the SAME in-process
+library call `eomSync_` already made, not a new one), which is what lets `crew.js` retire its
+separate GX Core `config` round trip: `boot()` reads `state.eom` off the folded response instead.
+
+**Calls per open, Crew engine executions:**
+
+| | before | after (folded) |
+|---|---|---|
+| to Crew's own `/exec` | 3 (`roster`, `review`, `eom_history`, queued) | 1 |
+| to GX Core directly (`config` for `cfg.eom`) | 1 | 0 |
+
+**Feature-detected, not version-gated.** `crew.js` always sends `parts=review,eom_history`; an
+older deployed engine simply ignores the unknown query param, the two keys are absent from its
+response, and `foldRosterParts()` (crew.js) reports `gotReview`/`gotEom` as `false` — which is
+exactly what makes `boot()` fall through to the old `loadReview()`/`loadEom()` background calls it
+always had. Nothing has to know which engine version is live; the response shape says so.
+
+**`ROSTER_CACHE_TTL` raised 120s → 600s.** Every writer of identity or Crew's attribute sheet was
+checked for a `bustRosterCache_()` call before this moved — a stale roster in a payroll app is
+worse than a slow one, and 600s makes any missed writer 5x more visible than 120s did. One real gap
+was found and closed: `seedIdentityCommit()` (the `seed_commit` route, also runnable straight from
+the editor) wrote straight to GX Core identity and had **never** busted the roster cache, at any
+TTL — invisible when it only ran once during onboarding, a real ten-minute staleness window now
+that the cache lives longer. `tests/roster_cache_bust_coverage_test.js` holds this as a standing
+check (scans every function in `Code.gs` for the write calls and asserts each one also busts the
+cache), not a one-time audit — a future writer that forgets the bust call fails it the same way.
+
+Also cached alongside the roster: the attrs tab's employee_id → sheet-row index, so a per-field
+save (`writeAttrs_`) no longer re-scans the whole id column to find which row to overwrite — it
+reads the cached row number, verifies it against the live cell (never trusted blindly, since a
+wrong index pointing at the wrong row would silently overwrite the wrong person's attributes), and
+only falls back to the full scan on a miss or a failed verification.
+
+**What this could NOT measure: real seconds-to-roster, before and after, against the live engine.**
+This work was built and tested against extracted Code.gs/crew.js logic with fake sheets and a fake
+cache (`tests/roster_boot_fold_test.js`, `tests/roster_boot_client_fold_test.js`,
+`tests/attr_index_cache_test.js`, `tests/roster_cache_bust_coverage_test.js` — all mutation-verified,
+each one shown to fail against the bug it exists to catch) — never deployed, per the standing rule
+that nothing ships to GX Core, gx-theme, or Crew's own live engine without Sky's word first in this
+chat. The call-count reduction above is structural and provable from the code; the wall-clock
+improvement on a cold open is Sky's to confirm once this is deployed.
+
+**Not touched: the incentive calc.** Still 25-48s per load (`crew.js` ~5527, `Code.gs` ~5522) — the
+next lever, not this one.
+
 ## Sign-in runs on Crew's OWN engine (2026-09-03)
 
 `crew.js` used to call GX Core's `/exec` directly to sign in. **That worked, and it is not why it
