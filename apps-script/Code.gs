@@ -913,6 +913,14 @@ function attrHeaders_(sh) {
            .map(function (h) { return String(h || '').trim(); });
 }
 
+/* employee_id -> sheet row number for the attrs tab, built for free while readAttrs_ already scans
+   every row. writeAttrs_ reads this to skip its own id-column scan on a per-field save — the save
+   path this repo already timed at nineteen people taking a minute or two through the JOINED read
+   (rosterJoin_'s ~9.8s GXCore.getEmployees() + this tab), so the write side gets the same treatment.
+   Same TTL and the same bust as the roster cache: it is only ever trustworthy for as long as the
+   attrs tab hasn't changed underneath it, which is exactly the roster cache's own lifetime. */
+var ATTR_INDEX_CACHE_KEY = 'crew:attrIndex:v1';
+
 function readAttrs_() {
   var sh = crewSheet_();
   var last = sh.getLastRow();
@@ -920,11 +928,14 @@ function readAttrs_() {
   var hdr = attrHeaders_(sh);
   var values = sh.getRange(2, 1, last - 1, hdr.length).getValues();
   var out = Object.create(null);
+  var idRow = Object.create(null);
   for (var i = 0; i < values.length; i++) {
     var row = {};
     for (var c = 0; c < hdr.length; c++) row[hdr[c]] = String(values[i][c] == null ? '' : values[i][c]).trim();
-    if (row.employee_id) out[row.employee_id] = row;
+    if (row.employee_id) { out[row.employee_id] = row; idRow[row.employee_id] = i + 2; }
   }
+  try { CacheService.getScriptCache().put(ATTR_INDEX_CACHE_KEY, JSON.stringify(idRow), ROSTER_CACHE_TTL); }
+  catch (e) { /* the index is only an optimization; writeAttrs_ falls back to scanning without it */ }
   return out;
 }
 
@@ -944,9 +955,24 @@ function writeAttrs_(rec) {
     var last = sh.getLastRow();
     var targetRow = 0;
     if (last >= 2) {
-      var ids = sh.getRange(2, 1, last - 1, 1).getValues();
-      for (var i = 0; i < ids.length; i++) {
-        if (String(ids[i][0]).trim() === rec.employee_id) { targetRow = i + 2; break; }
+      /* THE CACHED INDEX IS NEVER TRUSTED BLINDLY. A stale or wrong entry pointing at the wrong
+         row would silently overwrite somebody else's record — worse than the full scan it exists
+         to replace — so a hit is verified against the live cell before use, one read instead of
+         the whole column. A miss, a cold cache or a verification failure all fall back to the
+         same linear scan writeAttrs_ has always done; this only ever makes the common case fast. */
+      var targetGuess = null;
+      try {
+        var hit = CacheService.getScriptCache().get(ATTR_INDEX_CACHE_KEY);
+        if (hit) targetGuess = (JSON.parse(hit) || {})[rec.employee_id];
+      } catch (e) { /* fall through to the scan */ }
+      if (targetGuess && targetGuess >= 2 && targetGuess <= last &&
+          String(sh.getRange(targetGuess, 1).getValue()).trim() === rec.employee_id) {
+        targetRow = targetGuess;
+      } else {
+        var ids = sh.getRange(2, 1, last - 1, 1).getValues();
+        for (var i = 0; i < ids.length; i++) {
+          if (String(ids[i][0]).trim() === rec.employee_id) { targetRow = i + 2; break; }
+        }
       }
     }
     var hdr = attrHeaders_(sh);
@@ -1823,8 +1849,13 @@ function reportedItemSatisfied_(liveValue, proposedValue) {
   return normSpace_(liveValue) === normSpace_(proposedValue);
 }
 
-function reviewItems_() {
-  var joined = rosterJoin_();
+/* `joined`, when passed, is a roster already fetched by the caller this same execution — getRoster_
+   folds the review queue into the boot response and must not pay for a second rosterJoin_ call
+   (cache hit or not, that is a second JSON parse of a payload that can run into six figures of
+   characters). Omit it and this fetches its own, exactly as it always did — resolveReview_ and the
+   standalone `review` route both still call it with no argument. */
+function reviewItems_(joined) {
+  joined = joined || rosterJoin_();
   var rows = joined.rows;
   var byId = Object.create(null);
   rows.forEach(function (r) { byId[r.employee_id] = r; });
@@ -2206,15 +2237,22 @@ function bugMailOnce_(b, kind) {
   }
 }
 
+/* Shared by the standalone `review` route and the `parts=review` fold in getRoster_, so the two
+   can never answer in different shapes. `joined` lets a caller that already paid for rosterJoin_
+   this execution hand it over instead of triggering a second cache read. */
+function reviewPayload_(joined, canEdit) {
+  var items = reviewItems_(joined);
+  var counts = { high: 0, warn: 0, info: 0 };
+  items.forEach(function (i) { counts[i.severity] = (counts[i.severity] || 0) + 1; });
+  return { ok: true, can_edit: canEdit, total: items.length, counts: counts, items: items };
+}
+
 function getReview_(p) {
   // Deploy secret is accepted alongside a user session so the queue can be inspected from
   // tooling, same as seed_preview. Resolving still requires a real signed-in editor.
   var auth = deploySecretOk_(p) ? { ok: true, user: 'tooling', role: 'admin' } : requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
-  var items = reviewItems_();
-  var counts = { high: 0, warn: 0, info: 0 };
-  items.forEach(function (i) { counts[i.severity] = (counts[i.severity] || 0) + 1; });
-  return { ok: true, can_edit: canEdit_(auth), total: items.length, counts: counts, items: items };
+  return reviewPayload_(rosterJoin_(), canEdit_(auth));
 }
 
 /**
@@ -2605,11 +2643,21 @@ function rowFlags_(r) {
  *
  * We cache the expensive part — the identity x attributes join — and keep the per-user bits
  * (role, can_edit) outside it, so the cache can never hand one user another user's permissions.
- * Short TTL, and every writer busts it, so an edit is visible immediately rather than up to a
- * minute later.
+ * Every writer busts it, so an edit is visible immediately rather than at the end of the TTL.
+ *
+ * RAISED 120s -> 600s (2026-09-17). Every write path that touches identity or Crew's attribute
+ * sheet was checked for a bustRosterCache_() call before this moved — a stale roster in a payroll
+ * app is worse than a slow one, and 600s makes any writer that was missed 5x more visible than
+ * 120s ever did. One gap was found and closed: `seedIdentityCommit()` (the `seed_commit` route)
+ * wrote straight to GX Core identity and never busted the cache at all, at any TTL — invisible at
+ * 120s because it is a one-time onboarding call, but the same gap under a page open for hours.
+ * NOT covered by this cache, and not fixable from here: a write to GX Core's `employees` table
+ * from a DIFFERENT app (Command Center, say) still will not bust Crew's copy of it — that has
+ * always been true and this change makes the window longer. Crew has no way to hear about a write
+ * it did not make; ask core-admin if that needs a smaller ceiling than this one.
  */
 var ROSTER_CACHE_KEY = 'crew:roster:v1';
-var ROSTER_CACHE_TTL = 120;   // seconds
+var ROSTER_CACHE_TTL = 600;   // seconds
 
 function bustRosterCache_() {
   try { CacheService.getScriptCache().remove(ROSTER_CACHE_KEY); } catch (e) {}
@@ -2691,7 +2739,15 @@ function rosterJoin_() {
     .filter(function (r) { return !r.merged; })
     .sort(function (x, y) { return x.name.localeCompare(y.name); });
 
-  var out = { rows: rows, identityCount: identity.length, identityError: identityError, cached: false };
+  /* employee_id -> full_name for EVERY identity row, including retired and merged — unlike `rows`
+     above, which drops merged tombstones. getEomHistory_ needs this to label a reign held by
+     somebody since merged away, and building it here means it never has to call
+     GXCore.getEmployees() a second time just for names. */
+  var names = {};
+  identity.forEach(function (r) { names[String(r.employee_id || '').trim()] = String(r.full_name || ''); });
+
+  var out = { rows: rows, identityCount: identity.length, identityError: identityError, cached: false,
+              names: names };
   // Only cache a good read. Caching an empty result behind a transient GX Core error would
   // serve "you have no staff" for the whole TTL.
   if (!identityError && rows.length) {
@@ -2709,7 +2765,7 @@ function getRoster_(p) {
   var retiredCount = 0;
   joined.rows.forEach(function (r) { if (r.retired) retiredCount++; });
 
-  return {
+  var out = {
     ok: true, user: auth.user, role: auth.role, can_edit: canEdit_(auth),
     shirt_sizes: SHIRT_SIZES, role_titles: ROLE_TITLES, hr_sheet_url: HR_SHEET_URL,
     include_retired: includeRetired, retired_total: retiredCount, cached: joined.cached,
@@ -2721,6 +2777,29 @@ function getRoster_(p) {
         'Crew attributes are stored and will join automatically once identity lands.'
     }
   };
+
+  /* Optional parts, folded into THIS execution and built from the SAME `joined` roster above —
+     not a second rosterJoin_() call, cached or not. Boot used to pay for three queued Crew-engine
+     executions (roster, then review and eom_history fired behind it); `parts=review,eom_history`
+     collapses the two background ones into the roster call itself.
+     Additive and feature-detected, never version-gated: an engine deployed before this shipped
+     ignores an unknown query param and these keys are simply absent from its response, so an
+     older client (or a client talking to an older engine) falls through to the two separate
+     `review` / `eom_history` calls it always made. Each part is its OWN try/catch — a broken
+     review queue or EoM log must not cost the roster, which is the one thing boot cannot run
+     without. */
+  var wantParts = String(p.parts || '').split(',')
+    .map(function (s) { return s.trim(); }).filter(Boolean);
+  if (wantParts.indexOf('review') >= 0) {
+    try { out.review = reviewPayload_(joined, out.can_edit); }
+    catch (e) { out.review = { ok: false, error: String((e && e.message) || e) }; }
+  }
+  if (wantParts.indexOf('eom_history') >= 0) {
+    try { out.eom_history = eomHistoryPayload_(joined.names || {}); }
+    catch (e) { out.eom_history = { ok: false, error: String((e && e.message) || e) }; }
+  }
+
+  return out;
 }
 
 function dateFromIso_(iso) {
@@ -10324,6 +10403,10 @@ function seedIdentityCommit() {
     return empty;
   }
   var res = GXCore.gxUpsertEmployees(b.rows);
+  // This writes the identity registry the roster join reads and had never busted its cache —
+  // invisible at a 120s TTL (a one-time onboarding call), a real staleness window at 600s.
+  // Found 2026-09-17 auditing every writer before raising the TTL.
+  bustRosterCache_();
   var out = {
     ok: true, mode: 'commit', upserted: (res && res.upserted) || 0,
     skipped_inactive: b.skipped_inactive, skipped_non_person: b.skipped_non_person,
@@ -10823,10 +10906,17 @@ function eomSameMonth_(a, b) {
   return !!x && x === y;
 }
 
+/** The current holder's employee_id, or null — for "unset", "nobody" and an unreadable cfg.eom
+    alike. Mirrors what the browser's `state.eom` sentinel has always meant: only a real id counts
+    as held, and anything else means the star has nobody under it right now. */
+function eomCurrentHolderId_(cur) {
+  return (cur && cur.state === 'held' && cur.employee_id) ? cur.employee_id : null;
+}
+
 function eomSync_(names) {
   var rows = readTab_(EOM_TAB, EOM_HEADERS);
   var cur  = eomCurrent_();
-  if (cur.error || cur.state === 'unset') return { rows: rows, error: cur.error || '' };
+  if (cur.error || cur.state === 'unset') return { rows: rows, error: cur.error || '', cur: cur };
 
   var last = rows.length ? rows[rows.length - 1] : null;
   var wantId = cur.state === 'nobody' ? '' : cur.employee_id;
@@ -10843,7 +10933,7 @@ function eomSync_(names) {
      reporting August as July. */
   var same = last && String(last.employee_id) === wantId &&
              (wantId === '' || eomSameMonth_(last.started_at, cur.since));
-  if (same) return { rows: rows, error: '' };
+  if (same) return { rows: rows, error: '', cur: cur };
 
   var now = new Date().toISOString();
   var startedAt = wantId ? String(cur.since || now) : now;
@@ -10860,7 +10950,43 @@ function eomSync_(names) {
   eomSheet_().appendRow([wantId, name, startedAt, setBy, now, 'observed']);
   rows.push({ employee_id: wantId, name: name, started_at: startedAt,
               set_by: setBy, recorded_at: now, source: 'observed' });
-  return { rows: rows, error: '' };
+  return { rows: rows, error: '', cur: cur };
+}
+
+/**
+ * The history, newest first, each reign carrying the moment it ended.
+ *
+ * Names are stored WITH the row and only refreshed from the registry where the row has none.
+ * Someone who has since been renamed, retired or merged away still held it under the name they
+ * held it under, and a log that quietly restates the present is not a record of the past.
+ */
+/* Shared by the standalone `eom_history` route and the `parts=eom_history` fold in getRoster_.
+   `names` is employee_id -> full_name; the standalone route builds its own fresh copy (below),
+   the fold reuses rosterJoin_'s, so this never has to know or care where it came from. Also
+   carries `current_holder` — the id cfg.eom currently names, or null — so the browser can learn
+   who holds the star from THIS response instead of a separate JSONP call straight to GX Core. */
+function eomHistoryPayload_(names) {
+  var synced = eomSync_(names);
+  var rows = synced.rows;
+
+  var out = [];
+  for (var i = rows.length - 1; i >= 0; i--) {
+    var r = rows[i];
+    out.push({
+      employee_id: r.employee_id,
+      name: r.name || names[r.employee_id] || '',
+      started_at: r.started_at,
+      // The reign ended when the next one began; the newest row is still running.
+      ended_at: i < rows.length - 1 ? rows[i + 1].started_at : '',
+      set_by: r.set_by,
+      current: i === rows.length - 1,
+      nobody: !r.employee_id,
+      // Observed from cfg.eom, or entered by hand for a month that predates the log.
+      backfilled: r.source === 'backfill'
+    });
+  }
+  return { ok: true, history: out, sync_error: synced.error || '',
+           current_holder: eomCurrentHolderId_(synced.cur) };
 }
 
 /**
@@ -10881,26 +11007,7 @@ function getEomHistory_(p) {
     });
   } catch (e) { /* a name lookup failure must not cost us the log */ }
 
-  var synced = eomSync_(names);
-  var rows = synced.rows;
-
-  var out = [];
-  for (var i = rows.length - 1; i >= 0; i--) {
-    var r = rows[i];
-    out.push({
-      employee_id: r.employee_id,
-      name: r.name || names[r.employee_id] || '',
-      started_at: r.started_at,
-      // The reign ended when the next one began; the newest row is still running.
-      ended_at: i < rows.length - 1 ? rows[i + 1].started_at : '',
-      set_by: r.set_by,
-      current: i === rows.length - 1,
-      nobody: !r.employee_id,
-      // Observed from cfg.eom, or entered by hand for a month that predates the log.
-      backfilled: r.source === 'backfill'
-    });
-  }
-  return { ok: true, history: out, sync_error: synced.error || '' };
+  return eomHistoryPayload_(names);
 }
 
 /*
