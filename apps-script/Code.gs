@@ -2659,8 +2659,53 @@ function rowFlags_(r) {
 var ROSTER_CACHE_KEY = 'crew:roster:v1';
 var ROSTER_CACHE_TTL = 600;   // seconds
 
+/* GX Core's raw employees tab, cached for READ SCREENS ONLY.
+ *
+ * MEASURED 2026-09-30, six live `?action=incentive` loads: `stamp` cost 1.3-2.0s every time, and
+ * all of it is one `GXCore.getEmployees()` call for a list `rosterJoin_` has usually just cached
+ * ten feet away. The incentive screen reads the whole roster twice per load and pays full price
+ * for the second one.
+ *
+ * WHY A SECOND KEY RATHER THAN REUSING rosterJoin_. That cache holds the JOINED row — identity
+ * folded together with Crew's own attrs, retired flags, computed anniversaries. `stampEmployeeIds_`
+ * needs the RAW tab, including the `merged` tombstones the join filters out, because a merged id
+ * must still resolve for a Leaderboard join. Handing it the joined rows would silently stop
+ * stamping exactly the people whose records were merged.
+ *
+ * WHY WRITES DO NOT GET IT. Every write path calls perfForWrite_ bare; only the screen passes
+ * `{snapshot:true}`. A bonus computed against a ten-minute-old roster is the kind of wrong that
+ * balances, reconciles and pays somebody the wrong amount. The screen can be a few minutes stale;
+ * a payroll write cannot. Same split perfFromSnapshot_ already draws, for the same reason.
+ *
+ * It rides the ROSTER bust, so every writer that already invalidates the roster invalidates this
+ * too and no new call sites have to be remembered — the property
+ * tests/roster_cache_bust_coverage_test.js already enforces. */
+var CORE_EMP_CACHE_KEY = 'crew:core_employees:v1';
+
 function bustRosterCache_() {
-  try { CacheService.getScriptCache().remove(ROSTER_CACHE_KEY); } catch (e) {}
+  var c;
+  try { c = CacheService.getScriptCache(); } catch (e) { return; }
+  try { c.remove(ROSTER_CACHE_KEY); } catch (e) {}
+  try { c.remove(CORE_EMP_CACHE_KEY); } catch (e) {}
+}
+
+/* Returns null on ANY failure — a miss, a parse error, a cache outage — so the caller falls through
+ * to the live read. A cache must never be the reason a roster comes back empty: stampEmployeeIds_
+ * treats an empty roster as "nobody matched", which stamps no one and fails silently. */
+function coreEmployeesCached_() {
+  try {
+    var hit = CacheService.getScriptCache().get(CORE_EMP_CACHE_KEY);
+    if (!hit) return null;
+    var rows = JSON.parse(hit);
+    return (rows && rows.length) ? rows : null;
+  } catch (e) { return null; }
+}
+
+function coreEmployeesCachePut_(rows) {
+  if (!rows || !rows.length) return;   // never cache an empty read; see above
+  try {
+    CacheService.getScriptCache().put(CORE_EMP_CACHE_KEY, JSON.stringify(rows), ROSTER_CACHE_TTL);
+  } catch (e) { /* over 100KB, or cache unavailable — costs a re-read, never an answer */ }
 }
 
 function rosterJoin_() {
@@ -4663,14 +4708,23 @@ function fetchLivePerf_(ppStart, opts) {
  * the SAME ladder the rest of Crew uses (exact key, then samePerson_) rather than a second opinion.
  * A row that cannot be resolved keeps a blank employee_id and is reported in `unmatched` — it will
  * render, and it simply cannot hold an input until somebody is matched to it. */
-function stampEmployeeIds_(live) {
+function stampEmployeeIds_(live, opts) {
   var emps = [];
   /* A FAILED READ IS NOT AN EMPTY ROSTER, and the difference is invisible three lines later. The
      stamping below is happy either way — nobody matches, and `unmatched` says so. `rosterCoverage_`
      is not: an empty roster means "no store expected anybody", which reads as full coverage and is
      the exact silent-pass this guard exists to prevent. So the failure is carried, not swallowed. */
   var _rosterRead = true;
-  try { emps = GXCore.getEmployees() || []; } catch (e) { emps = []; _rosterRead = false; }
+  /* The SCREEN may read a cached copy; every write path computes live. See coreEmployeesCached_. */
+  var _cached = (opts && opts.snapshot) ? coreEmployeesCached_() : null;
+  if (_cached) {
+    emps = _cached;
+  } else {
+    try {
+      emps = GXCore.getEmployees() || [];
+      if (opts && opts.snapshot) coreEmployeesCachePut_(emps);
+    } catch (e) { emps = []; _rosterRead = false; }
+  }
   /* A MERGED record is a tombstone GX Core keeps so the old employee_id still resolves for
      Leaderboard and SPIFF joins. It is still returned here and still matches on name, so without
      this filter a live row can be stamped with an id nothing renders — and an input saved against
@@ -8028,7 +8082,9 @@ function perfForWrite_(pp, timings, opts) {
   var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp, opts);
   if (timings) { timings.perf_fetch = Date.now() - t; t = Date.now(); }
   if (live.ok === false) return live;
-  stampEmployeeIds_(live);
+  /* opts threaded through, NOT re-derived: the cached-roster decision and the snapshot decision are
+     the same decision (screen vs write path) and must not become two. */
+  stampEmployeeIds_(live, opts);
   if (timings) { timings.stamp = Date.now() - t; t = Date.now(); }
   foldFloaters_(live);
   if (timings) timings.fold = Date.now() - t;
