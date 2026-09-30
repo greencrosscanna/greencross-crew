@@ -264,6 +264,23 @@ improvement on a cold open is Sky's to confirm once this is deployed.
 **Not touched: the incentive calc.** Still 25-48s per load (`crew.js` ~5527, `Code.gs` ~5522) — the
 next lever, not this one.
 
+*Corrected 2026-09-30: that 25-48s no longer exists, and the line above had been quoted as current
+for two weeks.* **MEASURED on the live engine, six `?action=incentive` loads spaced 20s: wall 7.5 /
+8.6 / 9.5 / 9.6 / 9.7 / 23.1s, of which Crew's own work was 4.9-7.6s (19.2s on the outlier).** The
+one-call boot above is most of why. **There is no slow calculation left to find** — the load is
+eight stages of 0.5-2.5s each (`stamp` 1.6s · `history` 1.3s · `periods` 0.9s · `spiff` 0.7s ·
+`auth` 0.6s · `inputs` 0.4s · `workflow` 0.3s), and what makes it *feel* slow is variance, not
+arithmetic: `perf_fetch` ranged 99ms to 14.5s across those six and owns the 23s outlier on its own.
+So the lever is the /exec hop and that upstream call, neither of which is a calc.
+
+`stamp` was the one piece that was pure waste — a second `GXCore.getEmployees()` for a list
+`rosterJoin_` had usually just cached — and is now served from `CORE_EMP_CACHE_KEY` **on the screen
+path only**; every write still computes live. See `tests/core_employees_cache_test.js`.
+
+**Read the `timings` on the payload before believing any figure in this section**, including these.
+The route returns them for exactly this reason, and a number copied forward is how the 25-48s
+outlived the fix that removed it.
+
 ## Sign-in runs on Crew's OWN engine (2026-09-03)
 
 `crew.js` used to call GX Core's `/exec` directly to sign in. **That worked, and it is not why it
