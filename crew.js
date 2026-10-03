@@ -153,6 +153,14 @@
         sessionStorage.removeItem(TOKEN_KEY);
         sessionStorage.removeItem(USER_KEY);
         sessionStorage.removeItem(AVATAR_KEY);
+        /* SIGNING OUT TAKES THE SAVED ROSTER WITH IT. The token lives in sessionStorage and dies
+           with the tab; the saved copy is on DISK and would otherwise outlive the session that
+           fetched it — so the next person at this machine would open Crew to a full staff list
+           before being asked who they are. It carries no wages, but a roster of everyone's name,
+           store and role is not a login screen. Cleared here rather than in a sign-out handler
+           because every path that drops a session comes through this one call, including the
+           expired-token branch in boot(). */
+        rosterForgetCopy_();
       }
     } catch (e) {}
   }
@@ -1349,6 +1357,16 @@
   function renderOverview(pane) {
     var wrap = el('div', 'crew-ov');
 
+    /* SAY SO WHILE IT IS A SAVED COPY. The roster looks complete — names, stores, roles, gap dots
+       are all real — so without this the only visible difference from a live load is five blank
+       columns, which is indistinguishable from missing data. Cleared the moment the live response
+       lands, which is usually within a few seconds of this painting. */
+    if (state.savedCopyAt) {
+      var mins = Math.max(0, Math.round((Date.now() - state.savedCopyAt) / 60000));
+      wrap.appendChild(banner('warn',
+        'Saved copy from ' + (mins < 1 ? 'moments ago' : mins + ' min ago') +
+        ' — loading the current roster. Pay and permit details are not saved and are still coming.'));
+    }
     if (state.identity && state.identity.note) wrap.appendChild(banner('warn', esc(state.identity.note)));
     if (state.identity && state.identity.error)
       wrap.appendChild(banner('error', 'GX Core identity read failed: ' + esc(state.identity.error)));
@@ -1652,7 +1670,16 @@
     if (o.extra) card.appendChild(o.extra(row, function () { paintNote(); }));
 
     function paintNote() {
-      var n = o.note(row);
+      /* A FIELD THE SAVED COPY DELIBERATELY OMITS IS UNKNOWN, NOT EMPTY, and the two must never
+         render the same. Wage, birthday, permit number, employee number and swipeclock code are
+         stripped before the roster is written to disk, so for the second or two before the live
+         load lands, `row.wage` is absent — and every note function below reads an absent value as
+         a GAP. Left alone, opening Crew would flash "Not set" against somebody's pay. That is the
+         2026-10-03 incident's exact shape: a value that is merely unknown presented as a fact
+         about the person. */
+      var n = (row._pending || []).indexOf(o.field) >= 0
+        ? { text: 'Loading…', kind: '' }
+        : o.note(row);
       card.className = 'crew-field' + (n.kind === 'gap' ? ' is-gap' : '');
       note.className = 'crew-field-note' + (n.kind === 'bad' ? ' is-bad' : '');
       note.textContent = n.text;
@@ -5536,6 +5563,79 @@
     paintIncentive();
   }
   // ─── boot ────────────────────────────────────────────────────────────────────
+  /* ── THE SAVED COPY: open on the last visit's roster, minus anything about money ──────────────
+   *
+   * Opening Crew cost 7.5s cold and 3.3s warm (measured 2026-10-02, live), and 26s when the /exec
+   * hop is in one of its degraded windows. The engine is not at fault — boot is already ONE call
+   * and the join is cached 10 minutes server-side. It is the hop, and nothing in this file can
+   * shorten it. What this file CAN do is stop making a person watch it: paint the roster from the
+   * last visit on the first frame and let the live load replace it behind them. Sales has done
+   * exactly this since v2.611.
+   *
+   * FIVE COLUMNS ARE NEVER SAVED: wage, birthday, permit_number, employee_number, swipeclock_code.
+   * They are the reason a Cloudflare cache was rejected for this app, and the same reasoning
+   * applies to a laptop's disk — those two decisions should not have different answers. Everything
+   * the LIST draws (name, store, role, avatar, anniversary, retired, flags) is kept, so the roster
+   * paints complete; the five arrive seconds later with the live load.
+   *
+   * `flags` IS KEPT, AND THAT IS WHAT MAKES THE STRIP SAFE. The engine computes the gap dots, so a
+   * row whose wage has been stripped still carries `flags: ['wage']` only if a wage was genuinely
+   * missing when it was saved. Recomputing gaps here from the stripped values would paint a
+   * "missing wage" dot on every person in the company — which is precisely the shape of the
+   * 2026-10-03 incident, manufactured on purpose. The dots stay the engine's answer.
+   *
+   * `_pending` MARKS THE STRIPPED ROWS so the detail pane can say "loading" where it would
+   * otherwise say "Not set". Blank and unknown are different claims, and on a payroll screen the
+   * difference is the whole thing. */
+  var ROSTER_SAVE_KEY = 'gx_crew_roster_v1';
+  var ROSTER_SAVE_MAX_AGE_MS = 72 * 3600 * 1000;
+  var ROSTER_UNSAVED_FIELDS = ['wage', 'birthday', 'permit_number', 'employee_number', 'swipeclock_code'];
+
+  function rosterStrip_(rows) {
+    return (rows || []).map(function (row) {
+      var out = {};
+      for (var k in row) if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = row[k];
+      ROSTER_UNSAVED_FIELDS.forEach(function (f) { delete out[f]; });
+      out._pending = ROSTER_UNSAVED_FIELDS.slice();
+      return out;
+    });
+  }
+
+  /* Saved only when the response is WHOLE. A roster whose review queue or EoM log failed is fine to
+     USE for this visit — the rows are real — but storing it would paint tomorrow's first frame from
+     a half-answer with no way to tell. Leaderboard's `_isErrorPayload` rule, same reasoning. */
+  function rosterSaveCopy_(r) {
+    try {
+      if (!r || !r.ok || !(r.rows || []).length) return;
+      if (r.include_retired) return;              // the retired view is a deliberate click, not the open
+      if (r.review && r.review.ok === false) return;
+      if (r.eom_history && r.eom_history.ok === false) return;
+      localStorage.setItem(ROSTER_SAVE_KEY, JSON.stringify({
+        saved_at: Date.now(),
+        rows: rosterStrip_(r.rows),
+        shirt_sizes: r.shirt_sizes || [], role_titles: r.role_titles || [],
+        identity_source: r.identity_source || null, retired_total: r.retired_total || 0,
+      }));
+    } catch (e) { /* a full or blocked disk costs the shortcut, never the load */ }
+  }
+
+  /* Returns null on ANYTHING wrong — missing, unparseable, too old, empty. A saved copy is an
+     accelerator; it must never be a reason the app shows something it cannot stand behind. */
+  function rosterReadCopy_() {
+    try {
+      var raw = localStorage.getItem(ROSTER_SAVE_KEY);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || !o.saved_at || !(o.rows || []).length) return null;
+      if (Date.now() - o.saved_at > ROSTER_SAVE_MAX_AGE_MS) return null;
+      return o;
+    } catch (e) { return null; }
+  }
+
+  function rosterForgetCopy_() {
+    try { localStorage.removeItem(ROSTER_SAVE_KEY); } catch (e) {}
+  }
+
   async function boot(quiet) {
     if (!window.GXClient) { renderStatus('⚠️ gx-client failed to load — cannot reach GX Core.'); return; }
     if (!token()) { renderLogin(''); return; }
@@ -5568,6 +5668,27 @@
          other two do not, but re-reading a ten-second join every time somebody flicks the
          segmented control back and forth is the kind of cost that teaches people not to look. */
       var wantRetired = state.scope === 'retired' || state.fetchedRetired;
+
+      /* PAINT THE LAST VISIT FIRST. Only for the ordinary open — not a refetch after a save (`ui`
+         already exists and holds the real rows), and not the retired view, which is never saved.
+         Everything below still runs; this only decides what is on screen while it does. */
+      if (!ui && !wantRetired) {
+        var saved = rosterReadCopy_();
+        if (saved) {
+          state.rows         = saved.rows;
+          state.shirtSizes   = saved.shirt_sizes;
+          state.roleTitles   = saved.role_titles;
+          state.identity     = saved.identity_source;
+          state.retiredTotal = saved.retired_total;
+          /* NOT state.canEdit, state.user or state.role. Those are facts about WHO IS ASKING and
+             are never saved — a stale copy of them is how a cache makes an admin read-only, or
+             worse, shows edit controls to somebody whose access was removed. They stay unset until
+             the live response answers, so the screen opens read-only and gains its controls a
+             moment later, which is the safe direction to be wrong in. */
+          state.savedCopyAt = saved.saved_at;
+          render();
+        }
+      }
       /* `parts=` asks the engine to fold the review queue and the EoM log into THIS response,
          built from the same roster join instead of two more Crew-engine executions queued
          behind it (2026-09-17). Feature-detected below, not version-gated: an engine that
@@ -5593,6 +5714,9 @@
       state.retiredTotal = r.retired_total || 0;
       state.fetchedRetired = wantRetired;
       state.hrSheetUrl = r.hr_sheet_url || '';
+      /* The live answer has landed, so nothing on screen is a saved copy any more. */
+      state.savedCopyAt = null;
+      rosterSaveCopy_(r);
 
       /* Fold `review` and `eom_history` in when the engine sent them, applying exactly what
          foldRosterParts computed — a pure function so the fold logic is testable without a DOM,
