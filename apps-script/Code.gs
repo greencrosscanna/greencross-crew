@@ -871,12 +871,45 @@ function crewSheet_() {
   return _crewSheetMemo_;
 }
 
+/* AUTO-CREATE IS FOR AN EMPTY INSTALL ONLY. IT MUST NEVER REPLACE A SHEET WE ALREADY KNOW ABOUT.
+ *
+ * THIS FIRED IN PRODUCTION ON 2026-10-03. The shipped version opened the workbook by its stored id
+ * and, on ANY throw, built a new spreadsheet and overwrote CREW_SHEET_ID with the empty one. One
+ * transient Drive error was enough: at 17:45 UTC Crew read the real sheet normally, at 18:00 UTC it
+ * created a replacement, and from then on every wage, birthday, permit number and employee number
+ * read blank for everybody. Recovery was putting the old id back by hand.
+ *
+ * THE FAILURE IS SO QUIET BECAUSE OF WHAT SURVIVES. Identity — name, store, role, hire date — comes
+ * from GX Core, so the roster still looked populated and correct. Only the columns this workbook
+ * owns went blank, which reads as "nobody has filled these in" rather than as an outage. The same
+ * degrade-into-a-smaller-number shape this suite keeps recording.
+ *
+ * AND THE NEW FILE HAS THE SAME NAME, so Drive shows two identical titles and the only way to tell
+ * them apart is size. Nothing was deleted — the original was intact the whole time — but nothing
+ * pointed at it any more, and a stored id is the only record of which one is real.
+ *
+ * SO: a stored id that will not open is an ERROR, and it names both the id and the property to put
+ * back. A missing id still auto-creates, because a fresh install genuinely has nowhere to look and
+ * there is nothing there to lose. "No sheet yet" and "the sheet I was told about is unreachable"
+ * are different questions, and only the first one has a safe automatic answer.
+ */
 function crewSheetPrepare_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(CREW_SHEET_ID_PROP);
   var ss;
   if (id) {
-    try { ss = SpreadsheetApp.openById(id); } catch (e) { ss = null; }
+    try {
+      ss = SpreadsheetApp.openById(id);
+    } catch (e) {
+      /* THROWS. Refusing the request is the point: a Crew that cannot reach payroll data must stop,
+         not carry on against an empty substitute. A transient Drive error costs one failed load and
+         the next request succeeds; building a replacement cost a day of blank wages. */
+      throw new Error(
+        'GX Crew HR workbook ' + id + ' could not be opened (' + ((e && e.message) || e) + '). ' +
+        'NOT auto-creating a replacement — the data is almost certainly intact and only this id ' +
+        'reaches it. If this persists, check the file in Drive and restore ' + CREW_SHEET_ID_PROP +
+        ' in Script Properties; do not let anything write until it is back.');
+    }
   }
   if (!ss) {
     ss = SpreadsheetApp.create('GX Crew — HR data (PII: do not share)');
