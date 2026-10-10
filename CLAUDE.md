@@ -1,2030 +1,876 @@
 # GX Crew (app key `crew`) — GX 2.0 HR / People app
 
-Part of the Green Cross app suite. **GX Crew is the HR / People system-of-record** — it owns the employee
-roster and everything compensation- and people-related, and it **feeds** the Leaderboard (performance) app
-rather than living inside it. Split out of Leaderboard on 2026-08-16 (decision recorded in the Command
-Center; Incentive was formerly a Leaderboard view). Its app key in GX Core is **`crew`**.
+**GX Crew is the HR / People system-of-record** for the Green Cross suite: it owns the roster and
+everything compensation-related, and **feeds** Leaderboard rather than living inside it. **It runs
+payroll.**
+
+**This file is rules only.** The incidents, "Corrected <date>" notes, measurements and reasoning
+behind each rule are in **`docs/claude-md-history.md`**, under the same headings as here. Read that
+section before changing or deleting a rule you do not understand — most exist because something
+paid, or nearly paid, the wrong amount without erroring.
 
 ## What GX Crew owns
-- **Roster / identity attributes** — the rich HR record: OLCC/METRC permits, time (SwipeClock),
-  birthday / work-anniversary, shirt size, badges.
-- **Compensation** — the **Incentive / bonus calculation** (ported 2026-08-27 — see the Incentive
-  section below), editable comp **thresholds**, **Capstone payroll export** (CSV/PDF), and
-  **monthly review snapshots**.
-- **Feeds to Leaderboard (via GX Core, never app-to-app):** the **perks** shown on the board and a
-  **privacy-preserving "celebrations" feed** (today/upcoming birthdays + anniversaries — a derived flag,
-  **not raw DOB**) so the kiosk can surface them without PII leaving GX Crew.
+- **Roster / identity attributes** — OLCC/METRC permits, time (SwipeClock), birthday /
+  work-anniversary, shirt size, badges.
+- **Compensation** — the Incentive / bonus calculation, editable comp **thresholds**, **Capstone
+  payroll export**, **monthly review snapshots**.
+- **Feeds to Leaderboard (via GX Core, never app-to-app):** **perks**, and a privacy-preserving
+  **celebrations feed** (a derived today/upcoming flag, **not raw DOB**) so no PII leaves Crew.
 
 ## Boundary with GX Core (the split)
-- **GX Core owns canonical employee IDENTITY** — `nameKey`, name, store, role, active, hireDate — the
-  shared registry Leaderboard + SPIFF + Crew all read (one writer, many readers).
-- **GX Crew owns the rich attributes** (above) and **writes the shared identity slice + celebrations +
-  perks up to GX Core**.
+- **GX Core owns canonical employee IDENTITY** — `nameKey`, name, store, role, active, hireDate.
+- **GX Crew owns the rich attributes** and **writes the identity slice + celebrations + perks up**.
 - **Reads from GX Core:** identity and the sales cache (`GXCore.getSalesDaily`).
-- **SPIFF payouts do NOT reach Crew.** *Corrected 2026-08-25: this used to list `spiff_payouts` as a read
-  "for the bonus calc". No such tab exists — not in `GX_TABS`, nothing writes it, nothing reads it. The
-  claim was invented in documentation and repeated across six files until it read as fact.* This matters
-  more here than anywhere else: the bonus calc is the thing that would consume it, so believing the pipe
-  already exists means building on a data source that was never there.
+- **SPIFF payouts do NOT reach Crew. There is no `spiff_payouts` tab** — not in `GX_TABS`, nothing
+  writes or reads it. Do not build on the assumption that it exists.
 
 ## Extract-first sequencing (important)
-The bonus math needs **per-employee, per-transaction** data *with discretionary-discount classification*.
-That engine currently lives app-side in Leaderboard and is **not** in the GX Core daily cache (per-store
-daily only). So the clean split is sequenced: **first** promote (a) per-employee performance metrics and
-(b) the discretionary-discount definition to a canonical home (a shared `gx` library both apps bind — like
-`txNet` became canonical — or a GX Core per-employee endpoint), **then** cut Crew over. Do **not** move the
-UI before the math has a shared home. Coordinate with `core-admin` (brain note already sent).
+The bonus math needs **per-employee, per-transaction** data with discretionary-discount
+classification, which is **not** in the GX Core daily cache (per-store daily only). **First** promote
+the per-employee metrics and the discretionary-discount definition to a shared home, **then** cut
+Crew over. Do **not** move the UI before the math has a shared home. Coordinate with `core-admin`.
 
-**Payroll safety:** completed pay periods are **frozen once** ("these numbers paid people") — carry that
-caching discipline over exactly, and never cut over live payroll numbers without a **penny-match** against
-the current Leaderboard incentive output for a full pay period.
+**Payroll safety:** completed pay periods are **frozen once** ("these numbers paid people") — carry
+that caching discipline over exactly, and never cut over live payroll numbers without a
+**penny-match** against Crew's own current incentive output for a full pay period. *(Corrected
+2026-10-09, Sky's call: this named Leaderboard's incentive output, whose engine was retired 2026-09-14.
+Crew's is the reference now.)*
 
-## The roster is a two-pane workspace (built 2026-08-24, from Claude Design's handoff)
-`renderRoster` and its 12-column table are **gone**, and so are the Review and EoM **tabs** —
-Roster is Crew's only tab now. The screen is a permanent people list on the left (grouped by
-store, sticky group headers) and a right pane that is either **one person's whole record** or,
-when nobody is selected, the **overview**: stat tiles, the open-questions queue that used to be
-the Review tab, and the Employee-of-the-Month panel that used to be the EoM tab. The attention
-chip in the sub nav is what deselects and goes back.
+## The roster is a two-pane workspace
+Roster is Crew's only tab (the Review and EoM tabs are gone). Left: people grouped by store. Right:
+one person's record, or the **overview** (stat tiles, open-questions queue, Employee-of-the-Month).
 
-Three things a future session will otherwise get wrong:
-
-- **The roster leads with the name people use, and that name is a RENDERING.** `displayName()`
-  joins `preferred_name` to the legal surname — Michael Kettler with nickname Mike reads
-  **Mike Kettler** — and the record header shows that in white with the legal first name beside
-  it in green quotes (*"Michael"*). The rail sub-line carries the same green legal first name.
-  Both are derived at paint time and **never written back**: the header is deliberately not an
-  input, because saving what it displays would put "Mike" into `full_name`, which is the column
-  METRC and payroll match on and the exact corruption employee #22 arrived with. Legal name and
-  nickname are edited as their own adjacent cards in the field grid. `byName` and `searchRows`
-  both work on the displayed name too — a list you cannot scan alphabetically, or a search that
-  misses the string printed on the row, are the two ways this goes wrong quietly. The **EoM reign
-  log** follows it as well, by looking the person up on the roster; it falls back to the name
-  stored in the log only for somebody no longer on it, who cannot be looked up and whose name at
-  the time is then the only record of who held it.
-- **There is no Edit mode, and there is no Save button.** Every control is live: text commits on
-  a 600ms pause and again on blur, selects and dates the instant they change, and a toast names
-  what was written and offers an undo. Do not reintroduce an arm-then-save gate — the removal is
-  the design.
-- **One field per write, and that only works because both routes are PATCHES.** `roster_save`
-  and `roster_identity` both treat an absent parameter as "leave alone" and an empty one as
-  "clear", and both read-merge-write. Post a whole record instead and `gxWrite_` blanks whatever
-  you omitted — `dutchie_employee_id` and `user_id`, neither of which this screen shows.
-- **"New here" is a SUBSET of "records with a gap", and the difference is the point.** The
-  overview lists people who arrived but were never set up: a setup gap (`hire_date`, `wage`,
-  `store`, `role`, `employee_number`) **and** signs of a recent arrival (no hire date at all, no
-  employee number yet, or a start date inside 90 days). Both halves are load-bearing. The first
-  cut used the gap alone and put **Sky and Mike at the top of a list headed "New here"** — neither
-  takes an hourly wage, so both carry a permanent `wage` gap, and nobody has been here longer.
-- **`pay_type` decides whether an empty wage is a gap or a fact.** A closed set checked
-  server-side (`hourly` / `salary` / `none`; empty means hourly), picked from a select on the
-  wage card. `rowFlags_` raised a permanent `wage` gap on anyone without an hourly rate, which is
-  a red mark on a complete record — **Sky** takes nothing as owner, and **Mike, Tawny and Shawn
-  are salaried** (Sky, 2026-08-25). It cannot be inferred: `Admin` and `corporate` both belong to
-  hourly staff too, and a rule keyed on either would stop flagging a wage that really is missing.
-  It supersedes the `not_on_payroll` boolean shipped hours earlier, which collapsed "salaried"
-  and "not on payroll" into one claim — salaried people are very much on payroll. The old column
-  is still read as a fallback meaning `none`, and `ATTR_HEADERS` only appends, so it stays.
-- **Nothing in the sub nav says how many open questions there are.** The attention chip that
-  used to sit there was removed 2026-08-25; the overview opens on its own and states the count
-  in its title and its stat tiles, so the chip was a second scoreboard to keep in agreement with
-  the first. It was also the way BACK from a person to the overview, so three replacements
-  carry that: **Escape**, **clicking the open person again**, and the **Roster tab**. Escape is
-  ignored while focus is in an input or select, where it already means "revert this field".
-- **The store pill row has no "All" pill any more.** Deselecting is clicking the lit pill again.
-  `tests/roster_filter_test.js` pins the set, the order, the counts-before-the-store-filter rule
-  and the dim-don't-disappear rule; it also now covers the three stacked filters
-  (`scopedRows` → `searchRows` → `filterByStore`), because every failure in that stack hides
-  people rather than erroring.
-
-The **OLCC permit card is read-only**, per the design — METRC owns it and an import overwrites
-whatever you type. **One exception:** when there is no permit number on file the card shows two
-inputs and an Add button, because the queue raises `missing_permit` at HIGH severity and its only
-offered answer is "Mark handled", which acknowledges rather than fixes. Seven active staff are in
-that state; without the exception the highest-severity item on the board could only be cleared by
-lying about it. `saveRosterAttrs_` has allowed exactly this write since it was written.
-
-The design bundle it was built from is `design_handoff_roster_workspace/` — the `.dc.html` in
-there is a **reference prototype**, not shippable code; its runtime is a preview harness.
+- **The displayed name is a RENDERING, never written back.** `displayName()` joins `preferred_name`
+  to the legal surname. The record header is deliberately **not an input**: saving it would put a
+  nickname into `full_name`, the column METRC and payroll match on. Legal name and nickname are
+  edited as their own cards. `byName`, `searchRows` and the EoM reign log all use the displayed
+  name (the log falls back to its stored name only for someone no longer on the roster).
+- **There is no Edit mode and no Save button.** Text commits on a 600ms pause and on blur, selects
+  and dates at once, with an undo toast. Do not reintroduce an arm-then-save gate.
+- **One field per write, and both routes are PATCHES.** `roster_save` and `roster_identity` treat an
+  absent parameter as "leave alone" and an empty one as "clear", and both read-merge-write. Posting a
+  whole record lets `gxWrite_` blank `dutchie_employee_id` and `user_id`.
+- **"New here" is a setup gap AND signs of recent arrival** (`hire_date`/`wage`/`store`/`role`/
+  `employee_number` missing, **and** no hire date, no number yet, or a start inside 90 days). Both
+  halves are load-bearing.
+- **`pay_type` decides whether an empty wage is a gap.** Closed set, checked server-side: `hourly` /
+  `salary` / `none`; empty means hourly (`rowFlags_` raises the `wage` gap). **It cannot be inferred** from `Admin` or `corporate` —
+  hourly staff hold both. The old `not_on_payroll` column is still read as a fallback meaning
+  `none`; `ATTR_HEADERS` only appends.
+- **No open-question count in the sub nav.** Back to the overview is **Escape** (ignored inside an
+  input or select, where it reverts the field), **clicking the open person again**, or the **Roster
+  tab**.
+- **No "All" store pill** — click the lit pill again. `tests/roster_filter_test.js` pins the set,
+  order, counts-before-the-store-filter, dim-don't-disappear, and the three stacked filters
+  (`scopedRows` → `searchRows` → `filterByStore`); every failure there hides people, not errors.
+- **The OLCC permit card is read-only** (METRC owns it; an import overwrites it). **One exception:**
+  with no permit number on file it shows two inputs and an Add button, because `missing_permit` is
+  HIGH severity and "Mark handled" only acknowledges. `saveRosterAttrs_` allows exactly this write.
+- `design_handoff_roster_workspace/*.dc.html` is a **reference prototype**, not shippable code.
 
 ## Layout
-- **Frontend:** `index.html` (shell; loads `gx-theme.css` + `gx-client.js` from gx-theme by URL, and
-  `crew.js?v=N`) + `crew.js` (app logic, wired to `window.GX` for GX Core JSONP). The **`?v=N`**
-  cache-buster on the `crew.js` tag is the single source of truth `deploy.sh` reads for the version —
-  bump it on every ship.
+- **Frontend:** `index.html` + `crew.js?v=N`. That **`?v=N`** is the single source of truth
+  `deploy.sh` reads for the version — bump it on every ship.
 - **Engine deploy:** `clasp push` then `clasp update-deployment <id>` — **redeploy the existing id**,
-  never `create-deployment`, which mints a *new* /exec URL and orphans `cfg.crewEngineUrl`.
-  Note `clasp create` clones the remote manifest over the local one, wiping the GXCore binding;
-  restore `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.)
-- **Backend:** `apps-script/` (`Code.gs` doGet/doPost router + `appsscript.json`, pins the `GXCore` library — the version is not written here on purpose (it read **v225** while the app ran v241); ask `?action=health` or `./gxpins.sh --live` —
-  v139 is where `gxUpsertEmployee` began read-merge-writing instead of rebuilding a row from the payload,
-  and v150 made that unconditional plus refused to blank a live `full_name`, so anything below v150 can
-  still blank the columns a partial write omits. **v201** is the floor for the store matcher:
-  `GXCore.resolveStore()` exists from v194, but v201 is where it learned the Rd/Road fold and got the
-  per-execution registry memo (`gxStoresCached_`) that keeps `mapPermissionLocation_` — one lookup per
-  employee × permission location — from turning one sheet read into hundreds. **v211** is the floor for the bug reporter:
-  that is where `gxIngestBug` began self-installing the `bug_reports.context` header, and `gxWrite_`
-  maps records onto the sheet's REAL header row — so on an older pin the state snapshot is dropped
-  **silently** and the report still saves and still returns ok. **v225** is the floor for the
-  avatar write: `GXCore.setAvatar` does not exist below it, and `roster_identity` calls it for an
-  avatar-only save. **v310** is the floor for the bug-filed email — below it `gxIngestBug` sends
-  nothing and Crew notifies nobody on a filing — and **v311** is the floor for that email carrying
-  the JS errors the page threw before submit, which is the field that took three reports to
-  diagnose a Sales bug. Crew already passes `context`, so it gets that line. **v312** is the floor
-  for `mailed` / `mail_error` / `mail_skipped`, which Crew now reads — see the bug-fallback section
-  below.
+  never `create-deployment`, which mints a new `/exec` URL and orphans `cfg.crewEngineUrl`.
+  `clasp create` clones the remote manifest over the local one and wipes the GXCore binding; restore
+  `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.) First
+  setup only: `clasp create --type webapp --rootDir apps-script`.
+- **The GXCore pin is deliberately not written here.** Ask `?action=health` (`lib` = what the LIVE
+  DEPLOYMENT runs, the only pin that matters) or `./gxpins.sh --live`. A manifest bump that was never
+  deployed still runs the old snapshot. **Floors**, not current pins: **v150** read-merge-write on
+  `gxUpsertEmployee` is unconditional and a live `full_name` cannot be blanked · **v201** store
+  matcher (`GXCore.resolveStore()` with the Rd/Road fold and the per-execution memo) · **v211** bug
+  reporter `context` (below it the snapshot is dropped **silently** and the report still returns ok)
+  · **v225** `GXCore.setAvatar` · **v310** bug-filed email · **v311** that email carries JS errors ·
+  **v312** `mailed` / `mail_error` / `mail_skipped`.
+- **Bug reporter:** gx-theme's `gx-bugreport.js`; Crew supplies only `initBugReport()` and the
+  `bugreport` route, which forwards to `GXCore.gxIngestBug`. The action is **`bugreport`** — do not
+  copy Sales' `reportbug` or Price Cards' `reportBug`.
+  - **A report that reached the sheet has succeeded, and mail must never be what stops it.**
+  - **Core owns the success-path email; Crew must never add a second.** Crew mails Sky itself only on
+    the two failure paths (`reportBug_`), which carry **separate de-dupe keys** because they say
+    opposite things: *not on the board, re-file it* and *on the board, do NOT re-file, here is the
+    id*. Do not delete those two sends as strays, and do not merge the keys.
+  - **A REFUSAL IS NOT A THROW.** `gxIngestBug` answers `{ok:false, error}` without throwing; read the
+    return, never key the fallback on an exception.
+  - **GATE ON THE PRESENCE OF `mail_error` / `mail_skipped`, NEVER ON THE ABSENCE OF `mailed`.** A
+    deduped repeat carries no mail field at all, so an absence rule fires on every repeat. The
+    code is `res.mail_error || res.mail_skipped`.
+  - **Crew still tells the REPORTER on a refusal** (Leaderboard does not). The unfiled notice carries
+    the report text and says the reporter already knows.
+  - **No new OAuth scope:** the digest already uses `MailApp`. Pinned by
+    `tests/bug_mail_fallback_test.js`.
+  - **The snapshot deliberately omits the search box contents** — `bug_reports` is shared and shown
+    in the Command Center, so a report must not carry an employee's name out. `searchActive` says a
+    filter was on.
+- **Local loop:** `python3 serve.py` → <http://localhost:8755>. The backend is **live**; `gx-dev.js`
+  blocks writes until armed; `gx-preflight.sh` is a **pre-push hook** and runs
+  `tests/identity_test.js`. Those cover identity and date invariants only — **nothing there covers
+  pay**; for pay the check that counts is the **penny-match**.
+- **Shared dev files** (`deploy.sh`, `.claude/` hook + settings) come from gx-theme via
+  `./gx-sync.sh`, filled from `.gx_app`. This CLAUDE.md is intentionally **not** synced.
 
-  *Corrected 2026-09-09.* This used to add "Crew has never sent a bug email of its own, so there is
-  no duplicate send to remove here". True when written and true of the SUCCESS path still — Core
-  owns that send and Crew must never add a second — but Crew does now send on the two failure
-  paths, and a flat "Crew never mails about bugs" is how somebody deletes them as a stray. *These are FLOORS — the sentence naming a CURRENT pin was
-  deleted 2026-09-09 rather than updated, because it had been wrong six times and this file already
-  says two lines up that the version is deliberately not written here.* (v219 fixed `getPeriodGoals`, which Crew does
-  not call, added the `blocked` status to `brain_notes` and made deploy-secret errors say *missing*
-  vs *bad*; v220 fixed a regression in that blocked-status write path.) The engine's `health` route
-  reports the version the LIVE DEPLOYMENT runs (`lib`), which is the only pin that matters — a manifest
-  bump that was never deployed still runs the old snapshot).
-  Deploy the engine with clasp (`clasp create --type webapp --rootDir apps-script` on first setup, then
-  `clasp push` / `clasp deploy`).
-- **Bug reporter:** gx-theme's shared `gx-bugreport.js` — the button, modal and state snapshot are
-  **not in this repo**. Crew supplies only `initBugReport()` in `crew.js` (transport + who is signed in
-  + what they were looking at) and the `bugreport` route in `Code.gs`, which forwards to
-  `GXCore.gxIngestBug`. The action name is **`bugreport`**, matching Inventory and Leaderboard; Sales
-  spells it `reportbug` and Price Cards `reportBug`, so do not copy a route from those two.
-  **A bug that files but whose email dies is not silent any more (2026-09-09).** Core swallows its
-  own mail failure on purpose — a report that reached the sheet has succeeded, and mail must never
-  be what stops it — so before this, nothing anywhere recorded that nobody was told: not the inbox,
-  not the row, not a log. `reportBug_` reads the v312 fields and mails Sky itself in two cases,
-  and the two say OPPOSITE things, which is why they carry **separate de-dupe keys**: *not on the
-  board, re-file it* and *on the board, do NOT re-file it, here is the id*. A shared key would let
-  the first suppress the second and leave the wrong instruction standing.
+## Boot is one Crew-engine call now, not three
+- **`roster` takes `parts=review,eom_history`** and folds both into its response from the same
+  `rosterJoin_()`. Each part has its own try/catch (`reviewPayload_`, `eomHistoryPayload_`) and
+  arrives as `{ok:false, error}` on its own key rather than taking `rows` down.
+  `eom_history` carries `current_holder`, so `boot()` reads `state.eom` off the folded response and
+  makes no GX Core `config` call for `cfg.eom`.
+- **Feature-detected, not version-gated.** `crew.js` always sends `parts=`; an older engine ignores
+  it, `foldRosterParts()` reports `gotReview`/`gotEom` as `false`, and `boot()` falls through to
+  `loadReview()` / `loadEom()`.
+- **`ROSTER_CACHE_TTL` is 600s, so every writer of identity or the attribute sheet must call
+  `bustRosterCache_()`** — a stale roster in a payroll app is worse than a slow one.
+  `tests/roster_cache_bust_coverage_test.js` scans every function in `Code.gs` and fails a writer
+  that forgets (`seedIdentityCommit()` / the `seed_commit` route was the one that had been missed).
+- **The cached attrs row index (`writeAttrs_`) is verified against the live cell, never trusted
+  blindly** (a wrong index overwrites the wrong person); a miss or failed check falls back to the
+  full scan.
+- **`stamp` is served from `CORE_EMP_CACHE_KEY` on the screen path only; every write computes live**
+  (`tests/core_employees_cache_test.js`).
+- **Read the `timings` on the payload before believing any speed figure**, in any doc. There is no
+  slow calculation left; the variance is the `/exec` hop and `perf_fetch`.
+- Tests: `roster_boot_fold_test.js`, `roster_boot_client_fold_test.js`, `attr_index_cache_test.js`.
+- **Nothing ships to GX Core, gx-theme, or Crew's live engine without Sky's word first in this
+  chat.** (made explicit 2026-10-09; previously implied by "Boot is one Crew-engine call now, not
+  three", which cited it as "the standing rule")
 
-  Three things about it a future session will otherwise undo:
+## Sign-in runs on Crew's OWN engine
+The `login` route calls `GXCore.login` **in-process**, so sign-in does not queue behind GX Core's
+shared `/exec`.
 
-  - **A REFUSAL IS NOT A THROW.** `gxIngestBug` answers `{ok:false, error}` without throwing when it
-    will not take a report. The v310/v312 re-pin notes said to fall back "only when it THROWS";
-    core-admin corrected that wording on 2026-09-09. Crew never had the bug — it has always read the
-    return — but a fallback keyed on the exception would miss the case it exists for.
-  - **GATE ON THE PRESENCE OF `mail_error` / `mail_skipped`, NEVER ON THE ABSENCE OF `mailed`.**
-    A deduped repeat carries no mail field at all, because Core returns at `priorBug` above its
-    send — so a rule reading a *missing* `mailed` as failure fires on every deduped repeat. Crew's
-    `/exec` has the ~6% second-hop flake and a redirect chain has been measured re-running one
-    request three times, so that rule is the three-emails bug rebuilt through its own fix. A
-    presence check is silent on a repeat by construction. It is Core's property, not Crew's, so it
-    is pinned by the test rather than re-guarded here.
-
-    *Corrected 2026-09-09.* This bullet said the early return was "the only reason `no mailed` is
-    safe to read as a failure" — backwards: the early return is what makes absence UNSAFE. The code
-    was always right (`res.mail_error || res.mail_skipped`); only the prose was wrong, copied from a
-    Leaderboard note that has since been corrected. Sales mutated its own source to the absence rule
-    and 3 of 44 assertions failed, a lone deduped repeat among them.
-  - **Crew still tells the REPORTER on a refusal, and that is where it parts company with
-    Leaderboard.** Leaderboard answers ok either way and lets the email carry the whole load. Telling
-    Sky is not a substitute for telling the person at the screen, who is the only one who can re-type
-    what they just lost — so the unfiled notice also carries the report text, which is otherwise the
-    only copy of it, and says the reporter already knows. Copying Leaderboard's wording ("the
-    reporter believes it went through") would send Sky after somebody who does not need chasing.
-
-  No new OAuth scope: the Monday digest already uses `MailApp`. That is load-bearing, not trivia —
-  Apps Script does not re-prompt for a scope added to an authorized project, so a first `MailApp`
-  call would have needed the revoke-and-reconsent dance, with the engine down between the two steps.
-  Pinned by `tests/bug_mail_fallback_test.js` (32 assertions).
-
-  **The snapshot deliberately omits the search box contents** — `bug_reports` is a shared table
-  rendered in the Command Center cockpit, and Crew is the app holding the PII, so a report must not
-  carry an employee's name out of here. `searchActive` says a filter was on; that is the reproducible
-  part.
-- **Local loop:** `python3 serve.py` → <http://localhost:8755>. No build step — the working tree IS the
-  app, so edit + reload is the whole loop. The backend it talks to is **live**; `gx-dev.js` blocks writes
-  until you arm them, and `gx-preflight.sh` runs as a **pre-push hook** refusing dev leftovers — including
-  running `tests/identity_test.js`, so a broken invariant blocks the push rather than shipping. Those tests
-  cover identity and date invariants only (`nameToKey_`, `normDate_`, `normBirthday_`, the store-label
-  split, the attribute carry-forward); **nothing there covers pay**, and for anything touching pay the
-  check that counts is still the **penny-match** described above.
-- **Shared dev files** (`deploy.sh`, `.claude/` SessionStart hook + settings) come from gx-theme via
-  `gx-sync.sh`, filled from `.gx_app` (= `crew`). Re-run `./gx-sync.sh` to refresh them. This CLAUDE.md is
-  intentionally **not** synced — keep it app-specific.
-
-## Boot is one Crew-engine call now, not three (2026-09-18)
-
-Opening the roster used to block on `roster` (the 2-Google-Sheets join, ~9.8s cold) and then fire
-`review` and `eom_history` behind it — three queued executions of Crew's own `/exec` for one
-screen open, plus a fourth call straight to GX Core (`GXCore.jsonp('config', {key:'cfg.eom'})`)
-just to learn who currently holds Employee of the Month. Apps Script serializes execution per
-script the same way the sign-in section above already explains, so those three Crew calls did not
-even run in parallel — the second and third each waited behind whichever one was still running.
-
-**`roster` now takes `parts=review,eom_history`** and folds both into its own response, built from
-the SAME `rosterJoin_()` the roster itself already paid for — not a second cache read, cached or
-not. Each part is its own try/catch server-side (`reviewPayload_`, `eomHistoryPayload_` in
-`Code.gs`), so a broken review queue or EoM log arrives as `{ok:false, error}` on its own key
-rather than taking the roster's `rows` down with it. `eom_history`'s payload also now carries
-`current_holder` (the id `cfg.eom` currently names, read via `GXCore.getKv` — the SAME in-process
-library call `eomSync_` already made, not a new one), which is what lets `crew.js` retire its
-separate GX Core `config` round trip: `boot()` reads `state.eom` off the folded response instead.
-
-**Calls per open, Crew engine executions:**
-
-| | before | after (folded) |
-|---|---|---|
-| to Crew's own `/exec` | 3 (`roster`, `review`, `eom_history`, queued) | 1 |
-| to GX Core directly (`config` for `cfg.eom`) | 1 | 0 |
-
-**Feature-detected, not version-gated.** `crew.js` always sends `parts=review,eom_history`; an
-older deployed engine simply ignores the unknown query param, the two keys are absent from its
-response, and `foldRosterParts()` (crew.js) reports `gotReview`/`gotEom` as `false` — which is
-exactly what makes `boot()` fall through to the old `loadReview()`/`loadEom()` background calls it
-always had. Nothing has to know which engine version is live; the response shape says so.
-
-**`ROSTER_CACHE_TTL` raised 120s → 600s.** Every writer of identity or Crew's attribute sheet was
-checked for a `bustRosterCache_()` call before this moved — a stale roster in a payroll app is
-worse than a slow one, and 600s makes any missed writer 5x more visible than 120s did. One real gap
-was found and closed: `seedIdentityCommit()` (the `seed_commit` route, also runnable straight from
-the editor) wrote straight to GX Core identity and had **never** busted the roster cache, at any
-TTL — invisible when it only ran once during onboarding, a real ten-minute staleness window now
-that the cache lives longer. `tests/roster_cache_bust_coverage_test.js` holds this as a standing
-check (scans every function in `Code.gs` for the write calls and asserts each one also busts the
-cache), not a one-time audit — a future writer that forgets the bust call fails it the same way.
-
-Also cached alongside the roster: the attrs tab's employee_id → sheet-row index, so a per-field
-save (`writeAttrs_`) no longer re-scans the whole id column to find which row to overwrite — it
-reads the cached row number, verifies it against the live cell (never trusted blindly, since a
-wrong index pointing at the wrong row would silently overwrite the wrong person's attributes), and
-only falls back to the full scan on a miss or a failed verification.
-
-**What this could NOT measure: real seconds-to-roster, before and after, against the live engine.**
-This work was built and tested against extracted Code.gs/crew.js logic with fake sheets and a fake
-cache (`tests/roster_boot_fold_test.js`, `tests/roster_boot_client_fold_test.js`,
-`tests/attr_index_cache_test.js`, `tests/roster_cache_bust_coverage_test.js` — all mutation-verified,
-each one shown to fail against the bug it exists to catch) — never deployed, per the standing rule
-that nothing ships to GX Core, gx-theme, or Crew's own live engine without Sky's word first in this
-chat. The call-count reduction above is structural and provable from the code; the wall-clock
-improvement on a cold open is Sky's to confirm once this is deployed.
-
-**Not touched: the incentive calc.** Still 25-48s per load (`crew.js` ~5527, `Code.gs` ~5522) — the
-next lever, not this one.
-
-*Corrected 2026-09-30: that 25-48s no longer exists, and the line above had been quoted as current
-for two weeks.* **MEASURED on the live engine, six `?action=incentive` loads spaced 20s: wall 7.5 /
-8.6 / 9.5 / 9.6 / 9.7 / 23.1s, of which Crew's own work was 4.9-7.6s (19.2s on the outlier).** The
-one-call boot above is most of why. **There is no slow calculation left to find** — the load is
-eight stages of 0.5-2.5s each (`stamp` 1.6s · `history` 1.3s · `periods` 0.9s · `spiff` 0.7s ·
-`auth` 0.6s · `inputs` 0.4s · `workflow` 0.3s), and what makes it *feel* slow is variance, not
-arithmetic: `perf_fetch` ranged 99ms to 14.5s across those six and owns the 23s outlier on its own.
-So the lever is the /exec hop and that upstream call, neither of which is a calc.
-
-`stamp` was the one piece that was pure waste — a second `GXCore.getEmployees()` for a list
-`rosterJoin_` had usually just cached — and is now served from `CORE_EMP_CACHE_KEY` **on the screen
-path only**; every write still computes live. See `tests/core_employees_cache_test.js`.
-
-**Read the `timings` on the payload before believing any figure in this section**, including these.
-The route returns them for exactly this reason, and a number copied forward is how the 25-48s
-outlived the fix that removed it.
-
-## Sign-in runs on Crew's OWN engine (2026-09-03)
-
-`crew.js` used to call GX Core's `/exec` directly to sign in. **That worked, and it is not why it
-moved.** Apps Script serializes execution **per script**, so a Crew sign-in queued behind whatever
-GX Core happened to be running — the Dutchie pulls, the sales sweeps, the AI digest. GX Core was
-measured spiking to **42s** that day, with one call never answering inside 90s, against ~1.3s of
-actual work in `GXCore.login`. The `login` route in `Code.gs` calls the same library function
-**in-process**, which puts the front door in Crew's own queue, with one user on it. SPIFF moved the
-same night (v1.359) and measures 2.1-2.9s warm.
-
-- **The route is ungated, on purpose.** It answers before anyone is authenticated — the credentials
-  in the request *are* the credential. **Do not add the deploy secret to it.** It would have to
-  travel in the URL of an unauthenticated request, and `UrlFetchApp` puts whole URLs into its own
-  exception messages: that is how the live secret reached an on-screen banner on 2026-09-02.
+- **The route is ungated, on purpose. Do not add the deploy secret to it** — it would travel in the
+  URL of an unauthenticated request, and `UrlFetchApp` puts whole URLs into its exception messages.
 - **`GXCore.login`'s payload is returned WHOLE** — token, expiresAt, user (the **slug**), role,
-  displayName, avatarConfig. `setSession` reads three of them; keeping only `r.user` is what once
-  printed *sky* in the header where the person's name belongs.
-- **A library that cannot answer is not a bad password.** Unbound `GXCore`, a pin with no `login()`,
-  and a call returning nothing each say so in their own words — otherwise somebody retypes a correct
-  password forever and it looks like user error from every angle.
-- **`engineNow()` must never call GX Core.** `resolveEngine()` asks Core for `cfg.crewEngineUrl` so
-  a redeployed `/exec` self-corrects, and that is right everywhere except here: routing the front
-  door through Core to learn where the front door is reintroduces the exact wait this removed. It
-  uses the remembered URL, else `ENGINE_URL_FALLBACK`, and never blocks; `boot()` runs the real
-  resolution the moment sign-in succeeds. A stale constant would therefore break sign-in only — and
-  it moves only if somebody mints a NEW deployment, which orphans `cfg.crewEngineUrl` too and is
-  what `gxengine.sh` refuses to do.
-- **Retry the transport, never a refusal.** `getJSON` is a bounded fetch (per-attempt
-  `AbortController`, body read as text so the Drive HTML page reports as a bounce rather than a
-  parser fault). A parsed `{ok:false}` is the server's **answer** — a wrong password — and
-  re-sending it hammers Core's login throttle for somebody who mistyped.
-- **This does not escape Apps Script, only Core's shared queue.** Crew's own `/exec` has the same
-  ~6% second-hop flake; that is what the two retries are for.
-
-**Not in scope, and Sky knows:** sign-in is the front door only. Crew still calls GX Core by browser
-JSONP for **stores** and **config** at boot. Whether those move is his call.
+  displayName, avatarConfig. `setSession` reads three of them; do not keep only `r.user`.
+- **A library that cannot answer is not a bad password.** Unbound `GXCore`, a pin with no
+  `login()`, and a call returning nothing each say so in their own words.
+- **`engineNow()` must never call GX Core.** It uses the remembered URL, else `ENGINE_URL_FALLBACK`,
+  and never blocks; `boot()` runs the real `resolveEngine()` after sign-in succeeds.
+- **Retry the transport, never a refusal.** A parsed `{ok:false}` is the server's answer;
+  re-sending it hammers Core's login throttle. `getJSON` is a bounded fetch (per-attempt
+  `AbortController`) that reads the body as text so the Drive HTML page reports as a bounce.
+- Crew's own `/exec` still has the ~6% second-hop flake; that is what the two retries are for.
+- Crew still calls GX Core by browser JSONP for **stores** and **config** at boot; moving those is
+  Sky's call.
 
 Pinned by `tests/login_transport_test.js`.
 
-### One list of credential parameter names — accepted and redacted by the same array (2026-09-16)
-
+### One list of credential parameter names — accepted and redacted by the same array
 `AUTH_PARAM_NAMES_ = ['token', 'session', 'auth']` in `Code.gs` is the only place those names are
-written. `requireCrew_` takes the presented credential from it (through `authParamValue_`) and
-`SECRET_PARAM_RE_` is **built** from it, so a name Crew starts accepting is redacted the moment it
-is accepted. **Do not add a name to one half.** That is the bug this replaced: the shipped scrub
-covered `token=` only while the gate accepted all three, so an exception carrying a URL —
-Apps Script puts the WHOLE url into `Address unavailable: …` — handed a **live session token** back
-onto the screen. Verified live before the fix: `?action=roster` with a bogus value in any of the
-three names answers `Invalid session` (the value was read), with no credential at all answering
-`Auth required`. Suite-wide the same night, three of four scrubs leaked `session=`.
+written. `requireCrew_` reads the credential through `authParamValue_`, and `SECRET_PARAM_RE_` is
+**built** from the list (`SECRET_PARAM_NAMES_` = `secret`, `key`, `pass`, `password` + that array).
+**Do not add a name to one half.**
 
-The names must not be **shorter** than GX Core's `GX_AUTH_PARAMS_`, because Crew's gate delegates
-to `GXCore.requireAuth`; longer is harmless, and over-redaction is the safe direction.
-
-- **The scrub is on the SERIALIZED reply body in `json_`**, not on the router catch. Crew has 83
-  places that hand an object to `json_` and 143 catch blocks; the router's catch is one of them.
-  `json_` is the only `ContentService` call in the engine, so the rule is "no reply field may carry
-  a raw credential" rather than "this one catch is fixed". It matches `?name=` / `&name=` only —
-  **a JSON *field* called `token` is left alone on purpose**, because that is how sign-in returns
-  the session the browser needs.
-- **`bugNotify_` scrubs too, and it is not a reply.** The unfiled-bug email is built from a caught
-  exception and an unreachable GX Core is exactly when that exception carries a URL — an email
-  outlives the screen it would otherwise have flashed on.
-
-- **…and since 2026-09-17 EVERY email does, because `sendMail_` is the only `MailApp.sendEmail`
-  call in the engine.** `bugNotify_` scrubbed because it is the send this class of bug was first
-  found in. There were **six others** — the Monday digest, the approval request, the backup-approver
-  escalation, the primary's notice, the sent-back notice — all built from caught exceptions and
-  stored diagnostics in the ordinary way, and none of them scrubbed. Nothing had leaked into one
-  yet; that was the only thing protecting them. Same argument as `json_`: one exit, so a route that
-  starts sending mail has nothing to copy that skips the scrub. An email is the **worse** exit of
-  the two — a screen flashes once, a mailbox keeps it, and Crew's mail goes to the two people who
-  administer payroll.
-
-- **The two Script-Property logs are scrubbed AT THE WRITE, not only at the replay.** The digest's
-  and the backup's `note()` each stringify their whole result into a property (`mail_check`,
-  `backup_check` read them back). Those replies always went through `json_` and were safe; the
-  stored value was not — a property is readable by anyone with editor access to the project and it
-  outlives the failure by months. **The backup log has a reader that is not a reply at all:**
-  `backupHealth_` folds `last.error` into its reason and the Monday recap renders that reason into
-  the red backup card, which is an **email**. Scrubbing the two routes would have left that one
-  open, which is why the fix is on the write.
-
-  *The router's `try` opens above the whole switch, so a pre-auth route's exception is caught there
-  — checked 2026-09-17 after Inventory found `err.stack` reachable pre-auth. Crew returns
-  `err.message` only and references `.stack` nowhere, and every one of its 143 catches returns
-  through `json_`.*
-- **Never read `p.token` at a call site.** Two did (accepting a duplicate in the review queue, and
-  the approval dry run), so somebody signed in with `?session=` was refused by those two routes and
-  accepted by every other one. `authParamValue_` is the only sanctioned reader.
-
-- **THE WILDCARD IS ON BOTH SIDES OF THE CREDENTIAL WORD, and the second side is a separate fix
-  (v1.408, 2026-09-16).** v1.407 shipped a wildcard only in FRONT of the word, which means the
-  parameter name had to END exactly where the list entry ends: `session` matched
-  `connector_session=` and walked straight past **`sessionid=`**, `token` missed **`tokenValue=`**.
-  GX Core measured both leaking through a scrub that had already passed 29 assertions. Neither name
-  is one Crew accepts or sends, so this was a latent hole here rather than a live exposure — but
-  the shape is what gets copied, and Sales and Price Cards already shipped the both-sides form.
-  The list is a list of **words**, not of whole parameter names; there is deliberately no second
-  list of prefixes or suffixes to keep in step with it.
-- **The accepted cost, decided by Sky 2026-09-16: a parameter whose name merely CONTAINS a
-  credential word is redacted too.** `?keyword=` loses its value because it contains `key`. That is
-  the trade Sales took and it is asserted in the test rather than left to be rediscovered — a
-  redacted diagnostic is an inconvenience, a printed credential is an incident. Narrowing the regex
-  to recover an over-redacted parameter turns the test red on purpose, so the decision gets re-taken
-  rather than quietly reversed.
-
-**The regex was already right when the suite note arrived.** Leaderboard's 2026-09-15 note warned
-that Crew's scrub was anchored (`/([?&](?:secret|token|key|pass|password)=)/`) and missed
-`connector_secret=`. That was true of the shipped v1.406 and was fixed the next day in v1.407/v1.408
-— the note crossed with the fix. Re-checked live 2026-09-17 against the note's whole checklist; what
-it turned up was the mail and stored-log gaps above, not the regex.
-
-`tests/error_scrub_test.js` (73 assertions) **executes** the real helpers against a real
-`Address unavailable` URL rather than grepping for the fix, and its list of protected names is a
-**hardcoded floor** the implementation cannot reach — a test that iterates the source's own array
-goes green by checking one name fewer the moment a name is deleted, which is the bug itself. Proved
-red four ways before v1.407: delete `session` from the list (8 fail), restore the old anchored
-regex (16), drop the scrub from `json_` (5), drop it from the email subject (1).
-
-**`scripts/prove-scrub-red.js` does that automatically now**, one scrub at a time, on scratch copies
-under the temp directory — a removal that costs **zero** assertions is printed as a failure, because
-that is a scrub the test is not actually holding. Run 2026-09-17: dropping `sendMail_`'s scrubs
-fails 3, restoring a second raw `MailApp.sendEmail` call site fails 1, each stored-log write fails 1,
-and restoring the anchored regex fails 32.
-
-**The suffix floor is the half that cannot be faked.** Its names — `sessionid`, `tokenValue`,
-`authHeader`, `gc_session_id`, `gx.api_key.v2` and the rest — are in **neither** source list, so no
-edit to `AUTH_PARAM_NAMES_` or `SECRET_PARAM_NAMES_` can satisfy them; only a name-character run on
-both sides of the word does. Reverting a scratch copy to the prefix-only form fails exactly those
-**14** assertions and leaves every v1.407 assertion green, which is the check that matters: the
-buggy version scores what the buggy version scored. Deleting `session` from the list still fails
-(11 now, 8 before), so the removal floor survives the change. Mutations run on a copy under the
-scratch directory, never on `Code.gs` — `CREW_ENGINE_SRC` exists for that and nothing in the repo or
-the push gate sets it.
+- The list must not be **shorter** than GX Core's `GX_AUTH_PARAMS_` (Crew's gate delegates to
+  `GXCore.requireAuth`); longer is harmless.
+- **The scrub is on the SERIALIZED reply body in `json_`** — the only `ContentService` call in the
+  engine — not on the router catch. It matches `?name=` / `&name=` only; **a JSON *field* called
+  `token` is left alone on purpose** (that is how sign-in returns the session).
+- **Every email is scrubbed, because `sendMail_` is the only `MailApp.sendEmail` call in the
+  engine.** Do not add a second call site. `bugNotify_` scrubs too.
+- **The two Script-Property logs are scrubbed AT THE WRITE, not only at the replay** (the digest's
+  and the backup's `note()`); `backupHealth_` renders `last.error` into the Monday email.
+- **Never read `p.token` at a call site.** `authParamValue_` is the only sanctioned reader.
+- **THE WILDCARD IS ON BOTH SIDES OF THE CREDENTIAL WORD.** The list is a list of **words**, not
+  whole parameter names (`sessionid=`, `tokenValue=`, `connector_session=` all redact). There is
+  deliberately no second list of prefixes or suffixes.
+- **Accepted cost (Sky, 2026-09-16): a parameter whose name merely CONTAINS a credential word is
+  redacted too** (`?keyword=`). Do not narrow the regex to recover one; the test goes red on purpose.
+- The router returns `err.message` only and references `.stack` nowhere; every catch returns
+  through `json_`. Keep it so.
+- `tests/error_scrub_test.js` **executes** the real helpers, and its protected names are a
+  **hardcoded floor** — never iterate the source's own array in that test.
+  `scripts/prove-scrub-red.js` removes one scrub at a time on scratch copies; a removal costing
+  **zero** assertions is a failure. Mutations run on a copy, never on `Code.gs` (`CREW_ENGINE_SRC`;
+  nothing in the repo or push gate sets it).
 
 ## gx-theme is core-admin's — send a request, don't edit (rule from Sky, 2026-08-20)
-**Never edit `greencross-gx-theme` from this chat.** Five apps load `gx-theme.css`, `gx-client.js`,
-`gx-topnav.js`, `gx-avatar.js`, `gx-session.js` and `gx-stores.js` **live from Pages**, so a change there
-is not a change to one app — it reaches every app on its next load, inside the 10-minute cache, with no
-deploy and no review in between. That reach is the point of the shared layer and exactly why it does not
-get six editors. If Crew needs something from it, `add_note` to `core-admin` saying what and why;
-requests are welcome and quick.
+**Never edit `greencross-gx-theme` from this chat.** Five apps load its files live from Pages, so a
+change reaches all of them inside the 10-minute cache with no deploy and no review. `add_note` to
+`core-admin` saying what and why.
 
-**The corollary matters just as much: do not restyle a shared component from inside Crew either.** A local
-rule that beats `.gx-btn-green` or `.gx-input` wins here and silently diverges from the other five — that
-is literally how the suite ended up with six different login screens.
-
-**What still belongs to Crew** is anything that is genuinely this app's character. The test is *"should all
-six get this?"* — if no, it is app-local and stays here. Note `gx-sync.sh` pulls **from** gx-theme; it is
-a one-way read, not an editing channel.
+**Do not restyle a shared component from inside Crew either** — a local rule that beats
+`.gx-btn-green` or `.gx-input` silently diverges from the other five. The test is *"should all six
+get this?"* `gx-sync.sh` pulls **from** gx-theme; it is a one-way read, not an editing channel.
 
 ## The HUB is core-admin's too — send a note, don't edit (rule from Sky, 2026-09-02)
-
-**Never edit `greencross-command-center` from this chat.** Same rule as gx-theme above, now extended
-to GX Core, and it is here because it was broken rather than because it was theorised.
-
-On 2026-09-02 a Crew session made a small, correct, tested fix to `gx_dutchie.gs` and put it on a
-branch for Sky to merge, because GX Core library cuts are PR-gated. **Another Claude session had the
-same repo open at the same time.** That repo is Dropbox-synced, so the two sessions shared one
-working tree and one HEAD: the branch was switched out from under the first session, its commit
-landed on `main` instead, and the other session then pushed `main` and ran `./ship.sh`. The change
-went out as library v284 with no PR and no review. The code was fine — that is the point. Nothing
-failed, nothing warned, and the gate Sky put on the highest-stakes repo in the suite was simply not
-there that time.
-
-Two sessions cannot share a git checkout. Neither can see the other, `git checkout -b` is not atomic
-against a second process, and the loser finds out afterwards by reading the log.
-
-**So from Crew: `add_note` to `core-admin` with what you need and why, and stop.** Requests are
-welcome and quick, and the hub session holds the repo alone while it works.
-
-**Where the line is, because over-applying this is its own failure:**
+**Never edit `greencross-command-center` from this chat.** Two sessions cannot share a Dropbox git
+checkout. **`add_note` to `core-admin` with what you need and why, and stop.**
 
 - **Reading the hub is fine and often necessary** — `gx_core.gs` and `gx_dutchie.gs` are the source
-  of truth for every route Crew calls, and guessing a payload shape instead of reading it is how
-  this repo got `spiff_payouts`. Read freely; run `./gxpins.sh`; diff against it.
-- **Calling GX Core's HTTP routes is not editing it.** `deploy.sh`, `gxengine.sh`, `set_config`,
-  `bug_update`, `resolve_note`, `add_note` and the rest are the documented interface, secret-gated
-  and designed for exactly this. Changing a *setting* through `set_config` — a threshold, a store
-  list — is a config change Crew owns; changing *code* is not.
-- **Crew's own engine and repo are still yours.** `clasp push` / `gxengine.sh --deploy` here touch
-  only this project.
+  of truth for every route Crew calls. Read, never guess a payload shape; run `./gxpins.sh`.
+- **Calling GX Core's HTTP routes is not editing it** (`deploy.sh`, `gxengine.sh`, `set_config`,
+  `bug_update`, `resolve_note`, `add_note`). Changing a *setting* through `set_config` is Crew's;
+  changing *code* is not.
+- **Crew's own engine and repo are yours** — `clasp push` / `gxengine.sh --deploy` touch only this
+  project.
 
-## Shipping — branch + PR, because Crew is LIVE (corrected 2026-09-15)
+## Shipping — branch + PR, because Crew is LIVE
+**Crew is live to Sky and Mike.** A **feature** goes on a `feat/…` branch with a PR and **Sky
+merges**. A **small fix** that is correct the moment it lands ships direct to `main`. After a merge:
+bump `?v=N` on the `crew.js` tag, `./gxengine.sh --deploy` for the engine, then `./deploy.sh`, then
+`dev_ship` the job if there is one.
 
-**Crew is live to Sky and Mike.** So the ordinary `/gxbrain` ship policy applies: a **feature** goes on a
-`feat/…` branch with a PR and **Sky merges**. A **small fix** that is correct the moment it lands still
-ships direct to `main`. After a merge: bump the `?v=N` on the `crew.js` tag, `./gxengine.sh --deploy` for
-the engine, then `./deploy.sh`, then `dev_ship` the job if there is one.
-
-*Corrected 2026-09-15, and the correction is the point.* This section said **"GX Crew is pre-launch:
-nobody outside Sky has access yet… until Crew launches, commit and push straight to `main`"**, decided
-2026-08-18. It was true then. It carried its own expiry — *"revert to branch + PR the moment Crew goes
-live to anyone but Sky"* — and **nothing anywhere fires that trigger**, so the paragraph went on
-instructing sessions to push straight to `main` on an app that **pays people**, three weeks after the
-condition it depends on stopped being true. Mike has had access since the week of 2026-08-25; his Monday
-digest opt-in was switched on for the launch, so a first real recipient has existed since then.
-
-That is the same failure as the `spiff_payouts` correction higher up this file (and `version_history`
-in the hub's), in its most expensive form: **a rule whose precondition nothing can contradict.** A doc that names a version rots
-when somebody re-pins; a doc that names a *state* rots the moment the state changes, and silently,
-because there is no version number to look wrong. If a rule here depends on a condition, write what is
-true NOW and re-date it — do not leave an "until X" that no test, route or script will ever evaluate.
-
-**Do not restore the old rule for `crew` on the argument that a change is small or that Mike will not
-notice.** The gate is not about how risky one change looks; it is that the approval, the Capstone export
-and the frozen history are what a person is paid on, and a second reader is the only thing standing
-between a plausible-looking change and that.
-
-**The rule that did NOT change:** it is still per-app. `spiff` is genuinely pre-launch and still works
-direct on `main`. GX Core library cuts stay PR-gated regardless — a bad immutable version breaks every
-spoke silently.
+- **Do not restore the old "pre-launch, push to `main`" rule for `crew` on the argument that a
+  change is small or that Mike will not notice.** The approval, the Capstone export and the frozen
+  history are what a person is paid on.
+- **If a rule here depends on a condition, write what is true NOW and re-date it** — never leave an
+  "until X" that no test, route or script will evaluate. Same for versions and values: do not write
+  a number in this file that nothing can contradict.
+- Still per-app: `spiff` is pre-launch and works direct on `main`. GX Core library cuts stay
+  PR-gated regardless.
 
 ## System of record — Crew, not the spreadsheet (decided 2026-08-18)
-The HR workbook (`GreenCross_Staff.xlsx`) built the initial roster and is now **history**. **GX Crew,
-backed by the GX Core `employees` registry, is the point of truth for people data.**
+`GreenCross_Staff.xlsx` built the initial roster and is now **history**. **GX Crew, backed by the GX
+Core `employees` registry, is the point of truth for people data.** `hr_import` defaults to
+**fill-only** — it writes a field only where the current value is empty; overturning a held value
+needs an explicit `mode=overwrite`. A superseded source must not be able to contradict the record.
 
-This is enforced, not just documented: `hr_import` defaults to **fill-only** — it writes a field only
-where the current value is empty, and overturning a held value needs an explicit `mode=overwrite`.
-That default exists because re-sending the sheet once silently reverted four role corrections minutes
-after they were made. A superseded source must not be able to contradict the record.
-
-Related invariants worth keeping:
 - **`employee_number` is issued, never typed** — `assign_numbers` allocates `max(ever seen) + 1`,
-  counting retired and merged rows, so a number is never reused. `00` is reserved for the owner and
-  sits outside the sequence. `set_number` (deploy-secret) is the only override.
+  counting retired and merged rows, so a number is never reused. `00` is reserved for the owner,
+  outside the sequence. `set_number` (deploy-secret) is the only override.
 - **Every write to GX Core is read-merge-write.** `gxWrite_` replaces the whole row, so a partial
   write blanks `dutchie_employee_id` (SPIFF/Leaderboard attribution) and `user_id` (email link).
 - **Leading zeros need plain-text columns.** Sheets coerces `"00"` to `0`; `employee_number`,
-  `birthday` and `permit_number` are pinned to `@` format, and number comparisons are numeric.
+  `birthday` and `permit_number` are pinned to `@`, and number comparisons are numeric.
+- **Never reach the HR workbook through a path that can create one:** `crewSheet_()` *creates an
+  empty spreadsheet* when it cannot open the real one (see Backups). (made explicit 2026-10-09;
+  previously implied by "Backups — the whole spreadsheet, to a shared drive")
 
 ## METRC is the source of truth — once we have API access (decided 2026-08-22)
-The METRC connector (`metrc_*` routes) is written but **not connected**: `METRC_BASE` still points at
-the sandbox and `METRC_USER_KEY` is unset, so `metrc_health` reports "Missing keys" and nothing real
-has ever come through it. Today its only consumer is `metrcAccessAudit_`, which answers "are retired
-staff still active in METRC?" — **names only, no writes**.
+The `metrc_*` connector is written but **not connected** (`METRC_BASE` on the sandbox,
+`METRC_USER_KEY` unset, so `metrc_health` reports "Missing keys"). Its only consumer is `metrcAccessAudit_` — **names only, no writes**.
 
-> **API access is IN PROCESS — do not delete the connector (Sky, 2026-09-08).** The code sitting
-> unconnected looks exactly like the abandoned-connector habit this file warns about elsewhere, and
-> a future session reading the warnings without this line would reasonably propose ripping it out.
-> It is waiting on credentials, not on a decision. Leave it, and leave `METRC_BASE` pointed at the
-> sandbox until real keys arrive — a half-pointed connector is worse than an unpointed one.
-> **This is the opposite of the SwipeClock case below**, which was investigated and deliberately
-> abandoned; the two read alike from the code and are not alike at all.
+- **API access is IN PROCESS — do not delete the connector (Sky, 2026-09-08).** Leave `METRC_BASE`
+  on the sandbox until real keys arrive. This is the opposite of SwipeClock, which was deliberately
+  abandoned.
+- When connected, METRC is the authority for `permit_number` (the export's **License Number**),
+  `permit_granted`, `permit_expires`, `permit_status`, and the **legal first + last name spelling**.
+- **`hire_date` is NOT on that list. A METRC sync must leave `hire_date` alone** — METRC's *Hired*
+  is the date the person was added to that license. It is plausible only for someone on **one**
+  license with a non-bulk date, and even then it is a proposal for a human, not a value to write.
+- **METRC wins on spelling, not capitalization** — a sync must not copy its casing through.
+- **`Employee Role` is empty and `Home` is a METRC landing page**; neither maps to `role_title` or
+  `home_store`.
+- **Dutchie is not trustworthy for legal spelling** (an admin can type a nickname there, which the
+  identity seed carries into `full_name`). On a Dutchie/METRC name disagreement, **METRC wins**.
+- **Do not route a METRC name ingest through `hr_import`.** `full_name` is in its guarded list, so a
+  correct legal name is *silently skipped* (reported only under `matched_despite_name_drift`);
+  nothing errors. Fill-only **is** right for the permit
+  columns, which are usually empty.
+- A sync must either post `review_report` items (`name_spelling`, which `resolveReview_` applies
+  through `saveIdentity_` and records the rename alias) or write its owned fields explicitly.
+  **`review_report` replaces the whole `crew_reviews` tab wholesale** — a sync must re-post what it
+  did not author.
+- Accepting a `name_spelling` item writes `full_name` **only**; `preferred_name` is a separate edit.
+- **Exports do not name a store and the registry has no license column.** Known: **050-16892 →
+  `portland-rd`**. The other five (050-12997 / 13000 / 13003 / 13006 / 13009) are unmapped; identify
+  one from the people who appear on that license only (six staff with company-wide access sit on
+  all six).
 
-When production credentials land, METRC becomes the authority for:
+## Nightly Dutchie scan — it REPORTS, it never writes
+`nightlyDutchieScan()` runs at **05:00 store time**, compares Dutchie's active people with the GX
+Core registry, and parks anyone unmatched in **`crew_pending_hires`**.
 
-| Field | Notes |
-|---|---|
-| `permit_number` | OLCC permit — the export's **License Number** |
-| `permit_granted` | OLCC Granted |
-| `permit_expires` | OLCC Expires |
-| `permit_status` | Active / Valid |
-| **legal first + last name** | the spelling `full_name` should carry, but see the casing note below |
-
-***`hire_date` is NOT on that list, corrected 2026-08-25.*** This line used to claim it was, and
-six real METRC employee exports disprove it: the **Hired** column is *the date that person was
-added to that license*, not their company start date. In 72 rows across six licenses, **30 land
-on 2025-04-29 and 11 more on 2025-04-30** — facility-setup days, not thirty people starting work
-together — and Michael Kettler reads `2025-04-29` in five exports and `2025-07-23` in the sixth.
-Writing it into `hire_date` would have reported ~1yr of tenure for people who have been here
-seven. It is only plausible for somebody on **one** license with a non-bulk date, which is a
-new hire whose facility-add really is close to their start; even then it is a proposal for a
-human, not a value to write. A METRC sync must leave `hire_date` alone.
-
-Two more things the real exports show that the connector's field list does not:
-
-- **METRC's own casing is unreliable** — the same file carries `ellison, jayden`,
-  `PINKERTON, NOAH` and `Mcarthur, Ayla`. METRC wins on *spelling*, not on capitalization, so a
-  sync must not copy the case through.
-- **`Employee Role` is empty for everyone, and `Home` is a METRC landing page** (`Sales`,
-  `Packages`, `Reports`), not a store. Neither maps to `role_title` or `home_store`.
-
-**Reconciled once by hand, 2026-08-25.** Six exports → 42 unique people → `hr_import` fill-only.
-Permit fields for all 42 (41 matched existing records; **Andrew Roberts was created** — permit
-`R106Y7`, Portland Rd, employee **#117**, Budtender). Then `hire_date` for exactly **three**
-people whose METRC date passed the single-license, non-bulk test: Andrew Roberts 2026-08-22,
-Nathaniel Schneider 2026-03-07, Sierra Martin 2026-08-11. The other 39 were left alone.
-
-Fill-only is the right mode for this even though the paragraph above warns against routing METRC
-through `hr_import` — that warning is about **`full_name`**, which is guarded and always
-populated, so a spelling correction is silently skipped. Permit columns are usually *empty*,
-which is exactly what fill-only exists to complete.
-
-**The export files do not name a store, and the registry has no license column.** `getStores()`
-returns `store_id, display_name, dutchie_name, short_code, color, region, sort_order, timezone,
-is_dc, aliases` — nothing to join an OLCC license on. Known so far: **050-16892 → `portland-rd`**
-(Sky, 2026-08-25). The other five (050-12997 / 13000 / 13003 / 13006 / 13009 — a consecutive block
-registered together, with 16892 added later) are unmapped. To identify one, take the people who
-appear on **that license only**: six staff have company-wide access and sit on all six exports
-(Samantha Bryson, Michael Kettler, Andrew Phillips, Skyler Pinnick, Shawn Todd, Tawny Vierra), so
-whoever remains is that store's own crew and names it on sight.
-
-**Why METRC and not Dutchie, which is where the roster's names actually came from.** Dutchie is
-*supposed* to mirror METRC, so it looks like an equivalent source — but a Dutchie admin (Mike) can
-edit a person's name in Dutchie, and a nickname typed there flows straight into `full_name` via the
-identity seed. That is exactly how employee #22 reached the roster as "Mike Kettler" while METRC has
-him as Michael. **Dutchie is not trustworthy for legal spelling; METRC is.** Any future reconciliation
-should treat a Dutchie/METRC name disagreement as "METRC wins", which is what the open review item on
-Rebeka Perez already says in prose.
-
-**The consequence for whoever builds the ingest — do not route it through `hr_import`.** That path
-defaults to fill-only and `full_name` is in its guarded list, so a correct legal name is *silently
-skipped* whenever the field already holds something, which it always will. Worse, the matching works
-perfectly first — `NICKNAMES` maps mike→michael, so `samePerson_('Michael Kettler','Mike Kettler')` is
-true — meaning the import identifies the person, keeps the right `employee_id`, reports the drift under
-`matched_despite_name_drift`, and then declines to apply the improvement. Nothing errors.
-
-So a METRC sync must either post `review_report` items (the `name_spelling` kind, which `resolveReview_`
-applies through `saveIdentity_` — that also records the rename alias, so the old `employee_id` keeps
-resolving for Leaderboard/SPIFF joins) or write its owned fields explicitly. Note `review_report`
-**replaces the whole `crew_reviews` tab wholesale** — a sync that posts only its own findings deletes
-every hand-filed item, so it must re-post what it did not author.
-
-Note also that accepting a `name_spelling` item writes `full_name` **only**. Setting the nickname
-(`preferred_name`) so the roster reads *Michael Kettler "Mike"* like the other 18 people is a separate
-edit in the identity panel.
-
-## Nightly Dutchie scan — it REPORTS, it never writes (built 2026-08-25)
-Nothing polled anything until now: a new hire reached Crew only when somebody remembered to run a
-seed or an import, which is how Andrew Roberts sat in METRC for three days unnoticed. A time
-trigger runs `nightlyDutchieScan()` at **05:00 store time**; it compares Dutchie's active people
-against the GX Core registry and parks anyone it cannot match in **`crew_pending_hires`**.
-
-- **It creates nobody.** `seed_commit`'s own comment is the reason — writing the registry every
-  app reads "is not something that should ever fire as a side effect", and a 5am cron is exactly
-  that. Each find surfaces as a **`new_hire`** item in the review queue; accepting it (*"Add to
-  the roster"*) is the only path to a write, and a human presses it.
-- **Matching is `hrImport_`'s ladder**, not a second opinion — exact `employee_id`, then a merge
-  alias, then `samePerson_` fuzzy. Two detectors disagreeing about whether somebody is already on
-  the roster would either hide a real hire or propose a duplicate of an existing one.
-- **A failed Dutchie read changes nothing.** Writing "no new hires" because the source was
-  unreachable looks exactly like good news, so an empty read returns an error instead.
-- **Its own tab, deliberately not `crew_reviews`** — `reportConflicts_` replaces that one
-  wholesale, so a nightly writer sharing it would delete every hand-filed item every night.
-- Routes: `new_hires` (run the scan on demand) and `install_triggers` (`confirm=yes`), both
-  deploy-secret. `ScriptApp.newTrigger` needs the `script.scriptapp` scope this project did not
-  previously use, so the first install may need the owner to run `installNightlyScan()` once from
-  the editor and grant it.
+- **It creates nobody.** Each find is a **`new_hire`** review item; accepting it is the only path to
+  a write, and a human presses it.
+- **Matching is `hrImport_`'s ladder** — exact `employee_id`, then a merge alias, then `samePerson_`
+  fuzzy. Do not write a second detector.
+- **A failed Dutchie read changes nothing** — an empty read returns an error, never "no new hires".
+- **Its own tab, deliberately not `crew_reviews`** (`reportConflicts_` replaces that one wholesale).
+- Routes: `new_hires` (run now) and `install_triggers` (`confirm=yes`), both deploy-secret.
+  `ScriptApp.newTrigger` needs `script.scriptapp`, so a first install may need the owner to run
+  `installNightlyScan()` once from the editor.
 
 ## Monday digest — and the Apps Script auth trap it walked into
-The nightly scan's findings, plus the permit and gap counts, mailed **Mondays 07:00 store time**.
-Same content as the roster's overview minus Employee of the Month.
+Mailed **Mondays 07:00 store time**: the scan's findings plus permit and gap counts (the roster
+overview minus Employee of the Month).
 
-**Who receives it is a per-person setting, not a list in the source** — `digest_opt_in`, ticked on
-their own record under *Links & visibility*. It needs a **GX account** too, because `user_id` is
-where the address comes from; with no account the control says so rather than storing a preference
-that could never be honored. **`user_id` is the MAILBOX NAME, not an address** — `createAccounts_`
-derives it as `email.split('@')[0]`, so Sky's account is `sky`. The address is reassembled as
-`user_id@greencrosscanna.com` (`ACCOUNT_DOMAIN`); GX Core holds the real one in its `users` tab but
-the library exposes no reader for it. There is deliberately **no fallback list**: "if nobody opted in, send
-to these people" would mail somebody who had just switched it off, which is the one thing a
-preference must never do. Nobody opted in means the send reports that it went to nobody. `?action=digest` previews, `&send=yes` sends, `&to=` overrides. Every
-attempt records its outcome and its **source** (`editor` / `webapp` / `trigger`) to a script
-property, readable via `?action=mail_check`, which also lists the live triggers.
+- **Recipients are a per-person setting, not a list in the source** (`digest_opt_in`), and need a
+  **GX account** — with none, the control says so rather than storing a preference.
+  **`user_id` is the MAILBOX NAME, not an address** (`createAccounts_` derives it as
+  `email.split('@')[0]`); the address is `user_id@greencrosscanna.com`
+  (`ACCOUNT_DOMAIN`). The GXCore library exposes no reader for the real address.
+- **There is deliberately no fallback list.** Nobody opted in means the send reports it went to
+  nobody.
+- `?action=digest` previews, `&send=yes` sends, `&to=` overrides. Every attempt records its outcome
+  and **source** (`editor` / `webapp` / `trigger`); `?action=mail_check` reads it and lists triggers.
+- **Adding a new OAuth scope does not re-prompt** (`MailApp` needed `script.send_mail`). Running a
+  function from the editor grants your account, not the deployment (`executeAs: USER_DEPLOYING`);
+  **`clasp update-deployment` never raises a consent prompt**; `sendDigest_` catches the auth error,
+  so a refused send logs as *Completed* (`sendDigestNow` rethrows).
+- **What works:** revoke the project at
+  [myaccount.google.com/permissions](https://myaccount.google.com/permissions) → *Remove access*,
+  then run `sendDigestNow()` from the editor. **The engine is down between those two steps.**
+- **`oauthScopes` IS declared, and the list is the GRANT, not a guess.** `?action=scopes_check`
+  (deploy-secret, read-only) returns the deployment's real scope list. `userinfo.email` and
+  `script.container.ui` are declared to keep list == grant.
+- **`tests/oauth_scopes_test.js` fails a push** that calls an undeclared scope's service or declares
+  a scope outside the recorded grant. To add one: revoke-and-reconsent first, confirm with
+  `scopes_check`, then move the test's `GRANTED` list.
 
-**Adding a new OAuth scope does not re-prompt, and costs a day if you do not know that.** Adding
-`MailApp` meant the project needed `script.send_mail`; Google decided the authorization was
-already settled and never showed a consent dialog. Every symptom pointed elsewhere:
+## Avatars are written by GX Core now
+`GXCore.setAvatar(ref, config, by)` (v225) is the single avatar write in the suite: seed pinned to
+`employee_number`, lock contention retried, a clear NAMED in `clear=` and then verified.
 
-- Running the function from the editor **grants your account, not the deployment.** The web app
-  is `executeAs: USER_DEPLOYING` and carries its own stored authorization.
-- **`clasp update-deployment` never raises a consent prompt.** Redeploying does not help.
-- The editor logged the run as **Completed** because `sendDigest_` catches the auth error and
-  returns it. A refused send looked exactly like a successful one. `sendDigestNow` now rethrows.
+- **`roster_identity` delegates when the avatar is the ONLY change**, sending a patch of
+  `{ employee_id, avatar_config }`. An avatar arriving **alongside** other identity fields stays one
+  atomic row write and stamps the seed locally (`avatarSeed_`) — do not split it.
+- **The `avatars` and `avatar_save` routes are gone** (with `avatarSave_`, `avatarsForKiosk_` and
+  `resolveEmployee_`) and must not come back. `avatarSeedFrom_`
+  **stays** (`rosterJoin_` and `migrateLeaderboard_` re-derive the seed at read time). Pinned by
+  `tests/avatar_write_test.js`.
 
-**What actually works:** revoke the project at
-[myaccount.google.com/permissions](https://myaccount.google.com/permissions) → *Remove access*,
-then run `sendDigestNow()` from the editor. With no stored grant Apps Script re-derives every
-scope and prompts for the full set. **The engine is down between those two steps** — the web app
-runs on that same authorization — so it is a minute of outage, not a free action.
+### …and the PICKER is gx-theme's too
+`GXAvatarPicker` (`gx-avatar-picker.js` + `.css`, loaded **by URL**) is the one builder. Crew
+mounts it; it does not own it.
 
-**`oauthScopes` IS declared now (2026-09-09, Sky's call) — and the list is the GRANT, not a
-guess.** This paragraph used to record the opposite decision: an explicit list "would have to
-enumerate everything GXCore needs", and a miss would break the roster. The risk was real; the
-premise was not — the other five apps bind GXCore on the same five scopes. What made it safe was
-reading the grant first: `?action=scopes_check` (deploy-secret, read-only) asks Google's tokeninfo
-about the deployment's own token and returns the scope list. Declaring exactly that set needed no
-reconsent and no downtime. Two entries beyond the suite's five: `userinfo.email`
-(`getEffectiveUser().getEmail()`) and `script.container.ui`, which only GXCore's own HtmlService
-page uses — auto-detect folds library scopes into the grant, so it is declared to keep list == grant.
+- **The avatar circle in the record header IS the control** — a real `<button>` (`.crew-avabtn`),
+  the only way in.
+- **Crew passes a real `seed`: `row.avatar_seed`.** Do not "simplify" this to
+  `row.employee_number` — that is blank for the unnumbered, who would get DiceBear's `unknown` face.
+- **`showLeaderboardPreview: false`, and never `.gxava-full`** — stated, not relied on as defaults.
+- **`clothingGraphic` is lost on re-save** through the shared picker; requested from `core-admin`.
+  Do not add a local table.
+- `tests/avatar_picker_adoption_test.js`: both files loaded, no vendored copy, no local `.gxava-*`
+  override, `avatarPanel` gone. Click → save → reload → remove needs a browser.
 
-**The list does not stop a missing scope by itself; `tests/oauth_scopes_test.js` does.** New code
-calling a Google service whose scope is undeclared fails at push, and a declared scope outside the
-recorded grant fails too — because adding one still means the revoke-and-reconsent above, with
-the engine down between the steps. Do that first, confirm with `scopes_check`, then move the
-test's `GRANTED` list.
+## Incentive — transplanted from Leaderboard
+**GX Crew is the payout app** — the bonus math, the attendance/SPIFF inputs, the Capstone export
+and the approval. Performance comes from GX Core.
 
-## Avatars are written by GX Core now (2026-08-25)
-`GXCore.setAvatar(ref, config, by)` — **v225** — is the single avatar write in the suite, and it is
-**Crew's own logic, promoted**: seed pinned to `employee_number`, lock contention retried, a clear
-NAMED in `clear=` and then verified to have landed. Leaderboard had a second implementation that did
-none of that, so which behavior a staff member got depended on which app they stood in front of.
-
-Two consequences for this repo:
-
-- **`roster_identity` delegates when the avatar is the ONLY change** — which is every write the
-  picker makes, since the roster saves one field at a time. It sends a patch of
-  `{ employee_id, avatar_config }`, so there is no row for `gxWrite_` to blank; `dutchie_employee_id`
-  and `user_id` survive by construction rather than by remembering to carry them. An avatar arriving
-  **alongside** other identity fields stays one atomic row write and stamps the seed locally
-  (`avatarSeed_`) — splitting it in two just to route the avatar would let a half-applied identity
-  edit exist.
-- **The `avatars` and `avatar_save` routes are gone**, with `avatarSave_`, `avatarsForKiosk_` and
-  `resolveEmployee_`. They were Crew's half of a Leaderboard hand-off that was never wired — no
-  caller anywhere in the suite. `avatarSeedFrom_` **stays**, because `rosterJoin_` and
-  `migrateLeaderboard_` re-derive the seed at READ time; that is why a stored seed could drift for a
-  release without a single face rendering wrong. `tests/avatar_write_test.js` pins all of it,
-  including that the dead routes do not come back.
-
-### …and the PICKER is gx-theme's too (2026-08-25, same day)
-Crew's own `avatarPanel` — 105 lines, a grid of fourteen `<select>`s — is **retired, not merged**.
-Sky: *"I like the LB picker better… the current, simplified version in Crew is efficient but not
-intuitive and just adds noise."* The one builder for the suite is `GXAvatarPicker` in gx-theme
-(`gx-avatar-picker.js` + `.css`, loaded **by URL** alongside `gx-avatar.js`), promoted out of
-Leaderboard. Crew mounts it; it does not own it.
-
-- **The avatar circle in the record header IS the control.** A real `<button>` (`.crew-avabtn`)
-  wrapping the puck, so it is reachable by Tab — it is now the *only* way in, which is why the
-  redundant "Avatar" text button in the actions row was deleted rather than left as a second door.
-- **Crew passes a real `seed`, and that is the thing Crew can do that Leaderboard cannot.**
-  `row.avatar_seed` — the engine's own `avatarSeedFrom_` answer (attrs `employee_number`, then the
-  Core row's, then `employee_id` for anyone not yet numbered). Leaderboard's `getavatardata` carries
-  no employee number and falls back to a **name-derived** seed, which is precisely what pinning
-  exists to stop mattering. Do not "simplify" this to `row.employee_number`: that is the attrs value
-  only and is blank for the unnumbered, who would silently get DiceBear's `unknown` face.
-- **`showLeaderboardPreview: false`, and never `.gxava-full`.** The mock is a sales standings row
-  ("Jordan M. $4,820") and this is an employee record; `.gxava-full` sets `min-height:100vh` and
-  assumes it owns the viewport, but here it is a panel inside a person. Both are the component's
-  defaults — the point is that they are stated, not relied on.
-- **One attribute was lost in the swap: `clothingGraphic`.** Crew's table pinned the design on a
-  graphic shirt because it was the last thing the seed still chose. The shared picker does not offer
-  it, so a config **re-saved** through the picker drops the key and DiceBear picks the design from
-  the seed again. Stored configs keep rendering theirs until re-saved. Requested back from
-  `core-admin` — it belongs in the shared component, and a local table would diverge on day one.
-- `tests/avatar_picker_adoption_test.js` pins the contract a push gate can hold: both files loaded,
-  no vendored copy, no local `.gxava-*` override, `avatarPanel` and the option tables gone. The
-  behavior (click → save → reload → remove) needs a browser and is not in the gate.
-
-## Incentive — transplanted from Leaderboard (2026-08-27)
-
-**The split that survives the move:** Leaderboard stays the **performance engine** — Dutchie ingest,
-`aggregateTransactions_`, the discretionary-discount classification, and the frozen closed-period
-snapshots. **GX Crew is the payout app** — the bonus math, the attendance/SPIFF inputs, the Capstone
-export and the approval. Sky's own framing: SPIFF sets the goals, LB tracks the performance, Crew
-reads the performance.
-
-Crew reaches it through LB's `incentiveperf` route: deploy-secret, **read-only**, no save twin,
-and placed *above* `requireAuth_` because everything below that line is rejected as "not signed in"
-before a machine caller reaches it. **This is app-to-app, which the brain forbids, and it is
-deliberate and temporary** — promoting the per-employee slice into GX Core needs a library cut Crew
-could not wait for. A brain note asks `core-admin` for it; SPIFF wants the same data. Delete the
-route when GX Core exposes the slice.
-
-***It no longer does, and this section described the old wiring for two days.*** GX Core got the
-slice: **`cfg.incentiveEngine` has read `gxcore` since 2026-09-01**, so `fetchLivePerf_` routes to
-GX Core's `incentive_perf` and Crew does not call Leaderboard on the incentive path at all. The
-app-to-app hop the paragraph above calls "deliberate and temporary" was the *fallback* after that.
-
-***And the fallback is deleted, 2026-09-14 (Sky's call).*** Leaderboard retired its incentive engine
-(`incentiveperf`, `frozenperiod(s)`, `incentive`/`saveincentive`), so Crew deleted
-`fetchLivePerfLeaderboard_`, the `incentiveEngine_` flag reader and the `incentive_compare` tool.
-**`fetchLivePerf_` reads GX Core, full stop; `cfg.incentiveEngine` is no longer read.** The fallback
-was the dangerous part, not the dead code: `incentiveEngine_` answered `leaderboard` on a **blank**
-flag *or* a kv read that **threw**, so a GX Core hiccup would have scored a live period on a
-different engine (voids, returns and store keys all differ) instead of failing. There is one source
-now, and if it cannot answer the screen says so. Leaderboard's 28 frozen closed periods match GX
-Core's `incentive_frozen` archive byte-for-byte (checked by Leaderboard's session before retiring).
-
-**The consequence that bit, because it is the one nothing errors on: GX Core sends NO thresholds.**
-That is correct and deliberate — Core computes no scheme and Crew reads it from kv — but
-`approvalThresholds_` compared `live.thresholds` against Core's and reported the answer as a
-BOOLEAN. With nothing to compare, "no scheme arrived" and "Leaderboard disagrees" were the same
-`false`, so **every dry run since the flip has claimed Leaderboard disagrees about an app Crew no
-longer asks.**
-
-The claim is alarming and plausible — the kiosk grading staff against a scheme they are not paid on
-— which is exactly why it cost something. On 2026-09-03 it was reported to Sky as a live problem and
-chased across both apps until both schemes were fetched and diffed by hand: **byte-identical**,
-`discountMaxPct` 1.0 included. Nothing was wrong anywhere except one line.
-
-*Since 2026-09-14 nothing can send a scheme, so `lb_agrees` is **always `null`** with
-`lb_check: 'not applicable…'`, and a scheme that turns up on the payload anyway is ignored. The field
-is kept so nothing reading it breaks. The paragraph below is the history of why it was three-state.*
-
-`lb_agrees` was **three-state** — `true` / `false` / **`null` meaning not checked** — with
-`lb_check` beside it saying which of the two "nothing to compare" cases it was: the engine sends no
-scheme (a wiring fact, every period), or Leaderboard had no record for that one closed period (its
-documented `unrecorded` answer for the 28 snapshots that predate scheme-freezing). Same value,
-opposite implications. **Never read `lb_agrees` for truthiness** — `null` coerces to `false`, which
-is the original bug restored. The comparison itself is untouched: a genuinely different scheme still
-reports `false`, because Leaderboard does still hold its own copy and the board really would grade
-people against it. Pinned by `tests/threshold_agreement_test.js`.
+- **`fetchLivePerf_` reads GX Core's `incentive_perf`, full stop.** `cfg.incentiveEngine` is no
+  longer read and the Leaderboard fallback (`fetchLivePerfLeaderboard_`, `incentiveEngine_`,
+  `incentive_compare`) is deleted. **Do not add a fallback engine** — if the one source cannot
+  answer, the screen says so.
+- **GX Core sends NO thresholds**; Crew reads the scheme from kv. `lb_agrees` is **always `null`**
+  with `lb_check: 'not applicable…'`; the field is kept so nothing reading it breaks, and a scheme
+  that turns up on the payload anyway (`live.thresholds`) is ignored. **Never read `lb_agrees` for
+  truthiness** (it also surfaces as `leaderboard_agrees`) — `null` coerces to `false`. Pinned by
+  `tests/threshold_agreement_test.js`.
 
 ### A period is served from one of two places, and the payload says which
+- **`imported`** — a closed period from the 27 payout PDFs (2025-08-04 → 2026-08-16) or one Crew
+  has approved. Figures **as paid**. Read-only, never recomputed.
+- **`live`** — the performance slice plus Crew's inputs, with the math running in the browser.
+- **`practice`** is a separate field, not a third `source` (below).
 
-- **`imported`** — a closed period from the 27 payout PDFs (2025-08-04 → 2026-08-16), or one Crew
-  has since approved. Figures **as paid**. Read-only, never recomputed.
-- **`live`** — LB's slice plus Crew's inputs, with the math running in the browser so a tick
-  re-scores instantly.
+Where they overlap the **import wins**. **Never recompute a closed period** — the benchmarks have
+moved, so the PDFs are history, *not* a penny-match corpus. **Read `budtender.discountMaxPct` from
+the tray, never from a doc.**
 
-*A third exists since 2026-09-09 — **`practice`**, a rehearsal of a real fortnight stored under its
-own key in parallel tabs. It is served like a live period, or like an imported one once it has been
-approved, and never appears in any enumeration of what the company actually closed. See the practice
-pay period section below.*
+### Which period the tab opens on, and in what order
+- **With no period asked for, the tab opens on the LAST completed fortnight until it is approved,
+  then on the running one** (`defaultIncentivePeriod_`). "Approved" means **in the real history
+  tab** and nothing else — a period only *sent*, or **reopened**, keeps opening on the old one.
+- An explicit `pp_start` is honored exactly. No `cfg.payPeriodAnchor` means the running period. The
+  payload's `defaulted` says when it chose.
+- **Grouped by store is the default view**; a period change restores it. Stores are alphabetical by
+  the printed name (`incByStore`), corporate and unresolved last. **Display only — the Capstone
+  export keeps Capstone's block order.** Pinned by `tests/incentive_defaults_test.js`.
 
-Where the two overlap the **import wins** — LB offers its last 8 periods regardless, and serving one
-live would re-derive a paid fortnight against today's thresholds.
+### The practice pay period — rehearse the close without paying anybody
+A real fortnight under a different key: `practice-2026-08-17` is where rows go; `2026-08-17` is the
+fortnight fetched and scored. Real staff, real numbers.
 
-**Never recompute a closed period.** The benchmarks have already moved once: the source spreadsheet
-measured **gross** discount against a ~2.75% bar, the app measures budtender-controlled
-**discretionary** discount against whatever the settings tray holds. Same staff, same fortnight,
-7.30% and 2.81%. So the PDFs are history, *not* a penny-match corpus — run the app's formulas over
-them and they disagree, correctly.
-
-*Corrected 2026-08-31: this named Crew's bar as **1.5%**; the live value in GX Core kv
-`incentiveThresholds` is **1.0**. Sky: "my notes about 1.5 should be irrelevant, we built a setting
-that can be updated and that should be what influences the calculations." The ~2.75% stays because
-it describes the old spreadsheet, which really is frozen; Crew's own bar is a setting and naming it
-here just dates the file. Same failure as the `spiff_payouts` and `version_history` corrections
-above — a doc asserting a value nothing can contradict. Read `budtender.discountMaxPct` from the
-tray, never from this paragraph.*
-Leaderboard still has this bug in miniature: its performance figures freeze but its thresholds do
-not, so editing the discount goal re-scores every period it already paid.
-
-### Which period the tab opens on, and in what order (2026-09-14)
-
-**With no period asked for, the tab opens on the LAST completed fortnight until it is approved, then
-on the running one** (Sky: on Monday 9/14 you should see the period that just ended). On close week
-the old default was two days of a fortnight nobody is working on. `defaultIncentivePeriod_` decides;
-"approved" means **in the real history tab** and nothing else, so a period that is only *sent* — or
-was **reopened** by break glass — keeps opening on the old period, which is the one still to finish.
-Only the default moves: an explicit `pp_start` (picker, approval-email link, reload after a save) is
-honored exactly. No `cfg.payPeriodAnchor` means the running period, as before. The payload's
-`defaulted` says when it chose.
-
-**Grouped by store is the default view**, and a period change puts it back to grouped. **Managers and
-budtenders are in alphabetical store order** by the name the screen prints (`incByStore`), so a
-rename follows; corporate and unresolved stores go last, because a floater booked to corporate
-between Commercial and Hillsboro reads as a seventh store. Within a store the engine's order stands.
-Display only — the Capstone export keeps Capstone's block order.
-
-Pinned by `tests/incentive_defaults_test.js`.
-
-### The practice pay period — rehearse the close without paying anybody (2026-09-09)
-
-Approving is immutable, so until now the only way to find out whether the payroll path worked was
-to run it on a real fortnight and pay people. That blocked two things at once: verifying a change
-end to end, and *"rehearse the whole pay period close with Mike, start to finish"*, which sits
-directly below this on the build order.
-
-**It is a real pay period wearing a different key.** `practice-2026-08-17` is where the rows go;
-`2026-08-17` is the fortnight whose performance is fetched and scored. Real staff, real numbers,
-real buttons — tick attendance, import Mike's list, type a SPIFF figure, send for approval, get the
-email, approve, file the PDF, export the CSV, reopen it with break glass. The only difference is
-where the rows land. **Fake staff and invented figures would rehearse nothing**: the close is a
-judgement about whether the numbers look right, and nobody can make that judgement about names they
-do not recognize.
-
-**The isolation is the TAB, not a filter.** Every one of the five incentive tabs has a parallel
-twin — `crew_incentive_history_practice`, `crew_incentive_inputs_practice`, and so on — chosen by
-`incTab_(BASE, pp)`, the one place the suffix is ever written. The tempting version keeps the rows
-where they are and filters them out on the way past, which is one deleted line away from practice
-money inside `crew_incentive_history`: the tab somebody sums when they want to know what the company
-paid. A reader that does not know practice exists **cannot** see it, and that is every reader that
-matters — `historyPeriods_()`, the Capstone export, the digest, the payout backfill.
-
-**THE ONE WAY THIS GOES CATASTROPHICALLY WRONG is confusing the storage key with the performance
-window, and nothing about that failure is visible.** Both strings are valid period identifiers, both
-find rows, both paint a complete-looking screen.
-
-- Storage key where the window belongs → SPIFF matches no program's dates and scores **$0 for
-  everybody**, which looks exactly like a quiet fortnight for vendor money.
-- Window where the storage key belongs → a rehearsal writes attendance ticks, frozen history rows
-  and an **approval into the real pay period**. That is not a rehearsal; it is an unreviewed
-  approval nobody knows happened.
-
-So: **fetch and score against `practiceSource_(pp)`, store against `pp`** — and the SPIFF fold runs
-*before* the key is swapped in, on both `getIncentive_` and `incentiveApprove_`, in the same place,
-so the screen and the record cannot disagree about which fortnight was scored.
-`tests/practice_period_test.js` pins both directions and the ordering.
-
-**`source` KEEPS ITS TWO VALUES — `live` and `imported` — and practice is a SEPARATE field.**
-`source` answers one question: is this a live computation or a frozen record. The browser derives
-`isImported` from it, and every money path on the screen hangs off that one flag — whether
-`budCalc`/`mgrCalc` recompute a row or return the stored one, whether `paidOf` reads the frozen
-payroll, whether the attendance cell is live, whether Approve renders at all.
-
-*Corrected 2026-09-09, an hour after shipping, and it is worth keeping because the mistake was so
-tidy.* The first cut set `source: 'practice'`, which reads as an obvious third case and is a third
-value the guards do not know. An **approved** practice period is served from its history tab, so it
-came back as frozen rows relabeled `practice`; `isImported` went false; the live math ran over
-rows that carry no `target` — `HISTORY_HEADERS` has never had one — every manager scored against a
-missing goal and hit the top tier, and the screen read **$2,220** against a record frozen at
-**$970**, offering Approve on a period already approved. Nothing errored.
-
-Whose figures they are is a different question from how to read them. Two facts, two fields:
-`d.practice` is set on both shapes and is the only thing `incIsPractice` reads. And
-`can_reset_practice` is its own flag for the same reason — resetting is a ROLE question, while
-`can_edit` is a fact about the period, so gating the button on `can_edit` made it vanish at exactly
-the moment somebody wants another run-through.
-
-**`payPeriod.start` is rewritten to the key, and that is what keeps the browser ignorant.** It
-already posts `payPeriod.start` on every save, send, approve and reopen, so one rewrite in the
-engine routes all of them. The browser learns exactly two things: `incPPDate` (a key is not a date —
-the picker label and the print/export filenames parse it, and an unstripped key yields `''`, which
-is the "GX Crew.pdf" bug this file already has a section about) and `incIsPractice`.
-
-**Everything that leaves the app says PRACTICE on it**, because a document detaches from its context
-the moment somebody prints or emails it: the payout PDF's filename *and* its first line, the CSV
-filename, the email **subject** (read before the body), and a banner above the figures on screen
-that is deliberately **not** in the print stylesheet's hide list — black on white with a border, so
-a grayscale printer keeps it. The badge is red; amber already means "as paid" here and gold means "a
-person decided this", and a practice period is not a shade of either. Practice PDFs file to a
-`Practice` subfolder of the payout archive — filing them proves the Drive write works, filing them
-*beside* 28 fortnights of real payout reports does not.
-
-**Reset is the reason it is not single-use.** Approving freezes a practice period exactly as it
-freezes a real one, so without `incentive_practice_reset` the second person wanting a run-through
-would find a closed record. It deletes the practice tabs (`sheetOf_` recreates them, so a reset also
-repairs drifted headers) and **cannot be pointed anywhere else**: it builds the key itself from
-`cfg.crewPracticePeriod`, takes no period from the request, and refuses outright if any name it is
-about to clear does not end `_practice`. Editor-level, not approver-level — preparing is Mike's job
-and so is rehearsing it, and nothing here has ever paid anybody. **Reopening does not reset**: break
-glass is part of what is being rehearsed.
-
-**It mirrors the last COMPLETED fortnight** (`cfg.crewPracticePeriod` pins another) and is offered
-**last** in the picker, appended after the sort — the list is newest-first and an entry at the top
-is the one a hurried click lands on. It is always there rather than behind a flag: a rehearsal
-surface one setting away is one nobody turns on, and both things that asked for this start with
-somebody opening the screen.
+- **The isolation is the TAB, not a filter.** Each of the five incentive tabs has a `_practice`
+  twin (`crew_incentive_history_practice`, `crew_incentive_inputs_practice`, …) chosen by
+  `incTab_(BASE, pp)`, the one place the suffix is written. Never keep practice rows in the real
+  tabs and filter them out. **Practice never appears in any enumeration of what the company
+  actually closed** — `historyPeriods_()`, the Capstone export, the digest, the payout backfill.
+- **THE ONE WAY THIS GOES CATASTROPHICALLY WRONG is confusing the storage key with the performance
+  window.** Storage key where the window belongs → SPIFF scores **$0 for everybody**. Window where
+  the key belongs → a rehearsal writes ticks, frozen rows and an **approval into the real pay
+  period**. So: **fetch and score against `practiceSource_(pp)`, store against `pp`**, and the SPIFF
+  fold runs *before* the key is swapped in, on both `getIncentive_` and `incentiveApprove_`.
+  Pinned by `tests/practice_period_test.js`.
+- **`source` KEEPS ITS TWO VALUES — `live` and `imported` — and practice is a SEPARATE field.**
+  Never set `source: 'practice'`. `isImported` derives from `source` and every money path hangs off
+  it (`budCalc`/`mgrCalc`, `paidOf`, the attendance cell, whether Approve renders). `d.practice` is the only
+  thing `incIsPractice` reads. `can_reset_practice` is its own flag (a ROLE question), not
+  `can_edit`.
+- **`payPeriod.start` is rewritten to the key** in the engine; the browser knows only `incPPDate`
+  (a key is not a date — an unstripped key yields `''` and a file named `GX Crew.pdf`) and
+  `incIsPractice`.
+- **Everything that leaves the app says PRACTICE on it**: the PDF's filename *and* first line, the
+  CSV filename, the email **subject**, and an on-screen banner deliberately **not** in the print
+  hide list. The badge is red. Practice PDFs file to a `Practice` subfolder.
+- **`incentive_practice_reset`** deletes the practice tabs (`sheetOf_` recreates them) and **cannot be pointed anywhere else**:
+  it builds the key from `cfg.crewPracticePeriod`, takes no period from the request, and refuses if
+  any name it would clear does not end `_practice`. Editor-level. **Reopening does not reset.**
+- It mirrors the last COMPLETED fortnight (`cfg.crewPracticePeriod` pins another), is offered
+  **last** in the picker, and is always there rather than behind a flag.
 
 ### There are TWO implementations of the bonus math, on purpose
-
-The browser's (`calcBud`/`calcMgr`/`calcAdmin` in `crew.js`) runs on every keystroke. The engine's
-(`incCalcBud_`/`incCalcMgr_`/`incCalcAdmin_`) runs once, at approval, because a route that writes
-whatever amount the page hands it is a route where a stale tab decides payroll.
-
-**This is only acceptable because `tests/incentive_math_test.js` drives BOTH against a frozen copy
-of Leaderboard's originals** across 12,040 boundary combinations. Do not touch either without
-running it. The oracle is frozen rather than read from `../greencross-leaderboard` because that
-dashboard gets deleted — a test that dies with the thing it was checking takes the guarantee with it.
+The browser's (`calcBud`/`calcMgr`/`calcAdmin`) runs on every keystroke; the engine's
+(`incCalcBud_`/`incCalcMgr_`/`incCalcAdmin_`) runs once, at approval — a route that writes whatever
+amount the page hands it lets a stale tab decide payroll. **`tests/incentive_math_test.js` drives
+BOTH against a frozen copy of Leaderboard's originals** (12,040 boundary combinations). **Do not
+touch either without running it.** The oracle is frozen on purpose; do not point it at
+`../greencross-leaderboard`.
 
 ### Approval — Mike prepares, Sky decides
-
 ```
 draft ──send──► pending ──approve──► approved (immutable, in history)
   ▲                │
   └──send back─────┘  reason required, emailed to the preparer
 ```
+- Sending **locks the inputs** server-side for everyone, approver included. Approval is the only
+  thing that writes.
+- **`incentive_unapprove` is the break glass, and it voids rather than deletes** — rows are copied
+  to `crew_incentive_voided` with who and why. It is an approver-only **button** (same
+  `cfg.crewApprover` gate as Approve), needs a typed **reason of at least a sentence**, refused on
+  both sides, and an explicit confirm naming the period. The deploy-secret path still works.
+- **`incentive_voided` reads the trail back**; the panel diffs frozen against live.
+- **A calendar day is TEXT.** `pp_start` on the void sheet is pinned to `@` and normalized on write
+  *and* read — as a Date it never equals `2026-08-17` and the route answers "never reopened".
+- **A reopened period is not a sent-back one.** `workflow.voided` is derived server-side from the
+  `VOIDED:` prefix; the browser does not parse prose.
+- **Who approves is NOT a role check** — GX Core's roles are `viewer/editor/admin/director`, there
+  is no `owner`, and Sky and Mike hold the same grant. The approver is named in GX Core kv
+  **`cfg.crewApprover`** (`sky`; read by `approverIds_`). Unset, nobody can approve and the screen says so — failing closed beats letting the preparer
+  approve their own work.
+- Email links carry a single-use 72-hour token bound to the period **and the total that was sent**
+  (`sent_total`).
+- `?action=incentive_send&preview=1&secret=…&to=…` dry-runs the email with no state change.
 
-Sending **locks the inputs** server-side for everyone, approver included. Approval is the only thing
-that writes, which is why sending back needs no undo. **`incentive_unapprove` is the break glass**,
-and it **voids rather than deletes** — rows are copied to `crew_incentive_voided` with who and why.
+### The backup approver — always allowed, emailed only when needed
+Named in GX Core kv **`cfg.crewBackupApprover`** (`shawn`). **The backup may approve or send back ANY time.**
+What waits is his inbox — he is emailed only while:
 
-***It is a BUTTON now, approver-only — changed 2026-09-02.*** This section said "deploy-secret only,
-never a button", which was right about the risk and wrong about who carries it: the only person who
-could reopen a period was whoever had the secret and a shell, so **Sky could not correct his own
-approval without someone else running a curl for him** ("need a way to break glass and edit past
-pp's, only me"). What actually keeps it safe is who the button is for and what it costs to press —
-the same `cfg.crewApprover` gate as Approve (Mike prepares, he cannot un-pay), a typed **reason of
-at least a sentence**, refused on both sides, and an explicit confirm naming the period. A mis-click
-cannot write a sentence. The deploy-secret path still works for tooling.
-
-**`incentive_voided` reads the trail back, and until 2026-09-02 nothing could.** Every void copied
-its rows for audit and no route ever returned them, so the record of what was actually paid existed
-and could not be seen through the app. It cost a real question within hours of the first reopen —
-*"the total moved $25, who?"* — which could only be answered by opening the spreadsheet by hand. The
-panel now diffs frozen against live (as approved / as it computes now / who moved), which is the
-form the question always takes.
-
-***And the rows were unreadable for a subtler reason worth remembering:*** the void sheet stored
-`pp_start` as a **Date**, so it read back as `Mon Aug 17 2026 00:00:00 GMT-0700` and never equalled
-`2026-08-17`. The route found nothing and answered **"never reopened"** — indistinguishable from the
-truth, which is the worst thing an audit route can say. Same rule as everywhere else here: a
-calendar day is TEXT. Normalized on write (columns pinned to `@`) *and* on read, so the rows already
-written stay readable.
-
-**A reopened period is not a sent-back one.** Both sit in `draft` with a note, but one was never
-approved and the other was approved, paid, then deliberately un-paid — and the more serious of the
-two was rendering as the milder. `workflow.voided` is derived server-side from the `VOIDED:` prefix
-so the browser is not parsing prose.
-
-**Who approves is NOT a role check.** GX Core's vocabulary is `viewer/editor/admin/director` —
-there is no `owner`, and Crew is admin-only so Sky and Mike hold the same grant. The approver is
-named in GX Core kv **`cfg.crewApprover`** (currently `sky`). Unset, nobody can approve and the
-screen says so: failing closed beats a default that lets the preparer approve their own work.
-Email links carry a single-use 72-hour token bound to the period **and the total that was sent**.
-
-`?action=incentive_send&preview=1&secret=…&to=…` dry-runs the email with no state change.
-
-### The backup approver — always allowed, emailed only when needed (2026-09-15)
-
-Sky: *"Shawn as backup, but I don't want him getting the email unless he's needed."* The backup is
-named in GX Core kv **`cfg.crewBackupApprover`** (`shawn`), beside `cfg.crewApprover`.
-
-**Shawn may approve or send back ANY time.** The first cut refused him outside a window; Sky
-reversed it the same day: *"if I forget to change the setting that I'm away, and Mike does payroll,
-he can ping Shawn … Shawn is authorized to approve this and I don't want to be the bottleneck."*
-**What waits is his inbox** — he is emailed only while:
-
-- **away** — Sky switched *I'm away* on (settings tray, `approver_away`; a script property). A send
-  while away mails Shawn at once, and switching it on sweeps anything already waiting.
-- **waiting** — the period has been `pending` **4 hours** since `sent_at` (`BACKUP_AFTER_MS`). The
+- **away** — *I'm away* is on (`approver_away`, a script property). A send while away mails him at
+  once; switching it on sweeps anything already waiting.
+- **waiting** — `pending` for **4 hours** since `sent_at` (`BACKUP_AFTER_MS`). The
   `approvalEscalationSweep` trigger (every 15 min, installed by `install_triggers`) mails him once
-  per send, keyed `pp|sent_at` in a script property, so a re-send re-arms the clock.
+  per send, keyed `pp|sent_at`, so a re-send re-arms the clock.
 
-**Sky is emailed whenever the clock brings Shawn in, and whenever Shawn decides anything** — that
-notice is the control that replaced the lock, so do not drop it as noise.
+- **Sky is emailed whenever the clock brings the backup in, and whenever the backup decides
+  anything** — that notice replaced the lock; do not drop it as noise.
+- **`canApprove_` still means the PRIMARY** and gates the tray, reopening, voided figures and payroll
+  overrides. `canDecide_(auth, pp)` (primary or backup) is what approve/return use (`can_decide`).
+  The preparer is not an approver unless named.
+- **Practice periods never escalate on the clock.**
+  `?action=approval_escalate&force_pp=practice-…` (deploy-secret) forces one and refuses a real
+  period.
+- The backup's Crew grant is `editor`, so he can also edit the roster.
 
-- **`canApprove_` still means the PRIMARY** and still gates the tray, reopening, voided figures and
-  payroll overrides. `canDecide_(auth, pp)` (primary or backup) is what approve/return use; the
-  screen gets `can_decide`. The preparer is still not an approver unless named.
-- **Practice periods never escalate on the clock** — a rehearsal left pending must not page Shawn.
-  `?action=approval_escalate&force_pp=practice-…` (deploy-secret) forces one, and refuses a real period.
-- Shawn's Crew grant is `editor`: approving needs edit rights, so he can also edit the roster.
+Pinned by `tests/backup_approver_test.js`.
 
-Pinned by `tests/backup_approver_test.js` (real routes through the pay harness).
+### Two copies of one pay write at once — `withPayLock_`
+Retries make overlapping executions real. `approve`, `send`, `return`, `unapprove` and `save` take
+the script lock around **the re-check and the sheet writes only**, flush, and release.
 
-### Two copies of one pay write at once — `withPayLock_` (2026-09-14)
+- **Never widen the lock around the performance fetch, the Drive filing, the backup or an email** —
+  it is the lock every roster edit waits on. A lock it cannot get is a worded refusal that says
+  nothing was saved.
+- **One-time request ids cover a copy stalled for minutes.** `crew.js` mints one `request_id` per
+  click (`payRequestId()`) into the params object, which gx-client re-sends on every retry. The
+  engine checks and records it **inside `withPayLock_`**, in **`crew_pay_requests`** (kept 7 days);
+  a second arrival gets the first answer with `already_applied: true`, which the screen treats as
+  done. Script cache is only a hint; the sheet is the guard.
+- **Refusals decided under the lock are remembered too. Refusals returned before the lock are not**
+  (auth, missing fields, blockers) — the known limit, pinned by the test.
+- **No id = old behavior** (tooling still works). A malformed id is refused before anything runs.
+- **Never mint the id inside a retry**, or per call to a helper that retries. One id per
+  person-action.
+- `roster_retire` and `roster_merge` need neither (both converge on a keyed upsert).
+- **`?action=pay_audit` (deploy-secret, read-only)** finds duplicate people in a closed record,
+  duplicate inputs/workflow/scheme rows, and rows voided twice. It reads tabs **by position**:
+  `crew_incentive_voided` and `crew_incentive_inputs` have header rows older than their columns.
 
-The guards above ("already a closed record", "already sent for approval") stop a **replay that
-comes after** the first request. They did nothing for two copies **running at the same time**, and
-that is what a retry produces: `crew.js` sends these writes with `retries`, an Apps Script call can
-stall 18-34s before it starts and still run afterwards, and abandoning a JSONP attempt cancels
-nothing. Eight parallel `health` calls to this engine finished within 10ms of each other, so
-overlapping executions are real here. Unlocked, a pair of copies:
-
-- **approve** froze every row twice — the Capstone export would have paid everyone double;
-- **send** mailed two approval emails, the first one's Approve link already dead;
-- **reopen** deleted by row numbers the first copy had already shifted — **a later period's paid
-  rows** — and voided the period twice;
-- **save** appended a second inputs row, after which an untick or override stopped reaching the math
-  (saves update the first row, `inputsFor_` reads the last);
-- **send back** mailed the preparer twice.
-
-`approve`, `send`, `return`, `unapprove` and `save` now take the script lock around **the re-check
-and the sheet writes only**, flush, and release. **Never widen it around the performance fetch, the
-Drive filing, the backup or an email** — it is the same lock every roster edit waits on. A lock it
-cannot get is a worded refusal that says nothing was saved.
-
-**What the lock cannot fix — a request stalled for *minutes* that runs after somebody has already
-acted on its twin — is covered by one-time request ids.** A stalled Approve landing after Sky has
-reopened the period would approve it again; a stalled tick landing after an untick would re-tick.
-`crew.js` mints one `request_id` per click (`payRequestId()`) into the params object, and gx-client
-sends that same object on every retry, so **no shared-client change was needed**. The engine checks
-and records the id **inside `withPayLock_`**, in the **`crew_pay_requests`** tab (kept 7 days), and a
-second arrival gets the first answer back with `already_applied: true` — which the screen treats as
-done, not as an error. Script cache is only a fast hint at the top of a route; the sheet is the guard.
-
-- **Refusals decided under the lock are remembered too** — a click the person was told was refused
-  must not quietly succeed later. **Refusals returned before the lock are not** (auth, missing
-  fields, blockers): that is the known limit, pinned by the test so nobody assumes otherwise.
-- **No id = old behavior**, so deploy-secret tooling and a tab running an older `crew.js` still work.
-  A malformed id is refused before anything runs.
-- **Never mint the id inside a retry**, or per call to a helper that retries. One id per person-
-  action; the attendance import mints one per row.
-
-`roster_retire` and `roster_merge` need neither: both converge on a keyed upsert, and the merge's
-duplicate alias row is identical and read as a map.
-
-Pinned by `tests/pay_period_race_test.js` (two copies at once — fails against the unlocked code) and
-`tests/pay_request_id_test.js` (a copy landing after its twin — fails against the engine from before
-request ids). Both run the real routes through `tests/pay_engine_harness.js`.
-
-**`?action=pay_audit` (deploy-secret, read-only)** finds what the pre-lock race could have left:
-duplicate people in a closed record, duplicate inputs rows, duplicate workflow/scheme rows, the same
-rows voided twice. Run 2026-09-14: one hit — `amirah_montaner` has two identical inputs rows for
-2026-08-17 (written 2026-09-01, 19:21 and 19:55), a double-append race on a tick; no dollar effect,
-because the rows agree. It reads tabs **by position**, as the engine does: `crew_incentive_voided`
-and `crew_incentive_inputs` have header rows older than their columns.
+Pinned by `tests/pay_period_race_test.js` and `tests/pay_request_id_test.js`, which run the real
+routes through `tests/pay_engine_harness.js`.
 
 ### Things that silently pay the wrong amount
-
 - **SPIFF is vendor money.** In Bonus, never in Payroll, never in the export. Budtenders subtract it
   out (`bonus - spiff`); managers add it on. Same rule, opposite construction.
-- **One identity key: `employee_id`.** LB sends its own `nameKey` (`chris_carney`) and GX Core uses
-  `christopher_carney`. Keying inputs on nameKey did not fail — it found nothing, so bonuses computed
-  as if nothing had been entered. `stampEmployeeIds_` attaches the id, the legal name and the middle
+- **One identity key: `employee_id`.** The performance slice sends its own `nameKey`
+  (`chris_carney`) where GX Core uses `christopher_carney`; keying inputs on nameKey finds nothing
+  and computes as if nothing was entered. `stampEmployeeIds_` attaches the id, legal name and middle
   initial to every live row.
 - **A `merged` record is a tombstone**, still returned by `getEmployees()` and still matching on
-  name. Filter it out or history attaches to a record nothing renders. `retired` is NOT the same —
-  those people really did work those periods.
-- **`GXCore.getEmployees()` has no `display_name`**; that column is added by GX Core's *HTTP* route.
-  Match on `displayNameOf_` (which already existed — do not write a second one).
+  name. Filter it out. `retired` is NOT the same — those people really worked those periods.
+- **`GXCore.getEmployees()` has no `display_name`** (GX Core's *HTTP* route adds it). Match on
+  `displayNameOf_` — do not write a second one.
 - **`discount` is a DECIMAL on live rows and `discount_pct` a PERCENT on imported ones.** Off by
   100×, and both readings look plausible.
 - **`''` and `0` are different claims.** The oldest report has no payroll column; those rows export
   empty, because 0.00 tells payroll to pay nothing.
+- **Never give a helper a name that already exists in `Code.gs`** — a second definition silently
+  wins (`ppDaysBetween_` exists because `daysBetween_` was taken). (made explicit 2026-10-09;
+  previously implied by "What independently checks these figures")
 
 ### The settings tray — thresholds AND discount rules in GX Core
-
-**Thresholds live in GX Core kv as `incentiveThresholds`.** Deliberately **not** a `cfg.` key: that
-prefix is public on `?action=config`, and comp policy should not be readable by anyone with the URL.
-They were a Leaderboard ScriptProperty, which was wrong twice — compensation is not the kiosk's, and
-**Leaderboard's own discount coloring reads `budtender.discountMaxPct`** to decide what counts as a
-good rate on the board every staff member sees. Two copies of that number means the board grades
-people against a goal nobody set on it.
-
-Leaderboard reads GX Core → its local property → its defaults, **in that order**: an unreachable GX
-Core must keep the board scoring as it did rather than silently reverting everyone to defaults. Its
-per-execution memo is **cleared at the top of `doGet`** — Apps Script reuses warm instances, so a
-module-level global outlives the request that filled it, and without that reset a threshold edit
-appears to do nothing for minutes.
-
-**Editing is the approver's, not any editor's** — Mike prepares a period, he does not move the bar.
-
-**The tray's CSS is copied verbatim from `greencross-leaderboard/index.html`** (the `.ist-*` and
-`.inc-tray-*` blocks). Sky designed it; a rewrite was worse. The only change is a variable bridge —
-that sheet names colors `--text`/`--green`/`--border`, gx-theme names them `--gx-*` — aliased once
-and scoped to the tray. **Re-copy on any change there rather than hand-editing**, and keep the class
-names: renaming one silently unstyles a section instead of erroring.
-
-**Discount rules moved to GX Core kv `discountRules` on 2026-08-30** — same shape Leaderboard's own
-`GC_DISCOUNT_EXCL_JSON` always had, `{overrides:{"<name>":true}}`, `true` = **excluded**, i.e. does
-not count against the budtender. Read with `GXCore.getKv`; written through the secret-gated
-`?action=set_config`, exactly like the thresholds, because **there is no `GXCore.setKv`** and never
-has been. `gxSetKvViaWeb_` is the one writer for both.
-
-**The write hop to Leaderboard is gone. The read hop for the NAMES is not, and cannot be.**
-`discretionary` is derived from Leaderboard's discount **registry** — a union of Dutchie's
-`/reporting/discounts` across every store, classified automatic / loyalty / discretionary. GX Core
-holds no discount data of any kind and no Dutchie credentials, and the registry sits downstream of
-the transaction ingest that is deliberately staying in Leaderboard. Core knows the three names
-somebody has an *opinion* about; it does not know the forty that exist, so a tray rendered from Core
-alone would show three unchecked boxes and no way to switch a fourth discount off. So:
-**Leaderboard says what exists, GX Core says what counts, and where their `excluded` flags disagree
-Core wins** — LB's flags are read and discarded, which is what stops the two copies drifting back
-apart. If Leaderboard is unreachable the tray degrades to the names Core holds an override for,
-flagged `partial` with a warning that says the list is incomplete; saving still works, because the
-merge only touches names that were on screen.
-
-***The read hop moved to GX Core too, 2026-09-14.*** Leaderboard now **publishes** its registry to
-GX Core kv **`discountRegistry`** on every rebuild (LB v1.810, about twice a day), names and classes
-only, no `excluded` flags. `discountRegistry_` reads three rungs: **Core's published copy →
-Leaderboard's `/exec` → the names Core holds an override for**, and the payload's `names_from` says
-which one answered (`gx-core` / `leaderboard` / `overrides-only`). Leaderboard still *builds* the
-list — nothing else has the Dutchie credentials — but Crew no longer calls it while Core has a copy.
-
-- **Older than 14 days is still shown, with a warning naming the date** (`stale: true`). Every name
-  on a stale list is still real; what is missing is whatever Dutchie added since. It deliberately does
-  **not** fall back to Leaderboard on stale — two weeks of failed publishes is a Leaderboard problem
-  to go and look at, not a reason to quietly revive the call this replaced.
-- **An empty, unparseable or list-less Core value falls back**, it does not render an empty tray.
-- **The Leaderboard rung (`discountRegistryFromLeaderboard_`) is deleted with Leaderboard**, same as
-  `incentive_compare`.
+- **Thresholds live in GX Core kv as `incentiveThresholds`. Deliberately not a `cfg.` key** — that
+  prefix is public on `?action=config`, and comp policy must not be readable by anyone with the URL.
+- Leaderboard's discount coloring reads `budtender.discountMaxPct` from the same value, in the
+  order GX Core → its local property → its defaults; its per-execution memos (thresholds and
+  `_discCfgMemo_`) must be **cleared at the top of `doGet`**.
+- **Editing is the approver's, not any editor's.**
+- **The tray's CSS is copied verbatim from `greencross-leaderboard/index.html`** (`.ist-*`,
+  `.inc-tray-*`), with one scoped variable bridge (`--text`/`--green`/`--border` → `--gx-*`). **Re-copy on any change there rather
+  than hand-editing, and keep the class names** — a rename silently unstyles a section.
+- **Discount rules live in GX Core kv `discountRules`**: `{overrides:{"<name>":true}}`, `true` =
+  **excluded** (does not count against the budtender). Read with `GXCore.getKv`; written through the
+  secret-gated `?action=set_config`. **There is no `GXCore.setKv`.** `gxSetKvViaWeb_` is the one
+  writer for both.
+- **Names come from the registry, opinions from Core, and Core wins.** `discountRegistry_` reads
+  three rungs: **Core's kv `discountRegistry` (published by Leaderboard) → Leaderboard's `/exec` →
+  the names Core holds an override for**; `names_from` says which (`gx-core` / `leaderboard` /
+  `overrides-only`). Leaderboard's own `excluded` flags are read and discarded.
+- **Older than 14 days is still shown, with a warning naming the date** (`stale: true`); it does
+  **not** fall back to Leaderboard on stale. **An empty, unparseable or list-less Core value falls
+  back** — never render an empty tray. `overrides-only` is flagged `partial` and saving still works.
+  The Leaderboard rung (`discountRegistryFromLeaderboard_`) is deleted when Leaderboard is.
+- **The checkboxes mean COUNTED and the store holds EXCLUDED; the flip happens in the engine, never
+  the browser.** The browser posts `count=` and `off=`, **newline-separated** (names contain commas;
+  a real newline, not `'\\n'`), and only what **changed**. The engine read-merge-writes Core's map.
+- **A failed Core read REFUSES the write rather than merging onto `{}`** — `set_config` replaces the
+  whole value, so that would switch every rule back on. The retired `save=<every counted name>`
+  format is rejected with "hard-reload".
+- A Core write does not bust Leaderboard's caches; a rule change takes up to its ~6-minute TTL to
+  show on the board. No `discountrules_save` call to Leaderboard survives here; keep it so.
+- **Written 2026-08-30 and not re-verified since performance moved to GX Core — check before
+  relying on it either way:** "Until Leaderboard reads `discountRules` from Core, saving a rule in
+  Crew changes no number anywhere."
+- **Tier lists are ORDER-SENSITIVE** — matched high-to-low, first hit wins — so `thresholdProblems_`
+  refuses an ascending list by name. Ascending pays everyone the lowest tier they clear.
+- **Manager store-discount cut-offs are derived** (`goal × ⅔` and `goal`) and render as text, not
+  inputs.
 
 Pinned by `tests/discount_rules_test.js`.
 
-**The checkboxes mean COUNTED and the store holds EXCLUDED**; the flip happens in the engine, never
-the browser, because a UI posting one while displaying the other grades every budtender against the
-opposite rule and nothing about the result looks wrong. The browser posts in its own vocabulary —
-`count=` (these now count) and `off=` (these now do not), newline-separated because the names contain
-commas. It sends only what **changed**: the engine read-merge-writes Core's map, so an unsent name
-keeps the value the screen was already showing, an override for a discount no longer in the registry
-survives, and a rule somebody else edited while the tray sat open is not silently reverted. A failed
-Core read **refuses** the write rather than merging onto `{}` — `set_config` replaces the whole value,
-so that would switch every rule back on. The retired `save=<every counted name>` format is rejected
-with "hard-reload", not half-honored.
+### Hours — $/hr is per-person, but nothing fills it
+`$/hr` divides by a timecard when one is on file (`incHours_` / `incHours`), else by the flat
+`thresholds.hoursPerPeriod`. Blank, zero, negative and unparseable all fall back to the flat figure.
 
-***The separator was broken for the route's entire life.*** `crew.js` sent `join('\\n')` — a literal
-backslash-n — while the engine split on a real newline, so nothing split, the whole list arrived as
-**one string** matching no discount name, and the old inversion wrote `excluded = true` for **every
-discretionary discount**. That reads every budtender's discount rate as ~0% and pays the discount
-bonus to everyone. Evidence says it never landed: the value seeded into GX Core is exactly
-Leaderboard's three-name `DISCOUNT_SEED_EXCLUDED` constant, not forty. Fixed both ways —
-the client sends a real newline and the engine tolerates the typo *inertly*.
-
-**Two consequences of the move to watch.** (1) Leaderboard's `saveDiscountSettings_` used to bust its
-own director/standings caches; a Core write does not, so a rule change takes up to its ~6-minute TTL
-to show on the board — and LB's `_discCfgMemo_` must be cleared at the top of `doGet` the way the
-thresholds' memo is, or an edit appears to do nothing for minutes. (2) **Until Leaderboard reads
-`discountRules` from Core, saving a rule in Crew changes no number anywhere** — LB still classifies
-transactions from its own ScriptProperty, and Crew's own figures come from LB's `incentiveperf`.
-Leaderboard must cut over first.
-
-Pinned by `tests/discount_rules_test.js` — the inversion, the merge, the separator in both
-directions, Core-wins-over-LB, the refusals, and that no `discountrules_save` call survives here.
-
-**Tier lists are ORDER-SENSITIVE** — matched high-to-low, first hit wins — so `thresholdProblems_`
-refuses an ascending list *by name*. Ascending would pay everyone the lowest tier they clear, and
-nothing else in the suite would notice.
-
-**Manager store-discount cut-offs are derived** (`goal × ⅔` and `goal`) and render as text, not
-inputs: only their dollar amounts are stored, so an editable field would invite setting a value the
-math ignores.
-
-### Hours — $/hr is per-person, but nothing fills it (2026-08-30, settled 2026-09-02)
-
-`$/hr` divided every bonus by a flat `thresholds.hoursPerPeriod` (80) for everybody. It still does
-for anyone with no hours on file. When a timecard **is** on file, `incHours_` (engine) /
-`incHours` (browser) uses it instead. Blank, zero, negative and unparseable all fall back to the
-flat figure — a blank is a claim ("use the flat one"), not a gap.
-
-**`hours` was already there.** The column, the reader (`inputsFor_`) and the writer
-(`incentive_save`) all shipped with the transplant; nothing consumed it. So this was one divisor
-change plus a source of numbers, not a schema project.
-
-**The safety argument, which is the whole reason this could ship without a penny-match:** hours
-reach `$/hr` and nothing else. Not `bonus`, not `payroll`, and `$/hr` is not one of the four
-columns the Capstone export carries. `tests/incentive_math_test.js` pins that — the original
-12,040 boundary combinations still agree **exactly** with the frozen Leaderboard oracle (none of
-them set hours, which proves the extension is inert), and a new section asserts that switching
-hours on changes `$/hr` and leaves bonus, payroll and qualification byte-identical. If that ever
-fails, an imported timecard has started deciding pay.
-
-**`hr` is frozen into `crew_incentive_history` at approval, so the cutover is FORWARD-ONLY.**
-Approved periods keep the flat-80 figure they were approved with. Never backfill hours into a
-closed period — same rule as the thresholds, for the same reason.
-
-`incCalcAdmin_` takes no `inputs` and is deliberately untouched: the owner does not clock in.
+- **Hours reach `$/hr` and nothing else** — not `bonus`, not `payroll`, not the Capstone export.
+  `tests/incentive_math_test.js` pins it; if that fails, a timecard has started deciding pay.
+- **`hr` is frozen into `crew_incentive_history` at approval, so the cutover is FORWARD-ONLY. Never
+  backfill hours into a closed period.**
+- `incCalcAdmin_` takes no `inputs` and is deliberately untouched.
 
 #### SwipeClock is NOT being connected — the attendance upload is the answer (Sky, 2026-09-02)
-
-**Decided, not deferred.** The investigation found a real technical path — WorkforceHub signs
-**HS256**, which `Utilities.computeHmacSha256Signature` does natively, and `GET /api/timeCardExport`
-is the right endpoint — but every call carries an `x-integration-partner-id` that Swipeclock issues
-to **resellers**, and Green Cross is a client. Getting one means a procurement conversation with
-whoever sells us WorkforceHub, to automate a number that only ever moves a display column.
-
-Sky's call: **use the attendance report upload instead.** That is the file Mike already makes every
-pay period, it carries the judgement the clock cannot (a mis-punch caused by a coworker, a covering
-shift, PTO applied to a call-out), and it removes the actual toil. So:
-
-- **Do not chase the partner ID, and do not build the connector.** If a future session finds this
-  section and thinks "we could finish that" — that is the METRC mistake, which this repo has already
-  made once: a connector written in full, then left on the sandbox with unset keys, `metrc_health`
-  reporting "Missing keys", nothing real ever through it.
-- **`hours` stays writable and consumed but unfilled.** `incentive_save` accepts it, `incHours_`
-  divides `$/hr` by it, and nothing produces it — so `$/hr` reads the flat 80 for everybody, exactly
-  as it did before. That is not dead code: it is a live divisor with no source, and it costs one
-  function. Its own importer was built and **removed the same day** (2026-08-30), because keeping an
-  importer for a file nobody makes is the dead-code habit the avatar routes already corrected.
+- **Do not chase the partner ID, and do not build the connector.** Decided, not deferred.
+- **`hours` stays writable and consumed but unfilled** — a live divisor with no source, not dead
+  code. Do not rebuild its importer.
 - **`swipeclock_code` stays** on `ATTR_HEADERS` (append-only) with its roster card, typed by hand.
-  Nothing fills it automatically any more.
 
-### Attendance import — Mike's eligibility list (2026-08-30)
+### Attendance import — Mike's eligibility list
+**Import attendance…** reads `Attendance_Bonus_List_<period>.xlsx` (`Store, Name, Attendance
+(Yes/No), Notes`, plus a **Summary** sheet) and writes the ticks.
 
-Mike produces `Attendance_Bonus_List_<period>.xlsx` every pay period: `Store, Name,
-Attendance (Yes/No), Notes`, one row per person, ~40 rows, plus a second **Summary** sheet. Ticking
-those by hand on the incentive screen was the real recurring toil. **Import attendance…** in the
-action row reads his file and writes the ticks.
-
-**THIS ONE MOVES PAY, and that is the difference from hours.** A tick adds `attendanceBonus` to a
-budtender **and** `teamAttendancePerHead` to their store manager, both of which reach `payroll` and
-therefore the Capstone export. Hours could ship without a penny-match because they only reached
-`$/hr`; this cannot hide behind that argument, so the preview leads with **the dollar change in both
-directions** and a `confirm()` names it before anything is written.
-
-- **The money is computed the way the MATH computes it, not by counting heads.** One budtender
-  ticked is worth `attendanceBonus + teamAttendancePerHead` — $40, not $15 — unless their store has
-  no manager on the period, in which case it really is $15. `tests/attendance_import_test.js`
-  reconciles the figure on the button against `calcBud`/`calcMgr` rather than against a second
-  opinion written in the test.
-- **A "No" writes a CLEAR, it does not skip.** The list is a complete determination for the period,
-  so "No" is a claim, and somebody ticked in error has to be untickable by the same file that got it
-  right. That is the money-**removing** direction, which is why it is counted out loud.
-- **A manager's own tick pays nobody.** `incCalcMgr_` reads how many of THEIR budtenders are ticked,
-  never the manager's own `att`. Those rows are still written to match Mike's list, but they are
-  reported in their own bucket — calling them changes would overstate what the import does. Six of
-  the forty rows are exactly this.
+- **THIS ONE MOVES PAY.** A tick adds `attendanceBonus` to a budtender **and**
+  `teamAttendancePerHead` to their store manager; both reach `payroll` and the Capstone export. The
+  preview leads with **the dollar change in both directions** and a `confirm()` names it.
+- **The money is computed the way the MATH computes it, not by counting heads**
+  (`attendanceBonus + teamAttendancePerHead`, or the bonus alone where the store has no manager on
+  the period). The test reconciles against `calcBud`/`calcMgr`.
+- **A "No" writes a CLEAR, it does not skip.** The list is a complete determination.
+- **A manager's own tick pays nobody** (`incCalcMgr_` counts THEIR budtenders). Those rows are
+  written but reported in their own bucket.
 - **Rows are classified by what saving them would DO**: *will change* / *already correct* /
-  *written but changes no bonus* / *not on this pay period* / *could not read*. "Matched" as a single
-  bucket would put a manager whose tick changes nothing beside a budtender about to gain $40.
-- **Anything that is neither Yes nor No is skipped and named.** "Pending" read as No strips a bonus
-  on a word Mike had not decided. A **blank** likewise does not clear an existing tick.
-- **.xlsx is read in the browser with no library.** An xlsx is a ZIP of XML; browsers cannot unzip
-  but `DecompressionStream('deflate-raw')` is native, so `impUnzip` walks the central directory and
-  `impReadXlsx` hands the sheets to `DOMParser`. It handles **both** string storages — inline `<is>`
-  (what Mike's file uses) and pooled `sharedStrings` (what Excel writes on re-save); a reader that
-  handles only one returns a sheet of blanks for the other, which looks like an empty file rather
-  than an unread one. CSV still works.
-- **The sheet is CHOSEN, not assumed to be the first** — the Summary sheet has no Name column, and
-  reading it would import nobody and report a clean run. The one whose header names a person and a
-  yes/no wins; if no header says "attendance", a column whose *values* are all yes/no is used.
-- **Matching is name-only: exact first, then close spelling**, against both the display name and the
-  legal one — the file mixes them, saying "Mike Kettler" (the nickname) and "Robert Wydick" (the
-  legal name of the person this roster calls Nate). There is no code column in it at all. Duplicates
-  are reported, never allowed to overwrite.
-- **Close spelling (2026-09-15)** — Mike types names by hand: "Laurel Nelson" for Laural (Levy),
-  "Kristen Bailey" for Kristin (Rose). Exact-or-nothing put both in *not on this pay period*, which on
-  a Yes silently withholds a bonus. The rung is narrow on purpose: **exact surname**, first name
-  **within two letters** of the legal first name or the one they go by, **exactly one** candidate
-  (two is a guess and is never picked), and never a person some other row names exactly. Every hit
-  shows **spelling differs** in the preview. Pinned in `tests/attendance_import_test.js`.
-- **It writes through `incentive_save`**, one person at a time, so that route's existing refusals
-  (imported period, locked pending approval, role check) are the only guards. A partial run is safe:
-  whoever was written has Mike's answer and the rest keep what they had, so it reports who failed
-  rather than pretending to be atomic.
+  *written but changes no bonus* / *not on this pay period* / *could not read*.
+- **Anything that is neither Yes nor No is skipped and named.** A **blank** does not clear a tick.
+- **.xlsx is read in the browser with no library** (`impUnzip`, `impReadXlsx`,
+  `DecompressionStream('deflate-raw')`, `DOMParser`), handling **both** string storages — inline `<is>` and
+  pooled `sharedStrings`. CSV still works.
+- **The sheet is CHOSEN, not assumed to be the first** — the one whose header names a person and a
+  yes/no; else a column whose *values* are all yes/no.
+- **Matching is name-only: exact first, then close spelling**, against both the display and legal
+  name. Duplicates are reported, never allowed to overwrite.
+- **Close spelling is narrow on purpose:** **exact surname**, first name **within two letters**,
+  **exactly one** candidate (two is never picked), and never a person another row names exactly.
+  Every hit shows **spelling differs** in the preview.
 
-Verified against the real 2026-08-17 file: 40 rows → 13 changes, 17 already correct, 6 managers,
-4 not on the period, 0 unreadable, 0 missing — and **11 gaining, which is exactly what the file's own
-Summary sheet says** (`Eligible (Yes) = 11`).
-
-#### The whole list saves in ONE request — `incentive_att_batch` (2026-09-15)
-
-It used to call `incentive_save` once per person. The writes are milliseconds; the **queue in front
-of each one** is seconds, so nineteen people took a minute or two of watching a spinner. The engine
-now takes the whole list in one request: one execution, one lock, one read of the inputs tab.
-
+#### The whole list saves in ONE request — `incentive_att_batch`
 - **The refusals are the BATCH's, checked before a single row is written** — a closed period, one
-  locked pending approval, a read-only session. Half a list written into a period that should not
-  have been touched is worse than a refused one: nothing afterwards says which half.
-- **ATTENDANCE ONLY, and that is a decision.** `incentive_save` also carries spiff, hours and
-  `payroll_override`. The override is the approver's single decision about what one person was
-  paid and it needs a typed reason; a route that could set forty of them from one file is the
-  opposite of what that field is for. The batch route never reads those fields, so posting one
-  alongside the list does nothing.
+  locked pending approval, a read-only session.
+- **ATTENDANCE ONLY, and that is a decision.** The batch route never reads spiff, hours or
+  `payroll_override`.
 - **ONE request id for the whole import**, minted once in the browser, checked and recorded inside
-  the same `withPayLock_` as the writes. Forty ids would each have to be replayed separately to stop
-  a stalled copy putting the file's answer back over a tick Mike has since changed by hand.
-- **It is NOT atomic and does not claim to be.** Each person is one read-merge-write against their
-  own row; a row that cannot be written is named in `failed` and the rest still go through — the
-  same guarantee the per-person loop gave. The double-append that a race once left on this tab
-  (amirah_montaner, 2026-09-01) is impossible here by construction: an id is queued at most once and
-  every new row goes into a single appended block written after the loop.
-- **The list travels as `<id>:<1|0>` pairs**, not JSON, because this is a JSONP GET and the list
-  rides in the URL — JSON's quotes and braces triple in length once encoded, and a forty-person file
-  is real. Anything it cannot read refuses the whole batch **by name**: a person quietly dropped from
-  an attendance list is a bonus quietly withheld, which nothing downstream would ever query.
-- **The preview and its confirm are untouched.** The dollar figures in both directions are what Sky
-  approves, and they are a fact about the file, not about how the rows travel.
+  the same `withPayLock_` as the writes.
+- **It is NOT atomic and does not claim to be.** Each person is one read-merge-write; a row that
+  cannot be written is named in `failed`. An id is queued at most once and new rows go in a single
+  appended block after the loop.
+- **The list travels as `<id>:<1|0>` pairs**, not JSON. Anything unreadable refuses the whole batch
+  **by name** — a person quietly dropped is a bonus quietly withheld.
+- **The preview and its confirm are untouched.**
 
-Pinned by `tests/attendance_batch_test.js` (the batch's own rules, including a forced mid-batch
-write failure), plus the batch's sections in `tests/pay_period_race_test.js` (two copies at once) and
-`tests/pay_request_id_test.js` (a copy landing after its twin). `tests/attendance_import_test.js`
-pins the browser half: exactly one engine call, one id, and the preview and confirm unchanged.
+Pinned by `tests/attendance_batch_test.js`, `tests/attendance_import_test.js` (exactly one engine
+call, one id), and the batch sections of `pay_period_race_test.js` and `pay_request_id_test.js`.
 
-### Floaters — one person, one row (2026-09-02)
+### Floaters — one person, one row
+A floater arrives **once per store**. Split, they qualify for nothing and count toward two stores'
+attendance headcount. Sky's rule: aggregate the performance, book them to **Corporate**; their
+sales still count toward each store but **not** toward its AOV, discount or attendance.
 
-A floater picks up shifts wherever they are needed, so Leaderboard sends them **once per store**.
-Drew Phillips arrived on the 2026-08-17 period as **Portland (37 txn, $901)** and **River (24,
-$557)**. A person split in two is wrong three ways, and only the first is cosmetic:
-
-1. Listed twice on a payroll screen.
-2. **They qualify for nothing.** The transaction bar is 200; 37 and 24 each miss it, while the real
-   61 would at least be judged on its merits. Splitting a person is how they silently earn zero.
-3. They are counted toward **two** stores' team-attendance headcount — paying two managers $25 each
-   for one person showing up.
-
-Sky's rule: aggregate the performance, book them to **Corporate**, let the sales still count toward
-each store's own performance but **not** toward its AOV, discount or attendance.
-
-- **`is_floater` is a flag, deliberately NOT inferred from `home_store = 'corporate'`.** Drew sits
-  there — and so do Mike (admin) and other corporate staff who are not floaters. That is exactly the
-  trap `pay_type` was written to escape when `Admin` and `corporate` turned out to belong to hourly
-  staff too. Somebody has to say it; it is a control on the roster record.
-- **Weighted, not averaged.** Discount is a RATE (weighted by sales) and AOV a RATIO (recomputed
-  from the totals). Averaging either hands a floater a figure nobody can reproduce from the
-  transactions — on the test case a plain mean puts the discount a full point out and the AOV on the
-  wrong side of the $33 target.
-- **The attendance exclusion needed no code.** `incTeamAtt` counts budtenders whose slug matches the
-  manager's, so booking them to `corporate` removes them from every store's headcount by
-  construction. That IS the exclusion.
-- **"Sales still count toward the store" also needed no code, and this is worth stating so nobody
-  "finishes" it later.** Store sales/AOV/discount reach Crew on Leaderboard's *manager* row, already
-  aggregated there; folding budtender rows does not remove the sales from it, and Crew never derives
-  those figures from budtenders. Sky confirmed the split does not touch Leaderboard — Crew and SPIFF
-  only.
-- **Only rows that resolved to the same registry person are merged.** An unstamped row keeps its own
-  line rather than being folded on a name.
-- Folded rows carry `folded_from` and render a **merged** label, because the transaction count will
-  not match any single store's report and without the label that reads as a wrong number.
-
-**`dual_role` — the hazard that arrives with this, and it pays twice.** Mike and Tawny float
-occasionally (Sky, 2026-09-02) and **Mike is the admin row**. A floater who also holds an admin or
-manager row can appear in two sections at once: each section computes its own bonus, both land in
-the totals, and the person's sales are counted in each. Every individual figure looks defensible and
-the screen adds up. `dualRoleRows_` detects it and the screen says so in red above the tables.
-
-**Both rows pay, and that is intended** (Sky, 2026-09-02): a floater *can* earn on the shifts they
-cover. In practice they rarely will — the transaction bar is 200 and a few covered shifts do not
-reach it — so **SPIFF is the likelier earner**, being per-unit rather than gated on volume.
-
-So the notice is **informational, in gold rather than red**. It is surfaced because two bonuses for
-one person is also exactly what a **mis-attributed row** looks like, and the difference is invisible
-in the totals; naming it means the reader recognises the shape instead of discovering it while
-checking something else. It has not yet occurred on a real period.
+- **`is_floater` is a flag, deliberately NOT inferred from `home_store = 'corporate'`.**
+- **Weighted, not averaged.** Discount is a RATE (weighted by sales), AOV a RATIO (recomputed from
+  totals).
+- **The attendance exclusion and "sales still count toward the store" both need no code** —
+  `incTeamAtt` matches on the manager's slug, and store figures arrive on the *manager* row already
+  aggregated. Do not "finish" either.
+- **Only rows that resolved to the same registry person are merged.** An unstamped row keeps its
+  own line; never fold on a name.
+- Folded rows carry `folded_from` and render a **merged** label.
+- **`dual_role`:** a floater who also holds an admin or manager row appears in two sections and
+  **both rows pay, and that is intended** (Sky, 2026-09-02). `dualRoleRows_` detects it; the notice
+  is **informational, in gold**, because it is also what a mis-attributed row looks like.
 
 Pinned by `tests/floater_fold_test.js`.
 
-### What independently checks these figures, now Leaderboard is going (2026-09-11)
-
-The safety net was a penny-match against Leaderboard. **It had already stopped being one**, and that
-is the finding rather than the plan: measured that day on the PAID 2026-08-17 period the two engines
-differ by **$459 company-wide on $311,695 (0.15%)**, and `incentive_compare` keys people on names, so
-ten nicknamed staff ("Levy" / "Laural") read as present on one side only. Sky's decision: reconcile
-against Dutchie instead. Three checks, at three different layers:
-
+### What independently checks these figures
 | what | against what | when |
 |---|---|---|
-| the formulas | the frozen Leaderboard oracle, 12,040 boundary combinations | every push, already |
+| the formulas | the frozen Leaderboard oracle, 12,040 boundary combinations | every push |
 | the sales figures | **Dutchie's CLOSING REPORT**, per store (`storeTotals_`) | blocks approval + send |
 | the payouts | what the scheme can produce (`ceilingProblems_`), and 27 closed periods (`historyBand_`) | blocks / warns |
 
-- **The closing report is a DIFFERENT Dutchie source** from the per-transaction pull the figures are
-  built from (`sales_daily` ← `/reporting/closing-report`; the slice ← `dutchieTransactions`). That
-  is the whole reason this is a second opinion and not a restatement. Calibrated live: staff sums
-  agreed to **0.09% on sales and 0.9% on transactions** at all six stores across the last two closed
-  periods, and one absent seller moves a store **5-15%** — so the bars are 0.5% and 2%.
-- **Sum the `stores` map, NEVER budtenders + managers.** A manager's row carries their store's whole
-  total (the six managers summed to exactly the six store totals, $311,640.24). And the check reads
-  `live.stores` because it must run **before the floater fold** — folding books a floater to
-  `corporate`, so a post-fold sum reports every store they covered as short by that person.
-- **Three states, never truthiness:** `ok` / `mismatch` / `unchecked`. **`unchecked` blocks too** —
-  an unreadable sales cache, a short cache, an engine that sends no store totals. Acknowledged with
-  **`totals_ok=yes`**, its own flag: `coverage_ok` answers "is a store absent", this answers "do the
-  figures that arrived add up", and **neither clears the other**. Both are written into the row note.
-- **A COMPUTED payout above the scheme's maximum has nothing to acknowledge past** — it means the
-  thresholds or the calc are wrong. An **override** above it only warns: a person decided it, and the
-  email already names every override. The ceilings come from running the **shipped** calcs on a
-  best-case row, so there is no second formula to keep in step.
-- **The ceiling check sits ABOVE the dry-run return**, so "Send for approval" refuses too — a send
-  that mails figures approval will then reject burns the single-use token and reads as a link problem.
-- **The band skips periods whose payroll column is blank** (the oldest import predates it) and reads
-  the real history tab only, so a rehearsal cannot widen it. It **warns**, never blocks: 27 periods is
-  a small sample and a bigger fortnight is allowed to exist.
-- **The screen reports; only the write paths refuse.** A refusal at the moment somebody presses
-  Approve is a bad first sighting of a figure that has been wrong all fortnight. A **pass is stated
-  too**, on screen and in the email — a check visible only when it fails cannot be told apart from
-  one that has quietly stopped running.
-- **`incentive_compare` and the Leaderboard fallback are deleted** (2026-09-14, with Leaderboard's
-  incentive engine). They had already stopped being a check — they answered "do the two engines
-  agree", a known no. The three checks in the table are the whole of it now.
-
-***The $459 was first reported to Sky as $1,382, and he refused it as too large for what it was
-being blamed on — correctly.*** `incentive_compare`'s `totals` **summed three overlapping views of
-the same fortnight**: budtender rows, manager rows (which carry their **store's whole total**) and
-the admin row (the **company total** again). One $459 gap, counted three times. Fixed 2026-09-11 —
-the route now reports the three separately, refuses to add them, and `total_delta` is the admin row,
-which is one number for the whole company.
-
-**What the third party says, which is the part that matters.** Against **Dutchie's own closing
-report** for that period: **GX Core −$55 company-wide, Leaderboard +$404**. The figures people are
-paid on are the closer pair.
-
-***And the +$404 is VOIDS, not returns.*** Sky asked for it chased to the transaction level on
-2026-09-11, and Leaderboard's own source already names it: `greencross-leaderboard/dutchie_fetch.gs`
-— *"A VOID IS NOT A SALE, and seven places here forgot to say so"* — measured on **this exact
-fortnight**, **$403.93 of voided transactions counted as sales, bend alone 72.00 across two of
-them.** Cent for cent, per store, what Crew measured independently (bend +72.00, commercial +187.34,
-hillsboro +75.00, portland-rd +52.92, river-rd +16.67, center 0.00). A voided transaction is still
-typed `Retail` and carries `isVoid`; every filter there tested the type and stopped. GX Core's
-`gxIsRetail_` always had both halves.
-
-**Leaderboard fixed it on 2026-08-31 and its answer for this period will never change**, which is
-not a contradiction: `incentiveperf` serves a **frozen** closed-period snapshot
-(`GC_INC_PERF_v2_<ppStart>`), written once when the period closed — the day before the fix — and
-deliberately never recomputed. So every earlier period LB holds carries the voids permanently.
-
-**No pay was affected.** The 8/17 rows frozen in `crew_incentive_history` match GX Core store for
-store, not Leaderboard — the engine flag had already moved to `gxcore` on 2026-09-01, before the
-2026-09-02 approval. (One store reads $57.50 above what GX Core computes *today*: a return that
-settled after approval. That is what freezing is for, and it is why a closed period is never
-recomputed.)
-
-The returns explanation this section first offered was wrong, and it looked right because the
-returns GX Core sets aside happen to match the Leaderboard gap at Baseline ($75) and nowhere else.
-
-*Named `ppDaysBetween_` because `daysBetween_` was already taken* by a Date-object helper 2,400
-lines down; a second definition silently won and broke every permit-expiry reading with
-`a.getFullYear is not a function`. Caught on the first live preview after deploy.
+- The closing report is a **different Dutchie source** from the per-transaction pull (`sales_daily`
+  ← `/reporting/closing-report`; the slice ← `dutchieTransactions`) — that is what makes it a second
+  opinion. Bars: **0.5%** on sales, **2%** on transactions.
+- **Sum the `stores` map, NEVER budtenders + managers** (a manager's row carries the store's whole
+  total). The check reads `live.stores` and runs **before the floater fold**.
+- **Three states, never truthiness:** `ok` / `mismatch` / `unchecked`. **`unchecked` blocks too.**
+  Acknowledged with **`totals_ok=yes`**; `coverage_ok` is a different question and **neither clears
+  the other**. Both are written into the row note.
+- **A COMPUTED payout above the scheme's maximum has nothing to acknowledge past.** An **override**
+  above it only warns. Ceilings come from running the **shipped** calcs on a best-case row.
+- **The ceiling check sits ABOVE the dry-run return**, so "Send for approval" refuses too.
+- **The band skips periods whose payroll column is blank**, reads the real history tab only, and
+  **warns, never blocks**.
+- **The screen reports; only the write paths refuse.** A **pass is stated too**, on screen and in
+  the email.
+- **A void is not a sale** (`isVoid` on a `Retail` row); GX Core's `gxIsRetail_` tests both.
+  Leaderboard's frozen snapshots of earlier periods carry the voids permanently — do not "reconcile"
+  to them. (made explicit 2026-10-09; previously implied by "What independently checks these
+  figures")
 
 Pinned by `tests/independent_checks_test.js`.
 
-### A missing store looks exactly like a store that sold nothing (2026-09-09)
+### A missing store looks exactly like a store that sold nothing
+GX Core catches a per-store failure into `slice.errors` and answers `ok:true` with that store's
+sellers simply absent (`fetchLivePerfFromCore_`
+maps field-by-field, a short list as faithfully as a full one), and approval would freeze that.
+`incentiveBlockers_` holds the guards, beside `spiff_unreadable`. **THE DANGEROUS CASE IS ONE
+STORE, NOT ALL OF THEM.**
 
-A blip in the sales feed does not throw. GX Core catches a per-store failure into `slice.errors`,
-carries on, and answers `ok:true` with that store's sellers simply absent — and `fetchLivePerfFromCore_`
-maps a short list as faithfully as a complete one, by design (field-by-field, so a renamed field
-cannot arrive as an undefined that reads downstream as a zero). `incentiveBlockers_` guarded exactly
-two things, an open period and an unreadable SPIFF, so **approval would freeze it into
-`crew_incentive_history`**, which nothing but break glass can edit.
-
-**THE DANGEROUS CASE IS ONE STORE, NOT ALL OF THEM,** and getting that backwards is why this took a
-cross-app conversation to see. Every store failing pays $0 to everybody — conspicuous, queried,
-never approved. **One** store failing gives a screen where every person shown has entirely plausible
-figures and one store's staff are simply not on it. No total looks short, because the absent people
-never contributed to one. The only evidence is an absence, and nobody spots an absence on a payroll
-screen. There is nothing downstream to catch it, which is the whole argument for gating at the source.
-
-**The guard for the smaller risk already existed, with this exact argument.** `spiff_unreadable`
-refuses because unreadable vendor money would freeze at $0 for everyone with no way to tell
-afterwards. But SPIFF **cancels out of `payroll`** on both sides and the Capstone export carries
-payroll only — while the seller list **decides** payroll. Crew guarded the figure that never reaches
-the payroll file and left the one that *is* the payroll file open.
-
-- **`store_id`, NEVER `storeSlug`.** `storeSlug` is LEADERBOARD's vocabulary (`baseline`, `century`,
-  `portland`, `river`); `home_store` on the registry is GX Core's (`hillsboro`, `bend`,
-  `portland-rd`, `river-rd`). Only `center` and `commercial` coincide. Comparing the wrong one
-  reports **four of six stores missing on a perfectly good period, every single time**, which is how
-  a guard gets switched off in its first week. `stampEmployeeIds_` already resolves `store_id`.
-- **ACTIVE staff only, and hire dates against the PERIOD.** A closed store's people are retired, so
-  it is never expected and never cries wolf. A store that opened *after* the fortnight has active
-  staff now and sold nothing then — a fact about the calendar, not a failed fetch — so `hire_date`
-  is compared against `payPeriod.end`. Read live every time; a headcount typed in once is how these
-  decay. (core-admin's caution, and it was right: the first sketch used a constant.)
-- **Corporate is not a store.** Sky, Mike and the floaters live there, and `foldFloaters_` books
-  every floater there. A store with no sellers is a signal; corporate with no sellers is Tuesday.
-- **An unreadable registry is not a clean one.** `stampEmployeeIds_` swallowed a failed
-  `GXCore.getEmployees()` into `emps = []`, which is harmless for stamping (nobody matches,
-  `unmatched` says so) and fatal here: an empty roster means "no store expected anybody", which
-  reads as **full coverage**. `roster_stores` is `null` on a failed read and `{}` only on a real
-  empty one, and the two produce different blockers.
+- **`store_id`, NEVER `storeSlug`.** `storeSlug` is Leaderboard's vocabulary (`baseline`, `century`,
+  `portland`, `river`); `home_store` is GX Core's (`hillsboro`, `bend`, `portland-rd`, `river-rd`).
+  Only `center` and `commercial` coincide.
+  `stampEmployeeIds_` resolves `store_id`.
+- **ACTIVE staff only, and hire dates against the PERIOD** (`hire_date` vs `payPeriod.end`). Read
+  live every time; never a typed-in headcount.
+- **Corporate is not a store** — Sky, Mike and every floater (`foldFloaters_`) are booked there.
+- **An unreadable registry is not a clean one.** `roster_stores` is `null` on a failed read and
+  `{}` only on a real empty one, and the two produce different blockers.
 - **It is acknowledged, not bypassed** — `coverage_ok=yes`, same shape as `spiff_unavailable=yes`,
-  because a store really can sell nothing and payroll cannot be blocked forever on that. The
-  acknowledgement is **written into every row's note**, so the record says the figures were known to
-  be short rather than quietly claiming a store sold nothing. Neither ack clears the other.
-- **The screen reports it; only the write paths refuse.** A period missing a store is still worth
-  *preparing*, as long as it says so.
-
-**DO NOT DELETE THIS WHEN GX Core's `stores_failed` ARRIVES.** Three reasons, **ordered by how often
-they bite** — which is not the order they were found in, and the first is the whole argument:
-
-1. **A cache hit is the ORDINARY case.** GX Core caches a closed period for six hours, so most calls
-   all day are served from a stored payload — and **a stored payload can be older than the field**.
-   It carries no version stamp, so a consumer cannot tell whether it is reading today's answer or
-   one written before `stores_failed` existed. Measured live 2026-09-09: same period, minutes apart,
-   with the field on a fresh compute and without it from a pre-v313 cache entry. That window reopens
-   for six hours after **every** future GX Core cut — right after a release, the worst moment for a
-   payroll guard to quietly stop running. A check that only works on a cache **miss** is one that
-   mostly does not run, and it looks fine in every test and every dry run.
-2. ~~**`cfg.incentiveEngine` can select Leaderboard**, which sends no `stores_failed` at all.~~
-   No longer true since 2026-09-14 — the flag is not read and the Leaderboard engine is deleted.
-   Reasons 1 and 3 are enough on their own.
-3. **`stores_failed` reports a store that ERRORED.** This reports a store that returned nobody for
-   **any** reason — a credential that authenticates and hands back an empty set, a 200 with nothing
-   in it — which raises nothing anywhere.
-
-The roster check reads the registry itself and counts who arrived, so it depends on none of: the
-producer telling the truth, the producer having been asked recently, or the answer being newer than
-the field.
-
-**When `stores_failed` IS wired in beside it, read it as THREE states, never for truthiness** —
-`undefined` (not reported, or the payload predates the field) / `0` (checked, clean) / `>0` (refuse).
-Same rule this repo already paid for with `lb_agrees`, where `null` coerced to `false` made "no
-scheme arrived" and "Leaderboard disagrees" one claim for two days. GX Core's own field list carries
-this note as of v314.
+  **written into every row's note**. Neither ack clears the other.
+- **The screen reports it; only the write paths refuse.**
+- **DO NOT DELETE THIS WHEN GX Core's `stores_failed` ARRIVES.** A cached payload can be older than
+  the field and carries no version stamp, and `stores_failed` reports only a store that *errored*,
+  not one that returned nobody.
+- **When `stores_failed` IS wired in beside it, read it as THREE states, never for truthiness** —
+  `undefined` / `0` / `>0` (refuse).
 
 ### `perfForWrite_` — the row shape, in one place
+`incentiveApprove_`, the send preview and `getIncentive_` must produce identical rows, so all three
+call `perfForWrite_(pp)` (fetch with the practice window/key split, stamp, fold). **Neither write
+path fetches, stamps or folds on its own.**
 
-`incentiveApprove_` freezes the history rows; the send preview computes the total that goes in the
-approval email, and `sent_total` binds the approval token to it. So the two must produce identical
-rows — and they did it from two hand-kept copies of the same four steps.
+- **Deliberately NOT in it:** the SPIFF fold, the threshold read and the practice remap — ordered
+  differently on purpose. Do not fold them in behind a flag.
+- `incentiveProbe_` still calls `fetchLivePerf_` directly, on purpose.
 
-**They have disagreed three times, by three different mechanisms**: the floater fold missing on
-approval (2026-09-02), the same fold missing on the preview (2026-09-09), and the preview summing
-the *computed* payroll where approval sums the figure a human recorded (2026-09-02). Three breaks by
-three routes is not a run of bad luck; it is two call sites that agree only while somebody remembers
-to edit both. `perfForWrite_(pp)` does the fetch (with the practice window/key split), the stamp and
-the fold, and `getIncentive_` calls it too — the screen is not a write path, but it is what the
-approver *looks* at.
+Pinned by `tests/roster_coverage_test.js`.
 
-**What is deliberately NOT in it:** the SPIFF fold, the threshold read and the practice remap. All
-three are ordered differently on purpose — approval refuses an open period *before* paying for a
-SPIFF round trip, and the preview is allowed on an open period at all. Folding them in would mean
-reproducing those differences behind a flag, which is the two-copies problem wearing a parameter.
-This is the row **shape**, which is the thing that broke.
+### "Send for approval" never worked, and it was not the email
+- **The approver gate is on the WRITE:** `confirm === 'yes' && !canApprove_(auth)`. `incentiveSend_`
+  (the preparer's button) runs `incentiveApprove_` as its dry run, so the dry run is open to the
+  preparer; approving is still approver-only.
+- **A send that mailed nobody does not leave the period `pending`.** `wfUnsend_` puts the status
+  back and **clears the token**; a human-written note is not touched.
+- **An unreadable `cfg.crewApprover` is not an unset one.** It still fails **closed**; it says
+  *connection problem*, not "no approver is configured".
+- **Only the non-approver sees "Send for approval."** Sky gets **Approve** directly, so **Sky cannot
+  exercise the send button from his own login — Mike has to click it.**
 
-`incentiveProbe_` still calls `fetchLivePerf_` directly, on purpose: it reports the raw stages so a
-broken join can be told apart from a broken fetch.
+Pinned by `tests/approval_send_test.js` (and `tests/button_busy_test.js` for the button itself).
 
-Both pinned by `tests/roster_coverage_test.js`, which also asserts neither write path fetches,
-stamps or folds on its own.
+### The approval email understated the total, and never said a human set it
+- **Totals use `incPayroll_`, the single applier** — the figure a person **recorded**, not
+  `c.payroll`. Never copy the rule; a preview that renders different NUMBERS is worse than one
+  rendering different HTML.
+- **The email names every adjustment** — amber block, diamond, **each person named** with what the
+  math said and the reason. Never a count.
+- It reads the rows about to be written — **14 `payroll`, 18 `computed_payroll`, 19
+  `override_note`**. Those indices are positional and **`HISTORY_HEADERS` only ever appends**.
+- A dry run reads "a preview run", or pass `as=mike`.
 
-### "Send for approval" never worked, and it was not the email (2026-09-02)
-
-Sky: *"not getting the approval email, tested by me clicking and by Mike clicking, it worked
-previously."* It reads as a mail problem and it was not one — `mail_check` reported mail authorized
-with **1,477 sends of quota left**, and the last trigger send had gone out fine.
-
-**`incentiveSend_` is MIKE's button, and it ran `incentiveApprove_` as its dry run** to validate the
-period and total it. `incentiveApprove_` opened with the **approver-only gate, above the confirm
-split** — so the dry run was refused for anybody who is not the named approver, and Mike's click
-came back *"only the named approver can approve — use 'Send for approval' instead"*: an error
-telling him to press the button he had just pressed. No email was sent to anyone.
-
-**Both the gate and the dry-run call landed in the same commit (v1.330, 2026-08-27)**, so the
-hand-off has never once worked for the person it was built for. "It worked previously" is memory of
-the pre-workflow behavior.
-
-- **The gate moved to the WRITE, it did not go away.** `confirm === 'yes' && !canApprove_(auth)`.
-  Nothing above the confirm split writes anything, and a dry run returns the figures already on the
-  preparer's screen, so there is nothing to withhold from him. Approving is still approver-only.
-- **A send that mailed nobody no longer leaves the period `pending`.** This route *refuses* a period
-  that is already pending, so a failed send locked it out of ever being re-sent — recoverable only
-  by break glass. `wfUnsend_` puts the status back and **clears the token**, which matters as much:
-  the token is single-use and bound to the total sent, so a live one left behind means the next
-  legitimate send mints a second while the first still works. A human-written note is not touched.
-  The old comment argued the opposite — *"the state is already pending, which is correct — it WAS
-  sent for approval"*. It was not: nobody was told.
-- **An unreadable `cfg.crewApprover` is not an unset one.** `approverIds_` caught a failed
-  `GXCore.getKv` and returned `[]`, which every caller reported as "no approver is configured — set
-  it in the Command Center". The setting reads `sky` and is fine; the message sent whoever read it
-  to go and fix a value that was never wrong. It still fails **closed** (nobody wrongly approves);
-  it just says *connection problem* now. Same rule as the SPIFF and threshold reads.
-
-Pinned by `tests/approval_send_test.js`.
-
-### The approval email understated the total, and never said a human set it (2026-09-02)
-
-Sky previewed the 8/17 email: **$915 over 39 people**, against a frozen record of **$940 over 38**.
-
-**The $25 is Levy Nelson** (`pdf_name` *Laural Nelson*) — the override case this repo already
-documents. The preview branch summed `c.payroll`, the **computed** figure, while `incentiveApprove_`
-sums `incPayroll_(computed, i)`, the figure a person **recorded**. So the preview under-stated the
-total by every override on the period. Fixed by calling `incPayroll_` — the single applier — rather
-than copying the rule.
-
-**A preview that renders different NUMBERS is worse than one that renders different HTML**, which is
-the argument this file already makes for the shared email builder: different markup tests nothing,
-different figures look like they worked.
-
-**The email now names the adjustments** (Sky's ask). Every other figure in it is arithmetic the
-approver could re-derive; an override is the one number a **person** decided, and Approve is what
-freezes it — so it must not be discoverable only as a gold diamond inside the app. Amber block, same
-diamond as the screen, **each person named** with what the math said and the reason required at
-entry. A count would invite approving without knowing whose pay was set by hand.
-
-Read off the rows about to be written — **14 `payroll`, 18 `computed_payroll`, 19 `override_note`** —
-so what the approver is told is by construction what gets frozen. Those indices are positional and
-`HISTORY_HEADERS` only ever **appends**, for exactly this reason.
-
-*Two smaller things from the same screenshot:* a dry run read **"prepared by preview."** because the
-preview branch borrows `auth.user` and defaults it to that literal — now "a preview run", or pass
-`as=mike`. And the no-recipient preview's JSON early-return reported `overrides: 0` while its own
-rendered body named Levy correctly; the two halves of one preview disagreeing is the confusion a
-preview exists to remove.
-
-**Only the non-approver sees "Send for approval."** Sky is the approver, so he gets **Approve**
-directly — *"making Sky email himself would be ceremony, not a control"*. The consequence for
-testing: **Sky cannot exercise the send button from his own login at all.** Mike has to click it.
-
-### The Print PDF filename — `beforeprint`, not the button's click handler (2026-09-02)
-
-Chrome names a Save-as-PDF from `document.title`, so a payroll record filed itself as
-**`GX Crew.pdf`** beside archives named `Incentive Dashboard - 033026-041226.pdf`.
-
-**The naming code existed and still did not work**, because it lived inside the app's own Print
-button's handler. **Cmd+P and File > Print call `window.print()` directly** — which is how anybody
-prints a page they are already looking at — and reached the dialog with the title untouched.
-
-***Moving it to `beforeprint` was NOT enough either, and this took two goes.*** Sky printed the
-incentive dashboard and macOS's save panel still came up **`GX Crew.pdf`** — right view, right data,
-and the browser had simply **already decided the filename** by the time the event ran. Chrome and
-Safari settle the save-panel name while preparing the print preview, and `beforeprint` is not
-reliably early enough to beat that; against macOS's native panel it plainly is not.
-
-**So the title is set when the VIEW PAINTS, and there is no race left to lose.** While the incentive
-tab is open the document is genuinely called `Incentive Dashboard - 081726-083026`, from the moment
-its data lands — so every print route reads a name that has been correct for as long as the screen
-has been open. `beforeprint` stays as a backstop for a print fired between the tab opening and its
-data arriving, calling the same one function so the two cannot disagree. The tab reading the pay
-period is a mild side effect: it names what you are looking at, and goes back on the way out.
-
-Retired with it: a `setTimeout(restore, 4000)`, which existed because `afterprint` is not universal.
-A 4-second timer racing a human choosing a save folder decided the filename on **how fast they
-clicked**.
-
-It renames nothing unless the incentive slot is actually displayed (`ui.inc.style.display`), and a
-missing date yields no name rather than half of one.
-
-***The listeners are guarded on `typeof window.addEventListener === 'function'`, and that is not
-defensive noise:*** `crew.js` is loaded **in Node by six test harnesses** that stub `window` with
-only the globals the app reads at import time. These are the file's only module-scope window
-listeners, so the unguarded pair took five suites down at require time.
+### The Print PDF filename — set when the view paints
+- **`document.title` is set when the incentive VIEW PAINTS** (`Incentive Dashboard -
+  081726-083026`), because Chrome/Safari settle the save-panel name before `beforeprint`.
+  `beforeprint` stays as a backstop calling the same one function. Do not move naming into the Print
+  button's handler (Cmd+P calls `window.print()` directly), and do not reintroduce a restore timer.
+- It renames nothing unless the incentive slot is displayed (`ui.inc.style.display`); a missing
+  date yields no name.
+- **The listeners are guarded on `typeof window.addEventListener === 'function'`** — `crew.js` is
+  loaded in Node by the test harnesses. Not defensive noise.
 
 Pinned by `tests/print_name_test.js`.
 
-### The payout PDF files itself to Drive on approval (2026-09-02)
+### The payout PDF files itself to Drive on approval
+Folder **"Incentive Program Payout Reports"** (`1rQAQsRDwzh0VvUWEqytdSuNtoHAz-fYW`).
 
-Sky has saved one of these by hand every fortnight for **28 periods**, into the Drive folder
-**"Incentive Program Payout Reports"** (`1rQAQsRDwzh0VvUWEqytdSuNtoHAz-fYW`, owned by Sky).
-
-**It fires on APPROVAL, not from a button, and that is the whole design.** Approval is the moment
-the numbers stop moving: the PDF is built from `rows` — the exact array being written to
-`crew_incentive_history` — so the document, the record and the Capstone export are **one source**
-and cannot drift. A button files whatever is on screen when somebody remembers to press it, which is
-how the folder came to hold `8.3.26-8.16.26.pdf`, `07.06.26-07.19.26.pdf`, `033026-041226.pdf` and
-one saved as `...6.7.26pdf` with the dot missing. The name is derived, never typed.
-
-- **A Drive failure must never fail the approval.** By the time `filePayoutPdf_` runs the history
-  rows are written and a period cannot be approved twice — throwing would report an error for work
-  that succeeded, and the obvious retry answers *"already a closed record"*. It catches everything
-  and returns `pdf: {ok:false, error, fix}` alongside the success. Ordered **after** `wfSet_` so an
-  outage cannot leave a period in history still reading `pending`.
-- **A re-approval does not overwrite the original filing.** Reopening produces different figures on
-  purpose; the file filed at the time is part of the paper record. A name collision becomes
+- **It fires on APPROVAL, not from a button**, built from the exact `rows` written to
+  `crew_incentive_history`. The name is derived, never typed.
+- **A Drive failure must never fail the approval.** `filePayoutPdf_` catches everything and returns
+  `pdf: {ok:false, error, fix}`. It is ordered **after** `wfSet_`.
+- **A re-approval does not overwrite the original filing** — a collision becomes
   `… (reapproved YYYY-MM-DD).pdf`. Nothing is ever trashed.
-- **The folder is a constant with a `cfg.crewPayoutFolder` override**, same shape as
-  `ENGINE_URL_FALLBACK` — a failed GX Core read must not cost the filing at the exact moment the
-  record is made.
-- **A hand-set figure is marked with the ◆ diamond, not only colored** — a payroll printout in
-  greyscale still has to show which numbers a person decided.
-
-***THE SCOPE TRAP, and this one bit before.*** `DriveApp` is the **only** Drive call in the engine,
-and Apps Script **does not re-prompt** for a scope added to an already-authorized project — exactly
-the failure the `MailApp` section above cost a day on. Granting it means: revoke GX Crew at
-[myaccount.google.com/permissions](https://myaccount.google.com/permissions), then run
-`pdfSelfTest()` from the editor and accept the consent screen. **The engine is down between those
-two steps.** `?action=pdf_check` (deploy-secret) answers "is Drive working" without approving
-anything — it writes a real file and trashes it, because a permission that looks fine until the
-write is the failure it exists to catch.
-
-**`pdf_file` backfills an already-approved period** from its frozen rows, and refuses anything not
-in history — so it can only ever file a record that already exists, which is what keeps it a
-backfill rather than a second way to produce payout documents. `dry=1` reports what it would file.
-**All 27 historical periods were filed this way on 2026-09-02** (1,012 people-rows, $41,050), plus
-2026-08-17. Sky moved the hand-filed originals into an `Original/` subfolder first.
-
-***The backfill is what surfaced the blank-vs-zero bug, and it is the same rule as the export.***
-The oldest report (`gen1`, 2025-08-04) has **no payroll column** — all 37 rows carry a real bonus and
-an empty payroll. Rendered through `Number(x) || 0` that prints **$0.00 against every name and a
-$0.00 total**, which does not say "this report predates the column"; on a payroll document it says
-nobody was paid. Payroll, sales, AOV, SPIFF and bonus cells now render a blank as an em dash, and a
-period with no payroll anywhere shows the **bonus** total the source did record, with a line saying
-why. Genuine zeros still print `$0.00` — eight of that period's bonuses really are zero.
+- **The folder is a constant with a `cfg.crewPayoutFolder` override.**
+- **A hand-set figure is marked with the ◆ diamond, not only colored.**
+- **THE SCOPE TRAP:** `DriveApp` is the only Drive call, and Apps Script does not re-prompt for an
+  added scope. Granting it: revoke GX Crew at myaccount.google.com/permissions, then run
+  `pdfSelfTest()` from the editor. **The engine is down between those two steps.**
+  `?action=pdf_check` (deploy-secret) writes a real file and trashes it.
+- **`pdf_file` backfills an already-approved period** from its frozen rows and refuses anything not
+  in history; `dry=1` reports.
+- **Blank is not zero:** payroll, sales, AOV, SPIFF and bonus cells render a blank as an em dash,
+  never through `Number(x) || 0`. A period with no payroll shows the **bonus** total with a line
+  saying why. Genuine zeros still print `$0.00`.
 
 Pinned by `tests/payout_pdf_test.js`.
 
-### Backups — the whole spreadsheet, to a shared drive (2026-09-11)
+### Backups — the whole spreadsheet, to a shared drive
+`backupCrewSheet_` copies the **whole spreadsheet** (`GX Crew — HR data (PII: do not share)`) into
+the folder named by GX Core kv **`cfg.crewBackupFolder`** — a **shared drive**.
 
-*"Where is the payroll record actually backed up?"* was answered **nothing**. Every approved period
-lives in one spreadsheet (`GX Crew — HR data (PII: do not share)`) in Sky's My Drive, shared with
-nobody and copied nowhere. Sheets' version history can undo a bad write — the whole file at once, by
-hand — and the payout PDFs are a paper trail nothing reads back into rows. Nothing survived losing the
-account.
+- **Weekly**, Sunday 03:00 store time (`weeklyBackup`, installed by `install_triggers`), newest
+  **12** kept, older ones **trashed**, not deleted outright.
+- **On every real approval**, after the record and the PDF — **never rotated**. Practice periods get
+  none.
+- **No default folder.** Unset, it refuses and says so. A failed GX Core read uses the folder last
+  confirmed (`CREW_BACKUP_FOLDER` script property).
+- **Never through `crewSheet_()`**, which *creates an empty spreadsheet* when it cannot open the
+  real one. A source with no pay rows is still copied but **nothing is rotated**.
+- **A broken backup reaches a person.** `backupHealth_` fails on no folder, never run, last attempt
+  failed, or more than 8 days late, and the **Monday recap shows a red card only then**.
+  `?action=backup_check` (secret) reads it; `?action=backup_now&confirm=yes` makes one.
+- The account Crew runs as must be **Content manager or Manager** on the shared drive. **Keep that
+  drive's membership to people who may see PII** — the copy is the roster too.
 
-Now `backupCrewSheet_` copies the **whole spreadsheet** into the folder named by GX Core kv
-**`cfg.crewBackupFolder`** — a **shared drive**, Sky's call, because a shared drive belongs to the
-company and survives anything that happens to one person's account.
+Pinned by `tests/backup_test.js`.
 
-- **Weekly**, Sunday 03:00 store time (`weeklyBackup`, installed by `install_triggers`), newest **12**
-  kept, older ones **trashed**, not deleted outright.
-- **On every real approval**, after the record and the PDF — **never rotated**. A bug nobody notices
-  for three months rotates out every good weekly copy; these are what remain. Practice periods get none.
-- **No default folder**, unlike the payout PDFs. A fallback into My Drive would look like a working
-  backup while covering half the risk. Unset, it refuses and says so. A failed GX Core read uses the
-  folder last confirmed (`CREW_BACKUP_FOLDER` script property).
-- **Never through `crewSheet_()`**, which *creates an empty spreadsheet* when it cannot open the real
-  one. And a source with no pay rows is still copied but **nothing is rotated**.
-- **A broken backup reaches a person.** Every attempt is recorded; `backupHealth_` fails on no folder,
-  never run, last attempt failed, or more than 8 days late — and the **Monday recap shows a red card
-  only then**. `?action=backup_check` (secret) reads it all; `?action=backup_now&confirm=yes` makes one.
-- The account Crew runs as must be **Content manager or Manager** on the shared drive, or the copy
-  fails and the fix says so. **Keep that drive's membership to people who may see PII** — the copy is
-  the roster too, not just pay.
+### Print PDF came out blank — two print stylesheets
+**Keep `index.html` to ONE `@media print` block.** Never blanket-hide
+(`body * { visibility: hidden }`); hide named chrome. Crew's root is `.crew-inc-wrap`, not
+`.inc-wrap`. `tests/print_css_test.js` asserts nothing blanket-hides the document and that every
+`.crew-inc-*` / `.inc-*` class in a print rule is one the app renders.
 
-Needs no new permission: DriveApp and ScriptApp are both already in the grant. Pinned by
-`tests/backup_test.js`.
+### The payroll override — recording what was actually paid
+`payroll_override` **overrules** the math: a typed figure that replaces the computed one and goes
+to the Capstone export.
 
-### Print PDF came out blank — two print stylesheets, and the wrong one won (2026-09-02)
+- **Approver-only**, the only field on `incentive_save` that is. The preparer sees the flag but
+  never the pencil.
+- **A reason is required and refused if under 5 characters.** Clearing the figure clears its reason.
+- **AMBER, with a diamond** — a decision, neither good news nor an error.
+- **It is applied AFTER the calc, never inside it** (`incPayroll_` engine / `incPaid` browser).
+  `incCalcBud_`/`incCalcMgr_` stay byte-for-byte against the oracle.
+- **`null` is not `0`.** A deliberate $0 override means "paid nothing" and beats the computed
+  figure; an absent one must not.
+- **It reaches the export and the totals** — otherwise the non-zero filter drops the person from
+  the file entirely.
+- **Approval freezes BOTH numbers.** `computed_payroll` and `override_note` are **appended** to
+  `HISTORY_HEADERS`, because `incentiveUnapprove_` reads payroll as `all[i][14]`. Never insert a
+  column.
 
-There were **two `@media print` blocks** in `index.html`. The second said:
-
-```css
-body * { visibility: hidden; }
-.inc-wrap, .inc-wrap * { visibility: visible; }
-```
-
-Hide everything, then win the report back. A legitimate idiom, and it works in **Leaderboard**,
-where the incentive root really is `.inc-wrap`. **Crew's is `.crew-inc-wrap`** — the bare `inc-`
-names came over with the transplanted tray CSS and were never re-prefixed. So the first rule matched
-every element on the page, the second matched **nothing**, and the PDF was blank paper.
-
-**`visibility: hidden` on `body *` cannot be overridden by the other block**, however careful that
-one is. Two print blocks is the hazard itself: whichever is wrong simply wins, silently, in a medium
-nobody looks at until they need the document. **Keep it to one.**
-
-Deleted rather than re-prefixed — everything it reached for is handled by the surviving block, which
-hides named chrome instead of hiding the document. Its one live rule (`.crew-imp-back`) moved up.
-A second orphan, `.crew-inc-grand`, was found by the new test and removed; harmless only because it
-set a color rather than hiding the page.
-
-Pinned by `tests/print_css_test.js`, which asserts nothing blanket-hides the document **and** that
-every `.crew-inc-*` / `.inc-*` class named in a print rule is one the app actually renders — the
-prefix drift, generalized, which is the check that would have caught this the day it shipped.
-
-### The payroll override — recording what was actually paid (2026-09-02)
-
-Every other field on `crew_incentive_inputs` **feeds** the math: attendance earns a bonus, SPIFF is
-vendor money, hours divide `$/hr`. `payroll_override` **overrules** it — a typed figure that replaces
-the computed one and goes straight to the Capstone export. It is the first thing in Crew where a
-human decides what somebody was paid.
-
-**Why it had to exist, and it is Levy Nelson's case.** Reopening a paid period recomputes it against
-today's data, so somebody who cleared a bar by a hundredth of a percent in August can stop having
-cleared it in September: Levy was paid **$25** on a **1.00%** discount rate; Leaderboard now reports
-**1.04%** for that same closed fortnight, above the 1.0% ceiling, so it computes **$0**. Break glass
-could reopen her period and still could not record what she was actually paid — **the reopen was
-half a tool without this.**
-
-- **Approver-only**, and the only field on `incentive_save` that is. `att`/`spiff`/`hours` are
-  preparation, which any editor is trusted with; this is a decision about pay, which is the
-  approver's — the same split as the thresholds tray. The pencil is not rendered for anyone else,
-  because offering a control the route refuses is the worst kind of permission gate.
-- **A reason is required and refused if under 5 characters.** The whole point of recording an
-  override rather than quietly editing a threshold is that somebody reading the period next year can
-  see *why* the figure disagrees with the arithmetic. An override with no provenance reads as a bug
-  in the calculation. Clearing the figure clears its reason with it.
-- **AMBER, with a diamond.** Not green, not red — an overruled figure is neither good news nor an
-  error, it is a *decision*, and gold is what the suite already uses for "a person did this". The
-  glyph is there because a payroll printout in greyscale still has to show which figures were set by
-  hand.
-- **It is applied AFTER the calc, never inside it.** `incCalcBud_`/`incCalcMgr_` are pinned
-  byte-for-byte against the frozen Leaderboard oracle, and an override reaching inside them would
-  make that comparison meaningless. An override is not a different calculation; it is a person
-  saying the calculation does not apply to this row. `incPayroll_` (engine) / `incPaid` (browser).
-- **`null` is not `0`.** A deliberate $0 override means "paid nothing" and must beat the computed
-  figure; an absent one must not. Same rule as `spiff` and `hours`, and it matters most here.
-- **It reaches the export and the totals, or it is worse than useless.** A figure the screen honors
-  and the CSV ignores would send payroll a number nobody ever saw — both halves looking right in
-  isolation. Worse still with the non-zero filter: without the override Levy computes $0 and is
-  *dropped from the file entirely*, so a broken override does not pay her the wrong amount, it pays
-  her nothing.
-- **Approval freezes BOTH numbers.** `HISTORY_HEADERS` gained `computed_payroll` and `override_note`
-  — appended, because `incentiveUnapprove_` reads payroll as `all[i][14]` and anything inserted
-  re-points it at another column. A closed period therefore carries its own explanation instead of
-  needing one.
-
-Pinned by `tests/payroll_override_test.js`: the null-vs-zero rule, that both copies agree, that the
-math is byte-identical with and without one, that it reaches the export and the totals, that the
-bonus breakdown survives alongside the override reason, and that the preparer sees the flag but
-never the pencil.
+Pinned by `tests/payroll_override_test.js`.
 
 ### The Capstone export is THEIR shape, not ours
-
 ADMIN, then one block per store in **Capstone's order** (Century / Baseline / River / Center /
 Commercial / Portland), surname-sorted within each. **The ORDER is theirs; the LABELS are ours.**
 
-*Corrected 2026-09-09.* This said the labels were Capstone's own words — SOUTH for Commercial, BEND
-for Century, HILLSBORO for Baseline — and were "deliberately not the store registry" because a
-third party's format must not move when a store is renamed. Sky: *"the CSV export shows Commercial
-as South, it should be Commercial"*, and all three when asked. **They were never Capstone's.** They
-are the names GX used before the stores were renamed, frozen into the table and justified
-afterwards; nobody at Capstone chose "SOUTH".
+- **If a Capstone import ever rejects these rows, look at the labels first — reverting the three
+  (SOUTH for Commercial, BEND for Century, HILLSBORO for Baseline) is the whole fix.**
+- **Still a literal table, deliberately NOT read from the registry** — a store rename should make it
+  *wrong and visible*, not different and plausible. Pinned with the block order by
+  `tests/incentive_view_test.js`, whose fixture puts a person in **every** block.
+- Header column is `Bonus`; the value is payroll. Names are legal, surname first, from `full_name`
+  + `middle_initial`.
+- **On screen, stores come from the registry** — `GXStores.name(store_id)`, never the row's label.
+- **Three columns, and only people who earned something.** Anyone whose store does not resolve is
+  still exported, flagged in the **Store** cell as `UNASSIGNED (<the label they arrived with>)`.
+- **`0` is dropped; `null` is NOT.**
+- **How many were left out is reported in a toast, deliberately not in the file** — Capstone would
+  import a footer row.
 
-The hazard the old note aimed at is still real, and is why this was asked rather than assumed: the
-label is the string a third party's import matches on. **If a Capstone import ever rejects these
-rows, this is the first thing to look at, and reverting the three labels is the whole fix.**
+### What the APPROVAL path computes
+- **Approval folds SPIFF in before computing** (`applySpiffEarnings_`, then `incSpiff_`, mirroring
+  the browser's `incInput`), so the measured `spiff_earned` is used, not only a typed `spiff`. **A typed 0 still beats the measurement**; only an absent one falls
+  through.
+- **A blank spiff cell is `null`, not 0** (`inputsFor_`), same as `hours`.
+- **`approvalThresholds_` is the one threshold source for approval and the send preview, and it
+  REFUSES rather than falling back** (the screen's `getIncentive_` reads `incentiveThresholds_()`). `freezeScheme_` records the scheme actually used.
+- **An unreadable source must not freeze as an empty one.** A failed SPIFF read refuses the
+  approval; `spiff_unavailable=yes` is the acknowledgement, written into every row's note. A
+  *successful* read with no programs needs none.
 
-**Still a literal table, deliberately NOT read from the registry** — even though these are now
-exactly what `GXStores.name()` returns. A payroll file that silently re-labels itself the next time
-somebody renames a store in Command Center is the real version of what the old note feared: a store
-rename should make this table *wrong and visible*, not different and plausible. Pinned, with the
-block order, by `tests/incentive_view_test.js` — whose fixture now puts a person in **every** block,
-because a store with nobody in it cannot be seen to move, and a Century/Baseline swap sat green
-until it did. Header column is `Bonus`; the value is payroll. Names are legal names,
-surname first, from `full_name` + the `middle_initial` roster field (backfilled for 36 of 39; three
-have none). Anyone whose store does not resolve exports under `UNASSIGNED` rather than vanishing.
+### A SPIFF program belongs to ONE pay period — majority, not overlap
+`earned` is one figure for a program's whole window. Three rungs, most authoritative first:
 
-**On screen, stores come from the registry** — `GXStores.name(store_id)`, never the label the row
-arrived with. The original shows on hover.
+| rung | test |
+|---|---|
+| `pay_period` | the stored **range**'s start equals `pp_start` |
+| `exact_window` | program start **and** end equal the period's |
+| `majority` | more than half the window falls inside |
 
-**Three columns, and only the people who earned something (2026-09-02).** There was a fourth column,
-`Section`, which held `sec.label` — the same string the `Store` column already held, on every row.
-Sky: *"remove Column A, and just show non zero staff, the rest is noise."* Both halves have a catch
-worth keeping:
-
-- **The `UNASSIGNED` flag used to live in the column that was deleted.** Somebody whose store does
-  not resolve is still exported — a silent omission on a payroll file is the worst way for this to
-  fail — but the flag now goes in the **Store** cell, as `UNASSIGNED (<the label they arrived with>)`.
-  Without that move, a person owed money would have exported as an ordinary-looking row: a silent
-  *misfiling*, which is only marginally better than the silent omission.
-- **`0` is dropped; `null` is NOT.** A zero says "earned nothing" and is the noise. A null says the
-  source never recorded a payroll figure at all — which is precisely the oldest imported reports,
-  every row of which is null. Collapsing the two would export an empty file for every period before
-  that column existed.
-
-**How many were left out is reported in a toast, deliberately not in the file** — Capstone parses it
-and would try to import a footer row. It is stated rather than left to be inferred, because a short
-file and a broken filter look identical.
-
-### What the APPROVAL path was computing, and it was not what the screen showed (2026-08-31)
-
-Found the day before the first live approval, all on the one path that writes
-`crew_incentive_history` — the table that cannot be edited afterwards. None of it changed anybody's
-**pay**: SPIFF cancels out of `payroll` on both sides (`bonus - spiff` for budtenders, `payroll +
-spiff` for managers) and the Capstone export carries `payroll` only. What was wrong was the frozen
-`spiff`, `bonus` and `$/hr` columns, plus one that *would* have moved payroll.
-
-- **`incentiveApprove_` never called `applySpiffEarnings_`.** The engine's calcs read `spiff` from
-  the inputs tab alone and never looked at `spiff_earned`, so everyone whose SPIFF was **measured**
-  rather than typed — the normal case, and the entire point of reading it from SPIFF — froze at $0.
-  Fixed by folding SPIFF in before computing, and by `incSpiff_`, which mirrors the browser's
-  `incInput` exactly. **A typed 0 still beats the measurement** (zeroing a miss is a decision); only
-  an absent one falls through.
-- **A blank spiff cell was read as a deliberate $0, and this broke the SCREEN too.** `inputsFor_`
-  did `Number(r.spiff || 0) || 0`, so a blank came back as 0 and the browser treated it as an
-  override. Ticking **attendance** creates the inputs row with spiff still empty — so every person
-  with an att tick displayed $0 SPIFF on the live dashboard, not just in history. `inputsFor_` now
-  returns `null` for a blank, the same shape `hours` already used for the same reason.
-- **Approval computed against Leaderboard's thresholds; the screen computed against GX Core's.**
-  `getIncentive_` has always overridden `live.thresholds` with `incentiveThresholds_()`;
-  `incentiveApprove_` and the send preview did not. They agree while LB's own read of Core succeeds
-  — but LB falls back to its local ScriptProperty and then to its **defaults**, so the two diverge
-  exactly when Core is unreachable. **Unlike SPIFF, this moves payroll.** `approvalThresholds_` is
-  now the one source, it **refuses** rather than falling back (freezing pay against a scheme Core
-  cannot confirm is not a degradation, it is a wrong record), and `freezeScheme_` records the scheme
-  actually used. The dry run reports `leaderboard_agrees` — false is not an error, it means the
-  **board** is grading people against a different scheme from the one they are paid on.
-
-**Two refusals, one rule: an unreadable source must not freeze as an empty one.** A failed SPIFF
-read now refuses the approval instead of writing $0 for everybody; `spiff_unavailable=yes` is the
-acknowledgement, and it is written into every row's note so the record says the column is
-incomplete. A *successful* read with no programs is not a failure and needs no acknowledgement.
-
-### A SPIFF program belongs to ONE pay period — majority, not overlap (2026-08-31)
-
-SPIFF measures a program over **its own window** (`sellthrough_` runs `prog.start_date` →
-`prog.end_date`, never per fortnight), so `earned` is one figure for the whole program. Crew
-attributed it to every period the window **overlapped** — a program spanning two fortnights paid its
-full total into **both**, and the closed one showed money earned after it ended.
-
-**The match is the pay period, and majority is only the fallback** (Sky, 2026-08-31: *"let's use the
-pay period as the match. It is the thing that doesn't change and they are always linked… the program
-dates are selected by pay period ranges, so they should always match."*)
-
-**The field of that name is half the answer, and it is not a date.** `pay_period` is populated on
-some programs and blank on others, and where it is set it holds a human-readable **range**. Live
-cache, 2026-08-31: 38 rows read `"2026-08-17 - 2026-08-30"`, 25 read `""`. So it cannot be the only
-rung — a blank one would pay nobody — and **it must never be compared raw**: `stored ===
-'2026-08-17'` is false against that range. That is the same trap already recorded against
-`?action=progress`, where it made the column read **$0 for everyone**. `spiffPeriodOf_` takes the
-first date out of whatever shape is stored. The picker also fills the dates **from** the period, so
-an exact window is the link for everything the column is blank on. Three rungs, most authoritative
-first:
-
-| rung | test | when |
-|---|---|---|
-| `pay_period` | the stored **range**'s start equals `pp_start` | programs saved through the record editor |
-| `exact_window` | program start **and** end equal the period's | everything else that was picked from the dropdown |
-| `majority` | more than half the window falls inside | historical records whose dates never lined up |
-
-***Only a RANGE counts as a pay period, and that distinction is load-bearing.*** The column holds two
-different facts. The picker writes a range; the **22 programs seeded from the .docx files on
-2026-08-30 carry a single date four or five days after the program ENDED — the day it was paid out.**
-
-| program | dates | stored `pay_period` |
-|---|---|---|
-| `green-cross-test-202608` | 08-17 → 08-30 | `2026-08-17 - 2026-08-30` — the period |
-| `freshy-2026-02-02…` | 02-02 → 02-15 | `2026-02-20` — a payout date |
-| `kaprikorn-2025-11-24…` | 11-24 → 12-07 | `2025-12-12` — a payout date |
-
-**Not one of the 11 populated seed values lands on a pay-period start, while their dates are exact
-periods** (02-02 → 02-15 *is* the 2026-02-02 fortnight). An earlier cut of this read every value as
-a period start and let it win outright, which excluded those programs from **every period at once**
-— not mis-filed by a fortnight, gone, at $0, and unreported, because they are payable and their
-dates are fine so no other check looks at them. Latent only because the progress cache holds two
-programs today; the seeded ones are `closed`, and closed pays, so the first refresh including them
-would have zeroed 22 legacy vendor programs across the whole history. Caught before shipping,
-2026-08-31.
-
-**The invariant that prevents the next version of it:** a stored `pay_period` may *disambiguate*, and
-it may raise a conflict somebody can see — it may **never silently cost a program a match its dates
-alone would have earned**. A bare date is ignored and listed in
-`live.spiff.payout_date_pay_periods`, which is the cleanup that eventually makes rung 1 trustworthy
-for everything. **Those rows are counted correctly, on their dates** — the list is a cleanup queue,
-not a list of wrong numbers, and its wording says so, because read as a warning it sends somebody
-hunting a figure that is already right. It is deliberately **not** narrowed to programs that could
-still move a figure: that would hide the very records the cleanup exists for.
-
-**The cleanup is a SPIFF code change, not data entry.** `pay_period` cannot be edited from the SPIFF
-UI at all — the period picker's save key is stripped (`spiff.js:1118`), so choosing a period fills
-`start_date`/`end_date` and never writes the column, and every program write path requires a session
-token with no deploy-secret route. Don't send anyone to a screen to fix it.
-
-**A range contradicting exact dates pays ONCE — in the period the range names — and is reported on
-BOTH sides.** The second half of that is the fix, not the decoration: an earlier cut raised the
-conflict only where the *dates* pointed, which is the period that pays **nothing**. Approving the
-period the range named handed over the money with `period_conflicts: []` and nothing on the dry run
-to look at — the disagreement was invisible in the one run where money moved, which is precisely the
-decision-nobody-can-see this bag exists to prevent. `spiffIsPeriodWindow_` is what lets the paying
-side raise it: dates merely **edited** off the period are legitimate (SPIFF's own picker says *"they
-stay editable — not every program lines up with payroll"*) and must not become noise, so the warning
-fires only when the dates are exactly **another** pay period — right length *and* on the cadence,
-computed arithmetically so it still answers for 2025 dates the picker no longer reaches.
-
-`exact_window` is what separates a program that **ended on the 30th** from one that **started on the
-31st** — with no reference to status, so it holds even when nobody has closed the first one yet.
-That was the case Sky asked this for.
-
-Majority survives because Sky's older rule still applies to the back catalog — *"a historical date
-that does not line up is a typo"* — so those still pay, at more than half the window, and are named
-in `live.spiff.loose_dates` while they do. That list empties itself as the dates are corrected,
-rather than becoming a permanent warning nobody reads. `live.spiff.matched_by` counts the rungs; a
-`majority` above zero is the work remaining. Only one period can hold more than half of anything, so
-**double-counting is impossible by construction**, and a program no period owns pays in neither and
-is reported with its amount (`live.spiff.straddling`).
+- **`pay_period` must never be compared raw** — it holds a range (`"2026-08-17 - 2026-08-30"`) or
+  blank. `spiffPeriodOf_` takes the first date out of whatever is stored.
+- **Only a RANGE counts as a pay period.** A bare date is a payout date: ignored and listed in
+  `live.spiff.payout_date_pay_periods` — a cleanup queue, not a list of wrong numbers; do not narrow
+  it.
+- **Invariant: a stored `pay_period` may disambiguate and may raise a visible conflict — it may
+  never silently cost a program a match its dates alone would have earned.**
+- **The cleanup is a SPIFF code change, not data entry** — `pay_period` cannot be edited from the
+  SPIFF UI. Don't send anyone to a screen to fix it.
+- **A range contradicting exact dates pays ONCE — in the period the range names — and is reported
+  on BOTH sides** (`period_conflicts`). `spiffIsPeriodWindow_` warns only when the dates are exactly **another** pay
+  period.
+- `live.spiff.loose_dates` names majority matches, `matched_by` counts the rungs, and a program no
+  period owns pays in neither and is reported with its amount (`live.spiff.straddling`).
 
 ### `closed` means PAID OUT — the status filter that would have zeroed every approval
+SPIFF's statuses: **draft** · **active** · **closed** (*paid out*).
 
-Crew had **no status check at all** and paid any cache row whose dates lined up, which is how a
-deleted program (BeGoat, Sky 2026-08-31) reached the payout screen. SPIFF's vocabulary is exactly
-three words, from its own status picker: **draft** — not started · **active** — running now ·
-**closed** — *paid out*.
-
-**The obvious filter is the wrong one.** `status === 'active'` looks right and would zero the vendor
-column on **every period anybody ever approves**, because a period is approved *after* it ends, by
-which time its programs have closed — and a $0 there is indistinguishable from a fortnight in which
-nobody earned. So: `active` and `closed` **pay**; `draft` does not; `''` does not.
-
-`''` is not "an old cache row" — SPIFF resolves status at **read time** by joining to its `programs`
-tab, so `''` means that tab has no row for this `program_id`. It is reported by name
-(`live.spiff.not_payable`), never dropped quietly: SPIFF keeps orphans distinct from "no rows" on
-purpose, and a silent filter is where that distinction disappears. An **unrecognized** status is
-counted **and** flagged — withholding wrongly produces a $0 that hides, counting wrongly produces a
-number somebody questions.
-
-Two guards that are one deleted line from becoming silent, both pinned by
-`tests/spiff_attribution_test.js`: payability is settled **before** the window is scored (or a dead
-program that also straddles gets reported as missing money and hand-entered — the worst of the three
-outcomes), and if **no** row carries a `status` key at all the filter is skipped entirely, because a
-SPIFF deployment predating the read-time join would otherwise read every row as an orphan and
-withhold every vendor dollar.
-
-**Still SPIFF's to fix, not Crew's:** a program spanning two fortnights, and any test program left
-`active` (`green-cross-test-202608`, vendor "Green Cross", was live at the time of writing). Crew
-reports both; it does not code around them.
+- **`active` and `closed` pay; `draft` does not; `''` does not.** Never filter on
+  `status === 'active'` — a period is approved after its programs close.
+- `''` means SPIFF's `programs` tab has no row for that `program_id`; it is reported by name
+  (`live.spiff.not_payable`), never dropped quietly. An **unrecognized** status is counted **and**
+  flagged.
+- **Payability is settled before the window is scored**, and **if no row carries a `status` key at
+  all the filter is skipped entirely.** Both pinned by `tests/spiff_attribution_test.js`.
+- A program spanning two fortnights, or a test program left `active`, is **SPIFF's to fix** — Crew
+  reports both and does not code around them.
 
 ## Access
-Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a **separate
-deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
+Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a
+**separate deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
 
 ## Sync with the brain — run `/gxbrain` (or say "brain sync")
-This app is on the shared brain. **`/gxbrain`** loads the shared rules and reconciles this chat with GX
-Core. Coordination is the **central brain-notes inbox** in GX Core: `/gxbrain` reads notes addressed to
-`to_app=crew`, resolves done ones (`resolve_note`), and writes note-backs to any app (`add_note`). The
-SessionStart hook surfaces the same inbox.
+`/gxbrain` loads the shared rules and reconciles this chat with GX Core: it reads notes addressed
+to `to_app=crew`, resolves done ones (`resolve_note`), and writes note-backs (`add_note`). The
+SessionStart hook surfaces the same inbox. `deploy.sh` records the version (from `crew.js?v=N`) via
+`deploy_version`, using the untracked `.gx_deploy_secret`.
 
-App-specific facts for the sync check: app key **`crew`** in GX Core; `appsscript.json` pins `GXCore`
-at a version this file no longer names — ask `?action=health` (the `lib` field) or `./gxpins.sh --live`.
-*(It used to name one, and was wrong seven times running: **v179**, **v194**, **v203**, **v204**,
-**v211**, **v220**, **v225**. A number nothing can contradict rots the moment somebody re-pins, which
-is exactly what happened on 2026-09-09 — the line still read v225 while the app ran 306.)*
-version recorded on deploy via the shared `deploy_version` endpoint (`deploy.sh`, reading `crew.js?v=N`)
-using the shared untracked `.gx_deploy_secret`.
+**What to build next:** `/gxwhatsnext` pulls this app's prioritized work from the Command Center.
 
-**What to build next — `/gxwhatsnext`:** run `/gxwhatsnext` in this chat to pull this app's next
-prioritized work from the Command Center (dependency-ordered, filtered to `crew`). It reads the app key
-above automatically.
-
-**Close the loop when you're done:** when a dispatched or `/gxwhatsnext`-started task's goals look met,
-proactively tell Sky and **offer to ship/close it out.** Shipping (open/return the PR → `dev_update …
-status=in_review`; on merge → `dev_ship`) auto-completes the Asana to-do and clears it from the Command
-Center. Find the job via `dev_queue` (filtered to this app) when you need its id for the `curl` — but **refer to it by its `title`, never its id**. `job_mtg9vyxs_ewd9` means nothing to Sky; every job carries the to-do text in the same response the id came from, so say that instead, summarized if it's long ("the employee email column"). Same for `bug_…` and note ids. **Then re-list what's open, numbered `[1] [2] [3]…`, instead of proposing a next task** — re-fetch `action=whats_next` (the board moved while you worked) and let Sky pick by number rather than from memory.
+**Close the loop when you're done:** when a task's goals look met, tell Sky and **offer to
+ship/close it out** (PR → `dev_update … status=in_review`; on merge → `dev_ship`). Find the job via
+`dev_queue`, but **refer to it by its `title`, never its id** — same for `bug_…` and note ids.
+**Then re-list what's open, numbered `[1] [2] [3]…`, instead of proposing a next task** — re-fetch
+`action=whats_next` and let Sky pick by number.
