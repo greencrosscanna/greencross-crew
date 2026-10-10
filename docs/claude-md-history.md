@@ -1373,7 +1373,7 @@ reach it — so **SPIFF is the likelier earner**, being per-unit rather than gat
 
 So the notice is **informational, in gold rather than red**. It is surfaced because two bonuses for
 one person is also exactly what a **mis-attributed row** looks like, and the difference is invisible
-in the totals; naming it means the reader recognises the shape instead of discovering it while
+in the totals; naming it means the reader recognizes the shape instead of discovering it while
 checking something else. It has not yet occurred on a real period.
 
 Pinned by `tests/floater_fold_test.js`.
