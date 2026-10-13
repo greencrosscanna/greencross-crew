@@ -239,15 +239,44 @@ needs an explicit `mode=overwrite`. A superseded source must not be able to cont
   empty spreadsheet* when it cannot open the real one (see Backups). (made explicit 2026-10-09;
   previously implied by "Backups — the whole spreadsheet, to a shared drive")
 
-## METRC is the source of truth — once we have API access (decided 2026-08-22)
-The `metrc_*` connector is written but **not connected** (`METRC_BASE` on the sandbox,
-`METRC_USER_KEY` unset, so `metrc_health` reports "Missing keys"). Its only consumer is `metrcAccessAudit_` — **names only, no writes**.
+## METRC is the source of truth — production API access approved 2026-10-12
+The `metrc_*` connector reads Metrc's **v2** API. **Whether it is connected is a question for
+`?action=metrc_health`, not for this file** — it needs `METRC_VENDOR_KEY`, `METRC_USER_KEY` and
+`METRC_LICENSES` in Script Properties (Sky sets them by hand; no session handles the keys), and it
+says which are missing.
 
-- **API access is IN PROCESS — do not delete the connector (Sky, 2026-09-08).** Leave `METRC_BASE`
-  on the sandbox until real keys arrive. This is the opposite of SwipeClock, which was deliberately
-  abandoned.
-- When connected, METRC is the authority for `permit_number` (the export's **License Number**),
-  `permit_granted`, `permit_expires`, `permit_status`, and the **legal first + last name spelling**.
+- **Production Metrc is READ-ONLY. Crew never sends it anything but a GET.** Dutchie is the only
+  system that writes Green Cross data to Metrc. `metrcGet_` hardcodes `get` and takes no method
+  argument; do not add one, and do not add a second fetch that can reach production.
+- **`metrc_setup` and `metrc_probe` are sandbox bootstrap tools that POST, and they refuse unless
+  `METRC_BASE` is a Metrc sandbox host** (`metrcSandboxOnly_`, an allowlist — an unset base is
+  production). The evaluation they were written for is finished.
+- **`METRC_BASE` unset means production**, which is what the connector runs against. The audit and
+  the permit sync both refuse the sandbox, because it holds test data, not our staff.
+- **v2 only — "v2 keys can not use v1 calls" (Metrc, 2026-10-12).** A v2 list is
+  `{Data: […], TotalPages, …}` and is paged; read lists through `metrcGetAll_`, which throws on an
+  unexpected shape or a short read rather than returning nobody.
+- **v2 has no `IsActive` and no `Status`. "In Metrc" means listed on at least one of our
+  licenses, and that is the only signal there is** — do not reintroduce a check for either field.
+- **Two consumers.** `metrcAccessAudit_` (`metrc_access`) — names only, no writes. And the **permit
+  expiration sync** (`metrc_permit_sync`, and the 5am run): it writes **`permit_expires` only**, to
+  Crew's own `crew_attributes`, for **active** staff.
+  - **Matched on permit number.** The name (`samePerson_`) is used only for someone with no number
+    on file, and only when exactly one unclaimed Metrc person answers; anything else is reported
+    and left alone.
+  - **It changes nothing on a partial read** (any license unreadable), nothing when Metrc returns
+    nobody, and nothing when the dates already agree. An empty Metrc date never replaces one Crew
+    holds.
+  - **It does not touch the name, the permit number, `permit_status`, `permit_granted` or
+    `hire_date`, and it writes nothing to GX Core.** Do not widen it without Sky's word.
+  - **It rides the existing 5am trigger** (`nightlyDutchieScan` calls `nightlyMetrcPermitSync_`
+    after the scan) and has no trigger of its own. The run records **counts only** — never names —
+    to a script property that `metrc_health` reads back as `last_nightly_permit_sync`.
+  - The route is a **preview unless `confirm=yes`**; a write needs the deploy secret or an
+    edit-grade session.
+- METRC is the authority for `permit_number` (the export's **License Number**), `permit_granted`,
+  `permit_expires`, `permit_status`, and the **legal first + last name spelling**. Only
+  `permit_expires` is synced automatically.
 - **`hire_date` is NOT on that list. A METRC sync must leave `hire_date` alone** — METRC's *Hired*
   is the date the person was added to that license. It is plausible only for someone on **one**
   license with a non-bulk date, and even then it is a proposal for a human, not a value to write.
@@ -276,6 +305,9 @@ Core registry, and parks anyone unmatched in **`crew_pending_hires`**.
 
 - **It creates nobody.** Each find is a **`new_hire`** review item; accepting it is the only path to
   a write, and a human presses it.
+- **The same 5am trigger also runs the METRC permit-date sync, which DOES write** (one field, in
+  Crew's own sheet — see the METRC section). "Reports, never writes" is about the Dutchie scan; the
+  sync runs after it, never throws, and cannot change what the scan returns.
 - **Matching is `hrImport_`'s ladder** — exact `employee_id`, then a merge alias, then `samePerson_`
   fuzzy. Do not write a second detector.
 - **A failed Dutchie read changes nothing** — an empty read returns an error, never "no new hires".

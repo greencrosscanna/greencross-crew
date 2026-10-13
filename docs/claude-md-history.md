@@ -528,7 +528,27 @@ Related invariants worth keeping:
 - **Leading zeros need plain-text columns.** Sheets coerces `"00"` to `0`; `employee_number`,
   `birthday` and `permit_number` are pinned to `@` format, and number comparisons are numeric.
 
-## METRC is the source of truth — once we have API access (decided 2026-08-22)
+## METRC is the source of truth — production API access approved 2026-10-12
+
+*Corrected 2026-10-12. The heading used to end "once we have API access (decided 2026-08-22)", and
+the paragraphs below this note describe that waiting period; they are kept as the record of it.*
+Metrc approved production access on 2026-10-12 and told Sky in writing that "v2 keys can not use v1
+calls". The connector had been written against `/employees/v1/`, so three things changed at once:
+
+- **The reads moved to v2**, which wraps a list as `{Data, TotalPages, …}` and pages it. Read as the
+  bare array v1 returned, a v2 answer has no rows — "nobody in Metrc", which looks like good news.
+- **The per-person active flag is gone.** v2 rows carry no `IsActive` and no `Status`. The old check
+  treated a missing flag as active, so against v2 it would have answered "active" for everyone while
+  still reading like a check. Listed on a license is now the stated, and only, meaning.
+- **The two sandbox tools were fenced off from production.** `metrc_probe` re-ran the setup POST
+  against whatever `METRC_BASE` held, with nothing stopping it once that became production.
+
+The same day Sky reversed an earlier instruction not to write dates automatically — "part of the
+reason we built the metrc API pipe was to get the real data on license expirations" — so the
+permit-expiration sync was added, riding the 5am trigger. The instruction further down to "leave
+`METRC_BASE` pointed at the sandbox until real keys arrive" has run its course: real keys exist.
+
+### Before 2026-10-12
 The METRC connector (`metrc_*` routes) is written but **not connected**: `METRC_BASE` still points at
 the sandbox and `METRC_USER_KEY` is unset, so `metrc_health` reports "Missing keys" and nothing real
 has ever come through it. Today its only consumer is `metrcAccessAudit_`, which answers "are retired
