@@ -147,7 +147,10 @@ console.log('\nPrint\n');
      /\.crew-inc-todate\b/.test(hide));
   const js = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
   ok('rendered in the title row, beside the Incentive badge',
-     /'<\/span>' \+ incToDateHtml\(d\.to_date\) \+ '<\/div>'/.test(js));
+     /'<\/span>' \+ \(storeId \? '' : incToDateHtml\(d\.to_date\)\) \+ '<\/div>'/.test(js));
+  /* The to-date chips total the WHOLE company; on a one-store page they would read as that store's. */
+  ok('and left off the one-store view, where they would be read as the store\'s own',
+     /storeId \? '' : incToDateHtml/.test(js));
 }
 
 console.log(fail ? '\n' + fail + ' FAILED\n' : '\nall passed\n');
