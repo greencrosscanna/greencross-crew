@@ -64,7 +64,8 @@ ok('no pay-period anchor configured → running period, the old behavior', pick(
 const body = ENGINE.slice(ENGINE.indexOf('function getIncentive_('));
 const head = body.slice(0, body.indexOf('isPracticePeriod_(want)'));
 ok('getIncentive_ only defaults when NO period was asked for',
-   /if \(!want\) \{\s*want = defaultIncentivePeriod_\(importedBy\);/.test(head));
+   /* It is handed the request's one calendar since 2026-10-13 (tests/period_list_speed_test.js). */
+   /if \(!want\) \{\s*want = defaultIncentivePeriod_\(importedBy, cal\(\)\);/.test(head));
 ok('the default is chosen BEFORE any branch reads `want`', head.indexOf('defaultIncentivePeriod_') > 0);
 ok('the payload says why it chose the period (`defaulted`)', /live\.defaulted = defaulted;/.test(body));
 

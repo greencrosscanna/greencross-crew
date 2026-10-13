@@ -464,8 +464,22 @@ the tray, never from a doc.**
   period as open after a write whose bust failed, and after any hand edit of the sheet — and busting
   it would mean adding code inside approve and reopen. Do not add one without Sky's word.
 
-Pinned by `tests/incentive_read_speedup_test.js`, which loads the whole engine and drives its real
-router; `scripts/prove-incentive-read-red.js` is its mutation proof (`CODE_GS`).
+- **One pay-period calendar per screen request, and it is a LOCAL.** `getIncentive_` builds
+  `computedPeriods_()` at most once and passes it to `defaultIncentivePeriod_`, `periodList_` and
+  `practiceSourceStart_` as a function argument. Do not hoist it to a module variable or a cache.
+- **The live screen hands `approvalCover_` the workflow row it just read**
+  (`{ __screen: true, wf }`), so the backup's window is not a second read of the tab. `canDecide_`
+  is not handed it — approve and send-back read their own.
+- **The `periods` stage was never the list.** It was three GX Core settings (`cfg.crewApprover`,
+  `cfg.crewBackupApprover`, `cfg.crewPracticePeriod`), each a whole kv-tab read when GX Core's
+  60-second `getKv` cache has aged out. They are now timed apart as `approver`, `approval_cover`
+  and `periods`, and `sheet_open` is timed apart from `history`. Making three cold settings cost
+  one tab read is a GX Core library change, not something Crew can do without a cache.
+
+Pinned by `tests/incentive_read_speedup_test.js` and `tests/period_list_speed_test.js`, which load
+the whole engine (`tests/whole_engine_harness.js`) and drive its real router;
+`scripts/prove-incentive-read-red.js` and `scripts/prove-period-list-red.js` are their mutation
+proofs (`CODE_GS`).
 
 ### Which period the tab opens on, and in what order
 - **With no period asked for, the tab opens on the LAST completed fortnight until it is approved,
