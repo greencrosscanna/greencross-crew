@@ -1250,7 +1250,36 @@ function crewSheet_() {
  * there is nothing there to lose. "No sheet yet" and "the sheet I was told about is unreachable"
  * are different questions, and only the first one has a safe automatic answer.
  */
-function crewSheetPrepare_() {
+/* THE PLAIN-TEXT PIN IS A WRITER'S JOB, NOT A READER'S (2026-10-13).
+ *
+ * Sheets turns "00" into the number 0 — and "05-19" into a date — the moment either lands in a cell
+ * that is not plain text. The owner's employee number is 00. So `employee_number`, `birthday` and
+ * `permit_number` are pinned to `@`.
+ *
+ * That pin used to be re-applied by EVERY request, on the first touch of the workbook: three
+ * whole-column format WRITES on requests that only read. Measured live at 0.36-0.70s per request.
+ * And it bought a reader nothing: formatting a cell that already holds the number 0 makes it the
+ * text "0", never "00" again. What it protects is the NEXT WRITE — so it is applied where a write is:
+ *
+ *   forWrite === true   writeAttrs_, the one function that writes a row to this tab, asks for the
+ *                       tab this way immediately before every write. The pin is applied then,
+ *                       every time, by header NAME (a column somebody moved or inserted is found
+ *                       where it now is), with no flag or memo saying "already done" — a restored
+ *                       backup, a new workbook or a hand-cleared format invalidates any such flag
+ *                       silently, and re-applying is the only check that cannot be stale.
+ *   a NEW tab           is pinned as it is created, before any row exists. It was not, before: the
+ *                       branch below returned a brand-new tab unformatted. That never bit, because
+ *                       every writer reads the tab first and the read is what created it — but a
+ *                       writer that did not would have stored its first "00" as 0.
+ *   everything else     (reads) gets the tab as it is. Nothing is written to it.
+ *
+ * READS DO NOT NEED THE PIN. Numbers are compared numerically (assignNumbers_, setNumber_), permits
+ * through metrcPermitKey_, and normBirthday_ reads a date-coerced cell as the day it holds.
+ *
+ * `forWrite` is a FUNCTION ARGUMENT compared with `=== true`. crewSheet_() passes nothing.
+ * tests/attr_text_pin_test.js fails if anything but writeAttrs_ writes to this tab, if a write lands
+ * before its pin, or if a read-only request writes anything here at all. */
+function crewSheetPrepare_(forWrite) {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(CREW_SHEET_ID_PROP);
   var ss;
@@ -1273,10 +1302,19 @@ function crewSheetPrepare_() {
     props.setProperty(CREW_SHEET_ID_PROP, ss.getId());
   }
   var sh = ss.getSheetByName(ATTR_TAB);
+  /* Sheets turns "00" into the number 0 unless the column is explicitly plain text. Reserved
+     numbers like the owner's 00 have to survive the round trip. By header name, whole column. */
+  var pinText = function (headers) {
+    ['employee_number', 'birthday', 'permit_number'].forEach(function (h) {
+      var c = headers.indexOf(h);
+      if (c >= 0) sh.getRange(2, c + 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
+    });
+  };
   if (!sh) {
     sh = ss.insertSheet(ATTR_TAB);
     sh.getRange(1, 1, 1, ATTR_HEADERS.length).setValues([ATTR_HEADERS]).setFontWeight('bold');
     sh.setFrozenRows(1);
+    pinText(ATTR_HEADERS);     // a new tab is pinned before it can hold a row, whoever asked for it
     return sh;
   }
   // Migrate in place when ATTR_HEADERS grows. Appending only — existing columns keep their
@@ -1288,12 +1326,8 @@ function crewSheetPrepare_() {
     sh.getRange(1, have.length + 1, 1, missing.length).setValues([missing]).setFontWeight('bold');
     have = have.concat(missing);
   }
-  // Sheets turns "00" into the number 0 unless the column is explicitly plain text. Reserved
-  // numbers like the owner's 00 have to survive the round trip, so pin the format once.
-  ['employee_number', 'birthday', 'permit_number'].forEach(function (h) {
-    var c = have.indexOf(h);
-    if (c >= 0) sh.getRange(2, c + 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@');
-  });
+  // Only a caller about to WRITE pays for the pin — see the note above this function.
+  if (forWrite === true) pinText(have);
   return sh;
 }
 
@@ -1340,8 +1374,11 @@ function writeAttrs_(rec) {
     /* A WRITE PREPARES THE SHEET FRESH, not from the per-request memo. Preparing re-applies the
        plain-text format down to the sheet's current last row — the thing that keeps employee number
        "00" from becoming 0 — and a bulk import appends person after person in one request, so each
-       write must see the rows the previous one added. Reads are what the memo is for. */
-    var sh = _crewSheetMemo_ = crewSheetPrepare_();
+       write must see the rows the previous one added. Reads are what the memo is for.
+       `true` IS WHAT ASKS FOR THE PIN, and this is the only place it is passed: every row written to
+       this tab comes through here, so every write is preceded by it. Do not drop the argument, and
+       do not write to this tab from anywhere else. */
+    var sh = _crewSheetMemo_ = crewSheetPrepare_(true);
     var last = sh.getLastRow();
     var targetRow = 0;
     if (last >= 2) {
@@ -1438,7 +1475,17 @@ function normBirthday_(v) {
   var m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)      // YYYY-MM-DD → drop the year
        || s.match(/^()(\d{1,2})-(\d{1,2})$/)            // MM-DD
        || s.match(/^()(\d{1,2})\/(\d{1,2})$/);          // M/D
-  if (!m) return '';
+  if (!m) {
+    /* A CELL SHEETS TURNED INTO A DATE. "05-19" typed into a birthday cell that is not plain text
+       is stored as a date, and readAttrs_ hands it back as "Tue May 19 2026 00:00:00 GMT-0700
+       (Pacific Daylight Time)" — which none of the three shapes above matches, so the birthday read
+       as blank. The month and day are right there in that text. Read off the TEXT, never through
+       getMonth(): the text is already in the script's zone, and a Date rebuilt from it and asked
+       again in another zone is how a birthday moves a day. The year is discarded, as always. */
+    var dm = s.match(/^[A-Z][a-z]{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) \d{4} \d{2}:\d{2}:\d{2} GMT/);
+    if (!dm) return '';
+    m = ['', '', String(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(dm[1]) + 1), dm[2]];
+  }
   var mo = Number(m[2]), da = Number(m[3]);
   if (mo < 1 || mo > 12 || da < 1 || da > 31) return '';
   return pad2_(mo) + '-' + pad2_(da);
@@ -4785,6 +4832,13 @@ function nightlyDutchieScan() {
      field, in Crew's own sheet); see the block above metrcPermitPlan_ for exactly what and why
      that is safe unattended. What it did is readable at ?action=metrc_health. */
   nightlyMetrcPermitSync_();
+  /* AND THE PLAIN-TEXT PIN, ONCE A NIGHT, FOR HANDS IN THE SHEET (2026-10-13). Every write Crew makes
+     pins the three columns first, so Crew's own writes never need this. It is here for the one case
+     that used to be covered by accident, when every page load re-applied the pin: somebody clears a
+     column's format in the workbook by hand and then TYPES into it before Crew next writes. This
+     puts the format back within a day instead of within a page load. It cannot throw into the scan
+     and cannot change what the scan returns; the workbook is reached the guarded way, as always. */
+  try { crewSheetPrepare_(true); } catch (e) {}
   return out;
 }
 

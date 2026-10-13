@@ -60,7 +60,9 @@ console.log('\nEngine: the 11 seconds, trimmed (2026-09-15)\n');
   C.reset(); C.crewSheet_();
   ok('…and again after a reset', prepared === 2);
   ok('an attrs WRITE prepares the sheet fresh, so a bulk import keeps "00" formatted as text on every new row',
-     /var sh = _crewSheetMemo_ = crewSheetPrepare_\(\);/.test(fnSrc(GS, 'writeAttrs_')));
+     /* `true` asks for the plain-text pin, which only a write gets since 2026-10-13 — the round trip
+        itself is run in tests/attr_text_pin_test.js, against a sheet that coerces. */
+     /var sh = _crewSheetMemo_ = crewSheetPrepare_\(true\);/.test(fnSrc(GS, 'writeAttrs_')));
   ok('route_ resets the memo before doing anything else — a warm instance must not carry it',
      /function route_\(e\) \{\s*_crewSheetMemo_ = null;/.test(GS));
 

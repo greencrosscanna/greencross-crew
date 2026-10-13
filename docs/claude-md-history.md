@@ -583,6 +583,46 @@ Related invariants worth keeping:
 - **Leading zeros need plain-text columns.** Sheets coerces `"00"` to `0`; `employee_number`,
   `birthday` and `permit_number` are pinned to `@` format, and number comparisons are numeric.
 
+### The plain-text pin moved off the read path (2026-10-13)
+
+`crewSheetPrepare_` re-applied the `@` format to those three whole columns on the first touch of
+the workbook in **every** request. The split of `sheet_open` from `history` put a number on it:
+0.36 to 0.70 seconds on each of three live incentive loads, and it was on every roster load too.
+Three format writes per request, on requests that only read.
+
+**It bought a reader nothing.** Formatting a cell that already holds the number 0 makes it the text
+`"0"`, not `"00"`. The pin protects the *next write*, and the writer already re-prepared the sheet
+for itself: `writeAttrs_` has called `crewSheetPrepare_` fresh before every write since the
+per-request memo was added on 2026-09-15. So the read-path pin was a second copy of a guard whose
+first copy was always the one doing the work.
+
+**What changed.** `crewSheetPrepare_(forWrite)` pins only when `forWrite === true`, which only
+`writeAttrs_` passes; and it pins a new tab as it creates it. `writeAttrs_` is the single writer of
+the tab — six callers (`setNumber_`, `assignNumbers_`, `saveRosterAttrs_`, `mergeEmployees_`,
+`hrImport_`, `metrcPermitSyncRun_`) — so every row written is still preceded by the pin, by header
+name, with nothing remembered.
+
+**Two things found on the way:**
+
+- *A new tab was returned unformatted.* It never bit: every writer reads the tab first, the read
+  created it, and the writer's own prepare then found it and pinned it. But a writer that had not
+  read first would have stored its first `00` as `0`. Closed by pinning on creation.
+- *One read did lean on the format.* `normBirthday_` could not read a birthday Sheets had turned
+  into a date (`readAttrs_` hands it back as `Tue May 19 2026 00:00:00 GMT-0700 …`), so it read as
+  blank and the person was flagged as having no birthday. It now takes the month and day off that
+  text. Every other comparison was already format-independent: `parseInt` for employee numbers,
+  `metrcPermitKey_` for permits.
+
+**What is weaker, stated rather than discovered:** if somebody clears a column's format in the
+workbook by hand and then *types* a leading-zero value into it before Crew next writes, Sheets
+coerces it. Before, the next page load would have re-pinned the column, by accident of where the pin
+lived. Now the nightly 5am run re-pins it, so the window is up to a day instead of up to a page
+load. Crew's own writes are not affected — each pins first.
+
+**Not measured live.** The test counts format writes per read request (3 before, 0 after, on 14 of
+18 read-only requests) against a fake sheet that coerces the way Sheets does. The real saving is
+whatever `sheet_open` reads in `./gxcrewstats.sh` after this is deployed.
+
 ## METRC is the source of truth — production API access approved 2026-10-12
 
 *Corrected 2026-10-12. The heading used to end "once we have API access (decided 2026-08-22)", and
