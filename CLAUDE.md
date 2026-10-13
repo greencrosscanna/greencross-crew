@@ -165,6 +165,10 @@ breakdown for `incentive_approve.dry` / `.confirm`, `incentive_send.send` / `.pr
 Pinned by `tests/request_timing_test.js`; `scripts/prove-request-timing-red.js` removes one guard at
 a time on a scratch copy (`CODE_GS`), and a removal that costs zero assertions is a failure.
 
+**To read it: `./gxcrewstats.sh [hours] [--flush]`** from the repo root — read-only, prints routes,
+stages, counts and milliseconds and nothing else the route might send (`tests/crew_stats_tool_test.js`,
+`tests/crew_stats_tool_shell_test.js`).
+
 ## Sign-in runs on Crew's OWN engine
 The `login` route calls `GXCore.login` **in-process**, so sign-in does not queue behind GX Core's
 shared `/exec`.
