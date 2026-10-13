@@ -291,7 +291,10 @@ const WRITE_FNS = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'i
                    'applySpiffEarnings_', 'spiffProgressFor_', 'fetchLivePerfFromCore_', 'stampEmployeeIds_', 'approvalThresholds_',
                    'incentiveBlockers_', 'storeTotals_', 'historyBand_', 'historyPeriods_', 'inputsFor_', 'readTab_', 'sheetOf_',
                    'canDecide_', 'canApprove_', 'approverIds_', 'backupApproverIds_', 'backupWindow_', 'approverAway_', 'computedPeriods_',
-                   'escalateApprovals_', 'wfApproverEmails_', 'wfBackupEmails_', 'incentiveHistory_', 'crewSheet_', 'crewSheetPrepare_'];
+                   /* crewSheetPrepare_ was on this list and came off on 2026-10-13, when the plain-text
+                      pin moved from every request to the writer: it legitimately changed, and
+                      tests/attr_text_pin_test.js now holds what it must and must not do. */
+                   'escalateApprovals_', 'wfApproverEmails_', 'wfBackupEmails_', 'incentiveHistory_', 'crewSheet_'];
 function fnText(src, name) {
   const i = src.indexOf('\nfunction ' + name + '(');
   if (i < 0) return null;

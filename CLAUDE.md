@@ -268,6 +268,19 @@ needs an explicit `mode=overwrite`. A superseded source must not be able to cont
   write blanks `dutchie_employee_id` (SPIFF/Leaderboard attribution) and `user_id` (email link).
 - **Leading zeros need plain-text columns.** Sheets coerces `"00"` to `0`; `employee_number`,
   `birthday` and `permit_number` are pinned to `@`, and number comparisons are numeric.
+  - **The pin is the WRITER's job.** `writeAttrs_` is the only function that writes the attributes
+    tab, and it asks for the tab with `crewSheetPrepare_(true)` immediately before every write; a
+    new tab is pinned as it is created. **A request that only reads writes nothing to that tab** —
+    do not put the pin back on `crewSheet_()`, and do not write the tab from anywhere else.
+  - **Re-apply, never remember.** No property, cache or per-request flag may say "already pinned":
+    a restored backup, a new workbook or a hand-cleared format invalidates it silently.
+  - **Reads must not lean on the format.** Numbers through `parseInt`, permits through
+    `metrcPermitKey_`, and `normBirthday_` reads a date-coerced cell as its day. A value Sheets has
+    already coerced cannot be repaired by a reader (`0` does not become `00` again).
+  - The nightly run re-pins once a day, for somebody typing into a column whose format was cleared
+    by hand before Crew next writes.
+  - Pinned by `tests/attr_text_pin_test.js`, whose fake sheet coerces the way Sheets does;
+    `scripts/prove-attr-text-pin-red.js` is its mutation proof (`CODE_GS`).
 - **Never reach the HR workbook through a path that can create one:** `crewSheet_()` *creates an
   empty spreadsheet* when it cannot open the real one (see Backups). (made explicit 2026-10-09;
   previously implied by "Backups — the whole spreadsheet, to a shared drive")

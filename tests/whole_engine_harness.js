@@ -99,10 +99,32 @@ function world(src, opts) {
 
   const sheets = Object.create(null);
   W.sheets = sheets;
+  /* W.ops is everything done TO a tab, in order: every number format set, every write (the header
+     row included), append and delete, each with the tab it happened on. A write to the attributes tab
+     also records whether the three leading-zero columns were plain text AT THAT MOMENT.
+
+     COERCION, where a world asks for it (opts.coerce): the attributes tab then treats a write the
+     way Sheets does. Into a cell that is NOT plain text, "00" is stored as the number 0, "05-19" as
+     a date, "2029-05-19" as a date; into a plain-text cell each is stored as the text it was. A
+     format covers exactly the rows it was applied to. Without this a test of the plain-text pin
+     would pass whether the pin was there or not. */
+  W.ops = []; W.coerceTabs = opts.coerce ? { crew_attributes: true } : {};
+  const PINNED = ['employee_number', 'birthday', 'permit_number'];
   function makeSheet(name) {
-    const data = [];
+    const data = [], rules = [];
+    const isText = (r, c) => { let t = false; rules.forEach((x) => { if (r >= x.r && r < x.r + x.nr && c >= x.c && c < x.c + x.nc) t = (x.f === '@'); }); return t; };
+    const coerce = (v, r, c) => {
+      if (!W.coerceTabs[name] || r < 2 || typeof v !== 'string' || v === '' || isText(r, c)) return v;
+      if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
+      let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+      m = v.match(/^(\d{1,2})[-/](\d{1,2})$/);
+      if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) return new Date(2026, +m[1] - 1, +m[2]);
+      return v;
+    };
+    const pinnedAt = (r) => { const o = {}; PINNED.forEach((h) => { const c = (data[0] || []).indexOf(h); o[h] = c >= 0 && isText(r, c + 1); }); return o; };
     const sh = {
-      data, getName: () => name, getParent: () => book,
+      data, rules, isText, getName: () => name, getParent: () => book,
       getLastRow() { let n = data.length; while (n && data[n - 1].every((v) => v === '' || v == null)) n--; return n; },
       getLastColumn() { return data.reduce((m, r) => Math.max(m, r.length), 0); },
       getMaxRows() { return Math.max(1000, data.length); },
@@ -121,22 +143,30 @@ function world(src, opts) {
           },
           setValues(vals) {
             if (r >= 2) { W.writes[name] = (W.writes[name] || 0) + 1; W.events.push('write:' + name); }
+            W.ops.push({ tab: name, op: 'write', r, rows: vals.length, pinned: pinnedAt(r) });
             for (let i = 0; i < vals.length; i++) {
               while (data.length < r + i) data.push([]);
-              for (let j = 0; j < vals[i].length; j++) data[r - 1 + i][c - 1 + j] = vals[i][j];
+              for (let j = 0; j < vals[i].length; j++) data[r - 1 + i][c - 1 + j] = coerce(vals[i][j], r + i, c + j);
             }
             return rng;
           },
           setValue(v) { return rng.setValues([[v]]); },
-          setNumberFormat() { return rng; }, setFontWeight() { return rng; }, setBackground() { return rng; },
+          setNumberFormat(f) { rules.push({ r, c, nr, nc, f }); W.ops.push({ tab: name, op: 'format', f, r, c, nr, nc }); return rng; },
+          setFontWeight() { return rng; }, setBackground() { return rng; },
           setFontColor() { return rng; }, setWrap() { return rng; }, clearContent() { return rng; },
         };
         return rng;
       },
       getDataRange() { return sh.getRange(1, 1, Math.max(1, sh.getLastRow()), Math.max(1, sh.getLastColumn())); },
-      appendRow(row) { W.writes[name] = (W.writes[name] || 0) + 1; data.push(row.slice()); return sh; },
-      deleteRow(n) { W.writes[name] = (W.writes[name] || 0) + 1; data.splice(n - 1, 1); },
-      deleteRows(n, count) { W.writes[name] = (W.writes[name] || 0) + 1; data.splice(n - 1, count); },
+      appendRow(row) {
+        W.writes[name] = (W.writes[name] || 0) + 1;
+        const r = data.length + 1;
+        W.ops.push({ tab: name, op: 'append', r, rows: 1, pinned: pinnedAt(r) });
+        data.push(row.map((v, j) => coerce(v, r, j + 1)));
+        return sh;
+      },
+      deleteRow(n) { W.writes[name] = (W.writes[name] || 0) + 1; W.ops.push({ tab: name, op: 'delete', r: n }); data.splice(n - 1, 1); },
+      deleteRows(n, count) { W.writes[name] = (W.writes[name] || 0) + 1; W.ops.push({ tab: name, op: 'delete', r: n }); data.splice(n - 1, count); },
       setFrozenRows() {}, setColumnWidth() {}, autoResizeColumns() {}, hideSheet() {},
     };
     return sh;
@@ -144,7 +174,7 @@ function world(src, opts) {
   const book = {
     getId: () => 'SHEET-1', getName: () => 'GX Crew — HR data', getUrl: () => 'https://sheets.example/SHEET-1',
     getSheetByName: (n) => sheets[n] || null,
-    insertSheet: (n) => (sheets[n] = makeSheet(n)),
+    insertSheet: (n) => { W.ops.push({ tab: n, op: 'create' }); return (sheets[n] = makeSheet(n)); },
     deleteSheet: (sh) => { delete sheets[sh.getName()]; },
     getSheets: () => Object.keys(sheets).map((n) => sheets[n]),
   };
@@ -183,6 +213,8 @@ function world(src, opts) {
       const pp = (String(url).match(/pp_start=([0-9-]+)/) || [])[1] || '';
       if (/action=incentive_perf/.test(url)) return reply(Object.assign(corePerf(pp), { cache_policy: undefined }));
       if (/action=progress/.test(url)) return reply({ ok: true, rows: [], by_employee: [], refreshed_at: '2026-10-12 18:00:00' });
+      /* Metrc's v2 employee list, when a test supplies one: { Data: [...], TotalPages, TotalRecords }. */
+      if (/\/employees\/v2\//.test(url) && W.metrc) { const rows = W.metrc(String(url)); return reply({ Data: rows, TotalPages: 1, TotalRecords: rows.length }); }
       throw new Error('unexpected fetch in this test');
     } },
     DriveApp: { getFolderById: () => { throw new Error('no Drive in this test'); }, getFileById: () => { throw new Error('no Drive in this test'); } },
@@ -235,6 +267,17 @@ function world(src, opts) {
       publishedSpiffProgress: () => ({ ok: true, published_at: '2026-10-13T17:00:00.000Z', published_by: 'spiff', scope: '',
                                        payload: { ok: true, rows: [], by_employee: [], refreshed_at: '2026-10-12 18:00:00' } }),
       getPeriodGoals: () => [],
+      /* The registry writes Crew makes. Read-merge-write is Crew's job; this stores what it is given. */
+      gxUpsertEmployee: (row) => { sandbox.GXCore.gxUpsertEmployees([row]); return { ok: true }; },
+      gxUpsertEmployees: (rows) => {
+        (rows || []).forEach((row) => {
+          const i = W.employees.findIndex((e) => e.employee_id === row.employee_id);
+          const copy = JSON.parse(JSON.stringify(row));
+          if (i >= 0) W.employees[i] = copy; else W.employees.push(copy);
+        });
+        W.registryWrites = (W.registryWrites || 0) + 1;
+        return { ok: true, written: (rows || []).length };
+      },
     },
   };
   vm.createContext(sandbox);
@@ -255,8 +298,17 @@ function world(src, opts) {
   seed(g('HISTORY_TAB'), H, hist);
   const A = g('ATTR_HEADERS');
   const attr = (id, patch) => A.map((h) => (h === 'employee_id' ? id : (patch[h] == null ? '' : patch[h])));
-  seed(g('ATTR_TAB'), A, [attr('bea_bud', { middle_initial: 'Q', employee_number: '07' }), attr('bo_bud', { middle_initial: 'R' }),
-                          attr('mona_mgr', { middle_initial: 'M' }), attr('sky_owner', { employee_number: '00' })]);
+  /* The attributes tab as it is live: the three leading-zero columns already plain text, so the
+     values in them are the text they were written as. opts.noAttrsTab is a workbook that has never
+     had the tab; opts.attrsUnformatted is one whose formats somebody cleared by hand. */
+  if (!opts.noAttrsTab) {
+    seed(g('ATTR_TAB'), A, opts.attrRows ? opts.attrRows(attr) :
+      [attr('bea_bud', { middle_initial: 'Q', employee_number: '07' }), attr('bo_bud', { middle_initial: 'R' }),
+       attr('mona_mgr', { middle_initial: 'M' }), attr('sky_owner', { employee_number: '00' })]);
+    if (!opts.attrsUnformatted) {
+      PINNED.forEach((h) => sheets[g('ATTR_TAB')].rules.push({ r: 2, c: A.indexOf(h) + 1, nr: 999, nc: 1, f: '@' }));
+    }
+  }
   seed(g('SCHEME_TAB'), g('SCHEME_HEADERS'), [['2026-09-14', JSON.stringify(T), '2026-09-29T17:00:00.000Z', 'sky']]);
   seed(g('GOALS_TAB'), g('GOALS_HEADERS'), [['2026-09-14', JSON.stringify({ admin: 20500, stores: { bend: 13000, center: 7500 } }), '2026-09-29T17:00:00.000Z', 'sky', 'approval']]);
   const I = g('INPUTS_HEADERS');
@@ -275,6 +327,11 @@ function world(src, opts) {
     seed(g('HISTORY_TAB') + '_practice', H, historyRows('practice-2026-09-14', ' (practice)').map((r) => { r[1] = PERIODS['2026-09-14']; return r; }));
   }
 
+  W.ops = [];                         // seeding is not something the engine did
+  W.post = (params, body) => {
+    const res = sandbox.doPost({ parameter: params, postData: { contents: JSON.stringify(body) } });
+    try { return JSON.parse(res.body); } catch (e) { return { __not_json: String(res.body).slice(0, 80) }; }
+  };
   W.get = (params) => {
     const res = sandbox.doGet({ parameter: params });
     let d = null;
