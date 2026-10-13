@@ -940,6 +940,50 @@ shows at once, one made elsewhere does not until the cache ages out.
 registry read fewer). The real figure is whatever `./gxcrewstats.sh` shows for the `incentive`
 route's `closed_record` stage after this is deployed.
 
+#### The `periods` stage: 1.7 seconds, sometimes 0.3 (2026-10-13)
+
+First live reading from `gxcrewstats.sh` (two hours, eight incentive loads): `periods` averaged
+1,712ms, and a probe of four live loads read 2,433 / 2,395 / 1,725 and then 296ms with nothing else
+different.
+
+**It was never the period list.** Between the `workflow` mark and the `periods` mark the screen
+also asked who the approver is, who the backup is and whether cover is on, and built the list —
+which reads the practice pin. That is three GX Core settings and, through `approvalCover_`, a
+second read of the workflow tab the screen had read a few lines earlier.
+
+**Why two speeds.** GX Core's `getKv` keeps each setting for 60 seconds in the calling script's
+cache (`GX_CONFIG_CACHE_TTL_S`) and on a miss reads its whole kv tab. A load more than a minute
+after the previous one paid three kv-tab reads plus the workflow re-read; a load inside the minute
+paid the re-read alone. The test reproduces both on a simulated clock against the engine as it was
+(1,700ms and 260ms with a tab read at 480ms and a sheet read at 260ms — chosen to be plausible, not
+measured). The anchor and the length were already warm by then: the SPIFF fold reads them earlier in
+the same request.
+
+**What was changed, all of it inside one request:** the pay-period calendar is built once instead
+of up to three times (calendar settings asked for 6 → 4 times on a live load by date, 8 → 4 on the
+default screen, 4 → 2 on a closed period), and the backup's window is judged on the workflow row in
+hand (workflow tab read 2 → 1 on a live load, 3 → 2 for the backup approver, whose own right to
+decide is still checked fresh by `canDecide_`).
+
+**What that does and does not buy.** It removes the 0.3-second floor. It does not remove the three
+cold settings, which are the 1.4 seconds: that is three reads of one tab, and the only place to make
+it one is inside GX Core's library (read the kv tab once per execution on a miss, or a call that
+takes several keys). A live incentive load asks for six distinct settings in all, so the same change
+would also shorten `thresholds`, `spiff` and `period_pick`. **That is core-admin's to build; it was
+reported to the hub session and not built here.**
+
+**The history read (1.3 seconds on every load), looked at and left alone.** The tab is read whole:
+every row since the first imported period, 20 columns. The screen's own needs span columns 1 to 18
+(`pp_start` through `imported_at`), so a narrower contiguous range would drop two columns in twenty;
+a closed period needs all twenty anyway; and the to-date totals and the history band need every
+row. Nothing provable to gain. What `history` also held was the first open of the workbook —
+`crewSheetPrepare_` reads the attributes header and re-applies the plain-text format to three whole
+columns on every request, a write on a read path, measured at 300 to 600ms when it was memoized on
+2026-09-15. That is now its own stage, `sheet_open`, so the next reading says how much of the 1.3
+seconds it is. Skipping the format on read-only requests looks safe (every write prepares the sheet
+fresh) but it guards the leading-zero employee numbers and is shared by every route, so it is a
+proposal for Sky, not part of this change.
+
 ### Which period the tab opens on, and in what order (2026-09-14)
 
 **With no period asked for, the tab opens on the LAST completed fortnight until it is approved, then

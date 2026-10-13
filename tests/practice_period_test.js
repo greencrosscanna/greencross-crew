@@ -130,6 +130,10 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       /* The SHIPPED tab router: getIncentive_ asks the practice twin directly whether the period is
          approved (2026-10-13), and which tab that is must be incTab_'s answer, not this file's. */
       fnSrc(GS, 'incTab_') +
+      /* getIncentive_ opens the workbook and works the calendar out itself since 2026-10-13, and
+         hands the calendar to periodList_ (stubbed below). Neither is what this file tests: no
+         workbook here, and no anchor, so no periods — tests/period_list_speed_test.js runs both. */
+      'function crewSheet_() { return null; }\nfunction computedPeriods_() { return []; }\n' +
       fnSrc(GS, 'getIncentive_') + '; return getIncentive_;';
     const fn = new Function(
       'requireCrew_', 'historyPeriods_', 'incentiveHistory_', 'periodList_', 'canApprove_',

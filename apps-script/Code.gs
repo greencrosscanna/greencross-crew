@@ -5072,11 +5072,16 @@ function practiceInfo_(pp, srcEnd) {
    pinned another in GX Core kv. Deliberately not the running period — a period still collecting
    sales moves under you mid-rehearsal, and the close is a thing you do to a fortnight that has
    ENDED. A failed kv read is not an error here; it just means the default. */
-function practiceSourceStart_() {
+/* `cal`, when the SCREEN passes it, is the calendar it already worked out this request
+   (computedPeriods_() with no limit). It is only ever read for its first completed fortnight, and a
+   longer list has the same first entries as a shorter one, so the answer is the one
+   computedPeriods_(2) gives — without asking GX Core for the anchor and the length again. Every
+   other caller passes nothing and reads them itself, as before. */
+function practiceSourceStart_(cal) {
   var pinned = '';
   try { pinned = String(GXCore.getKv('cfg.crewPracticePeriod') || ''); } catch (e) {}
   if (/^\d{4}-\d{2}-\d{2}$/.test(pinned)) return pinned;
-  var computed = computedPeriods_(2);
+  var computed = Array.isArray(cal) ? cal : computedPeriods_(2);
   for (var i = 0; i < computed.length; i++) if (!computed[i].current) return computed[i].start;
   return '';
 }
@@ -6591,8 +6596,8 @@ function applySpiffEarnings_(live, ppStart, useCache) {
  */
 /* The last completed fortnight when it is not yet in the real history tab, else '' (= the running
    one). See the note where getIncentive_ calls it. */
-function defaultIncentivePeriod_(importedBy) {
-  var prev = computedPeriods_(1).filter(function (x) { return !x.current; })[0];
+function defaultIncentivePeriod_(importedBy, cal) {
+  var prev = (Array.isArray(cal) ? cal : computedPeriods_(1)).filter(function (x) { return !x.current; })[0];
   return (prev && !importedBy[prev.start]) ? prev.start : '';
 }
 
@@ -6614,11 +6619,22 @@ function getIncentive_(p, preAuth) {
 
   /* The real history tab, read ONCE for the screen: the period list, the to-date totals and the
      history band all come from these rows. The write paths still read their own, fresh. */
+  /* Opening the workbook is timed on its own. crewSheet_() is what every tab read goes through and
+     it is memoized for the request, so calling it here does no extra work — it only moves the cost
+     of the first open (the id lookup, the attributes header and its three column formats) out of
+     `history`, which then measures the history tab and nothing else. */
+  crewSheet_();
+  mark('sheet_open');
   var historyRows = readTab_(HISTORY_TAB, HISTORY_HEADERS);
   var imported = historyPeriods_('', historyRows);
   var importedBy = Object.create(null);
   imported.forEach(function (h) { importedBy[h.pp_start] = h; });
   mark('history');
+
+  /* THE PAY-PERIOD CALENDAR, WORKED OUT AT MOST ONCE PER REQUEST and only when something asks.
+     Request-scoped: it is a local, gone when this function returns, and nothing else can see it. */
+  var _cal = null;
+  var cal = function () { return _cal || (_cal = computedPeriods_()); };
 
   var want = String(p.pp_start || '');
 
@@ -6635,7 +6651,7 @@ function getIncentive_(p, preAuth) {
      that falls through to the running one, which is the old behavior rather than a guess. */
   var defaulted = '';
   if (!want) {
-    want = defaultIncentivePeriod_(importedBy);
+    want = defaultIncentivePeriod_(importedBy, cal());
     if (want) defaulted = 'unapproved_previous';
   }
 
@@ -6653,11 +6669,14 @@ function getIncentive_(p, preAuth) {
     var ph = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true },
                                { __screen: true, rows: practiceRows });
     reqMark_('closed_record');
-    ph.periods = periodList_(imported, null);
+    ph.periods = periodList_(imported, null, cal());
     ph.to_date = incentiveToDate_(imported);
+    reqMark_('periods');
     ph.can_edit = false;
     ph.can_approve = canApprove_(auth);
+    reqMark_('approver');
     ph.approval_cover = approvalCover_(auth, want);
+    reqMark_('approval_cover');
     ph.inputs = inputsFor_(want);
     /* `source` STAYS 'imported', and this is the whole correction of 2026-09-09.
        It answers ONE question — where do these figures come from, a live computation or a frozen
@@ -6678,7 +6697,7 @@ function getIncentive_(p, preAuth) {
     ph.can_reset_practice = canEdit_(auth);
     ph.why_read_only = 'Practice period, already approved — the figures as they were frozen. '
                      + 'Reopen it or reset practice to run through the close again.';
-    reqMark_('closed_extras');   // the period list, to-date totals, approver lookups and the inputs tab
+    reqMark_('closed_extras');   // what is left: the inputs tab
     return ph;
   }
 
@@ -6688,14 +6707,17 @@ function getIncentive_(p, preAuth) {
     var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true },
                               { __screen: true, rows: historyRows });
     reqMark_('closed_record');
-    h.periods = periodList_(imported, null);
+    h.periods = periodList_(imported, null, cal());
     h.to_date = incentiveToDate_(imported);
+    reqMark_('periods');
     h.can_edit = false;
     /* The APPROVER is told who they are even on a read-only period, because the one action still
        available here is the break glass — reopening it. Without this the button can never render on
        the very screen it exists for. */
     h.can_approve = canApprove_(auth);
+    reqMark_('approver');
     h.approval_cover = approvalCover_(auth, want);
+    reqMark_('approval_cover');
     /* ATTENDANCE IS NOT IN HISTORY_HEADERS, and the inputs tab is the only record of it. Nothing
        anywhere deletes from that tab — checked every deleteRow/deleteRows in this file — so the
        ticks for a period Crew approved are still there, and the closed screen can show WHO earned
@@ -6712,7 +6734,7 @@ function getIncentive_(p, preAuth) {
        them and the screen keeps saying it does not know — which is the truth. */
     h.inputs = inputsFor_(want);
     h.why_read_only = 'Imported from the payout report for this period — the figures as paid.';
-    reqMark_('closed_extras');   // the period list, to-date totals, approver lookups and the inputs tab
+    reqMark_('closed_extras');   // what is left: the inputs tab
     return h;
   }
 
@@ -6775,7 +6797,8 @@ function getIncentive_(p, preAuth) {
 
   live.inputs = inputsFor_(live.payPeriod.start);
   mark('inputs');
-  var wf = wfGet_(live.payPeriod.start) || { status: 'draft' };
+  var wfRow = wfGet_(live.payPeriod.start);       // the row as read, or null — kept for the cover below
+  var wf = wfRow || { status: 'draft' };
   live.workflow = { status: wf.status || 'draft', sent_by: wf.sent_by || '', sent_at: wf.sent_at || '',
                     decided_by: wf.decided_by || '', decided_at: wf.decided_at || '',
                     note: wf.note || '',
@@ -6786,16 +6809,20 @@ function getIncentive_(p, preAuth) {
                     voided: /^VOIDED:/.test(String(wf.note || '')) };
   mark('workflow');
   live.can_approve = canApprove_(auth);
+  mark('approver');               // GX Core: who the approver is (a cold read is a whole kv tab)
   /* `can_approve` stays the PRIMARY approver only — it gates the settings tray, reopening, voided
      figures and payroll overrides, none of which the backup covers. `can_decide` is the narrower
      question the Approve and Send back buttons ask: may this person decide THIS period, now. */
-  live.approval_cover = approvalCover_(auth, live.payPeriod.start);
+  /* The workflow row read a few lines up is handed over, so "is the backup's window open" does not
+     read the workflow tab a second time for the same row. Screen only; see approvalCover_. */
+  live.approval_cover = approvalCover_(auth, live.payPeriod.start, { __screen: true, wf: wfRow });
   live.can_decide = live.approval_cover.can_decide;
+  mark('approval_cover');         // GX Core: who the backup is, and the away switch
   /* Locked while pending — for everyone, including the approver. Sky editing a figure he is about
      to approve is the same problem as Mike editing one he already sent. */
   live.can_edit = canEdit_(auth) && wf.status !== 'pending';
-  live.periods = periodList_(imported, live.periods);
-  mark('periods');
+  live.periods = periodList_(imported, live.periods, cal());
+  mark('periods');                // the list itself: GX Core's practice pin, and the calendar if not yet built
   live.to_date = incentiveToDate_(imported);
   /* THE INDEPENDENT CHECKS, ON THE SCREEN AND NOT ONLY AT THE GATE. A refusal at the moment
      somebody presses Approve is a bad first sighting of a figure that has been wrong all fortnight;
@@ -6855,8 +6882,14 @@ function computedPeriods_(back) {
   return out;
 }
 
-function periodList_(imported, livePeriods) {
+function periodList_(imported, livePeriods, cal) {
   var seen = Object.create(null), out = [];
+  /* ONE CALENDAR PER REQUEST (2026-10-13). The screen used to work the pay-period calendar out up
+     to three times in one load — to pick the default period, to build this list, and again inside
+     practiceSourceStart_ — and each time asked GX Core for the anchor and the length. The three
+     differ only in how far back they reach, and a shorter list is the front of a longer one, so
+     getIncentive_ now builds it once and passes it to all three. */
+  var calendar = Array.isArray(cal) ? cal : computedPeriods_();
   /* THE CALENDAR IS COMPUTED, NOT BORROWED FROM THE FETCH. Viewing an imported period served no
      live payload, so livePeriods was null and the picker lost every period Leaderboard would have
      offered — including the CURRENT one. Selecting a 2025 period therefore stranded you there with
@@ -6865,7 +6898,7 @@ function periodList_(imported, livePeriods) {
      cfg.payPeriodDays — the same two values Leaderboard derives its own list from), so Crew can
      work them out for itself in a millisecond instead of paying for a cross-app round trip just to
      populate a dropdown. */
-  computedPeriods_().forEach(function (x) {
+  calendar.forEach(function (x) {
     if (imported.some(function (h) { return h.pp_start === x.start; })) return;
     seen[x.start] = 1;
     out.push({ pp_start: x.start, pp_end: x.end, current: !!x.current, source: 'live' });
@@ -6890,7 +6923,7 @@ function periodList_(imported, livePeriods) {
      real periods as dates move.
      It is dropped rather than shown broken when there is no completed fortnight to mirror — a
      brand-new deployment, or an anchor that has not been set. */
-  var practiceSrc = practiceSourceStart_();
+  var practiceSrc = practiceSourceStart_(calendar);
   if (practiceSrc) {
     var srcEnd = '';
     for (var pi = 0; pi < out.length; pi++) if (out[pi].pp_start === practiceSrc) { srcEnd = out[pi].pp_end; break; }
@@ -8809,13 +8842,21 @@ function canDecide_(auth, pp) {
 
 /* What the screen needs: whether this viewer may decide the period, who the backup is, and whether
    cover is on. Names are user_ids, which `cfg.crewApprover` already publishes. */
-function approvalCover_(auth, pp) {
+/* `have` IS A FUNCTION ARGUMENT, NEVER A REQUEST PARAMETER (2026-10-13), and only the live SCREEN
+   passes it: `{ __screen: true, wf: <the workflow row it just read, or null> }`. With it, the
+   backup's window is judged on that row instead of reading the workflow tab again — same row, same
+   request. Without the exact marker this reads the tab itself, as it always has.
+   canDecide_ is NOT handed the row and still reads for itself: it is what approve and send-back call,
+   and a write path reads its own fresh data. */
+function approvalCover_(auth, pp, have) {
   var d = { can_decide: false, as: '', backup: [], away: approverAway_(), backup_active: false, why: '' };
+  var inHand = !!(have && have.__screen === true && Object.prototype.hasOwnProperty.call(have, 'wf') &&
+                  (have.wf === null || (typeof have.wf === 'object' && String(have.wf.pp_start || '') === String(pp || ''))));
   try {
     d.backup = backupApproverIds_();
     var c = canDecide_(auth, pp);
     d.can_decide = !!c.ok; d.as = c.as || '';
-    if (d.backup.length) { var w = backupWindow_(pp); d.backup_active = w.active; d.why = w.why || ''; d.backup_at = w.backup_at || ''; }
+    if (d.backup.length) { var w = inHand ? backupWindow_(pp, have.wf) : backupWindow_(pp); d.backup_active = w.active; d.why = w.why || ''; d.backup_at = w.backup_at || ''; }
   } catch (e) { d.error = String((e && e.message) || e); }
   return d;
 }
