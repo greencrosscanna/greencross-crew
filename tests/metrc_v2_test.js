@@ -57,7 +57,8 @@ const CONNECTED = { METRC_VENDOR_KEY: 'vendor-key', METRC_USER_KEY: 'user-key', 
 const stubs = {
   SpreadsheetApp: {}, DriveApp: {}, HtmlService: {}, ContentService: {},
   UrlFetchApp: { fetch(url, opts) {
-    T.fetches.push({ url: url, method: String((opts && opts.method) || 'get').toLowerCase() });
+    T.fetches.push({ url: url, method: String((opts && opts.method) || 'get').toLowerCase(),
+                     hasBody: !!(opts && (opts.payload != null || opts.contentType != null)) });
     const r = T.respond ? T.respond(url, opts) : { code: 200, body: '{"Data":[],"TotalPages":1,"TotalRecords":0}' };
     return { getResponseCode: () => r.code, getContentText: () => r.body, getAllHeaders: () => ({}) };
   } },
@@ -93,9 +94,9 @@ writeAttrs_ = function (rec) {
 bustRosterCache_ = function () { __T.busts++; };
 rosterJoin_ = function () { return __T.joined; };
 dutchieNewHireScan_ = function () { return __T.scan; };
-return { metrcGet_, metrcGetAll_, metrcAllEmployees_, metrcHealth_, metrcSandboxSetup_, metrcAuthProbe_,
+return { metrcGet_, metrcGetAll_, metrcAllEmployees_, metrcHealth_,
          metrcAccessAudit_, metrcPermitPlan_, metrcPermitSyncRun_, metrcPermitSync_, metrcPermitKey_,
-         metrcDay_, metrcIsSandbox_, nightlyMetrcPermitSync_, nightlyDutchieScan };`;
+         metrcDay_, nightlyMetrcPermitSync_, nightlyDutchieScan };`;
 const names = Object.keys(stubs);
 const C = new Function(...names, SRC + TAIL)(...names.map(n => stubs[n]));
 
@@ -225,30 +226,37 @@ console.log('\nProduction Metrc is GET-only');
   ok('metrcGet_ cannot post, put or delete', !/'(post|put|delete|patch)'/i.test(GET));
 
   const S = { secret: 'deploy-secret-for-tests' };
-  const bases = { 'unset (the production default)': null, 'production': PROD,
-                  'production with a trailing slash': PROD + '/',
-                  'a host that merely contains the word sandbox': 'https://api-or.metrc.com/sandbox',
-                  'a lookalike host': 'https://sandbox-api-or.metrc.com.example.net' };
-  Object.keys(bases).forEach(label => {
-    const props = Object.assign({}, CONNECTED);
-    if (bases[label]) props.METRC_BASE = bases[label];
-    reset(props);
-    const a = C.metrcSandboxSetup_(S);
-    ok('metrc_setup refuses on ' + label + ' and sends nothing',
-       a.ok === false && a.refused === true && T.fetches.length === 0 && /read-only/.test(a.error));
-    const b = C.metrcAuthProbe_(S);
-    ok('metrc_probe refuses on ' + label + ' and sends nothing',
-       b.ok === false && b.refused === true && T.fetches.length === 0);
-  });
 
-  reset({ METRC_BASE: PROD });
-  ok('the refusal does not depend on a key being set', C.metrcSandboxSetup_(S).refused === true && T.fetches.length === 0);
+  /* THE SANDBOX BOOTSTRAP TOOLS ARE GONE (2026-10-12), and this is what keeps them gone. They held
+     the only POSTs in the connector; first they were fenced to the sandbox host, then, with the
+     evaluation finished, removed. What is pinned now is the stronger property: there is no code
+     path in the engine that can send any Metrc host anything but a GET. */
+  ok('the metrc_setup and metrc_probe routes are gone',
+     !/case\s+'metrc_setup'/.test(SRC) && !/case\s+'metrc_probe'/.test(SRC));
+  ok('…and so are their functions and the guard that only they used',
+     !/function metrcSandboxSetup_|function metrcAuthProbe_|function metrcSandboxOnly_|function metrcIsSandbox_/.test(SRC));
+  ok('nothing in the engine names the sandbox setup endpoint', SRC.indexOf('/sandbox/v2/') < 0);
+  ok('nothing in the engine writes a Metrc key into Script Properties',
+     !/setProperty\(\s*'METRC_(USER|VENDOR)_KEY'/.test(SRC));
 
-  reset(Object.assign({}, CONNECTED, { METRC_BASE: SANDBOX }));
-  T.respond = () => ({ code: 200, body: '' });
-  C.metrcSandboxSetup_(S);
-  ok('on the real sandbox host the tool still runs (the guard is not a blanket off switch)',
-     T.fetches.length === 1 && T.fetches[0].method === 'post' && T.fetches[0].url.indexOf(SANDBOX + '/sandbox/') === 0);
+  const secStart = SRC.indexOf('// ─── METRC connector (Oregon)');
+  const secEnd = SRC.indexOf('// ─── Review queue');
+  const metrcSection = SRC.slice(secStart, secEnd);
+  const code = metrcSection.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  ok('the connector section was found', secStart > 0 && secEnd > secStart);
+  eq('exactly one fetch in the whole connector, and it is inside metrcGet_',
+     [(code.match(/UrlFetchApp\.fetch/g) || []).length, (GET.match(/UrlFetchApp\.fetch/g) || []).length], [1, 1]);
+  ok('no fetchAll either', !/UrlFetchApp\.fetchAll/.test(code));
+  ok('no write method anywhere in the connector', !/method:\s*'(post|put|delete|patch)'/i.test(code));
+  ok('no request body anywhere in the connector', !/\bpayload\s*:/.test(code) && !/\bcontentType\s*:/.test(code));
+
+  /* …and nothing OUTSIDE the connector can reach Metrc: the host, the base and the credentials are
+     named nowhere else in the engine, so no other fetch has an address or a key to use. */
+  const outside = (SRC.slice(0, secStart) + SRC.slice(secEnd)).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  ok('no Metrc host outside the connector', !/metrc\.com/i.test(outside));
+  ok('the base and the keys are read nowhere else',
+     !/METRC_BASE|METRC_VENDOR_KEY|METRC_USER_KEY|metrcCreds_\(/.test(outside));
+  ok('metrcGet_ is called nowhere else', !/metrcGet_\(|metrcGetAll_\(/.test(outside));
 
   /* Everything the connector can send to production, exercised end to end. */
   reset(CONNECTED);
@@ -260,14 +268,7 @@ console.log('\nProduction Metrc is GET-only');
   ok('health, audit, sync and the nightly run made requests', T.fetches.length >= 7);
   ok('every one of them was a GET', T.fetches.every(f => f.method === 'get'));
   ok('every one of them was a v2 employees read', T.fetches.every(f => f.url.indexOf(PROD + '/employees/v2/?') === 0));
-
-  const metrcSection = SRC.slice(SRC.indexOf('// ─── METRC connector (Oregon)'), SRC.indexOf('// ─── Review queue'));
-  const posts = (metrcSection.match(/method:\s*'post'/g) || []).length;
-  ok('the only POSTs in the connector are the two sandbox-setup calls', posts === 2);
-  ok('…both inside functions that check metrcSandboxOnly_ first',
-     /metrcSandboxOnly_\(/.test(fnSrc('metrcSandboxSetup_')) && /metrcSandboxOnly_\(/.test(fnSrc('metrcAuthProbe_')) &&
-     fnSrc('metrcSandboxSetup_').indexOf('metrcSandboxOnly_(') < fnSrc('metrcSandboxSetup_').indexOf('UrlFetchApp.fetch') &&
-     fnSrc('metrcAuthProbe_').indexOf('metrcSandboxOnly_(') < fnSrc('metrcAuthProbe_').indexOf('UrlFetchApp.fetch'));
+  ok('none of them carried a body', T.fetches.every(f => f.hasBody === false));
 }
 
 console.log('\nmetrc_health reads the v2 envelope');

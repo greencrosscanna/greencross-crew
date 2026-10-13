@@ -540,8 +540,12 @@ calls". The connector had been written against `/employees/v1/`, so three things
 - **The per-person active flag is gone.** v2 rows carry no `IsActive` and no `Status`. The old check
   treated a missing flag as active, so against v2 it would have answered "active" for everyone while
   still reading like a check. Listed on a license is now the stated, and only, meaning.
-- **The two sandbox tools were fenced off from production.** `metrc_probe` re-ran the setup POST
-  against whatever `METRC_BASE` held, with nothing stopping it once that became production.
+- **The two sandbox tools were fenced off from production, then removed the same day.**
+  `metrc_probe` re-ran the setup POST against whatever `METRC_BASE` held, with nothing stopping it
+  once that became production, and `metrc_setup` could write a sandbox key over the stored
+  production user key if the base was ever pointed back. Both were first limited to the sandbox
+  host; once production was connected and the first sync ran clean, Sky had them deleted along
+  with the guard that existed only for them. The connector now has one fetch and it is a GET.
 
 The same day Sky reversed an earlier instruction not to write dates automatically — "part of the
 reason we built the metrc API pipe was to get the real data on license expirations" — so the

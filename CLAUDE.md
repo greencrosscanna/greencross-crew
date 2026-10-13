@@ -247,10 +247,12 @@ says which are missing.
 
 - **Production Metrc is READ-ONLY. Crew never sends it anything but a GET.** Dutchie is the only
   system that writes Green Cross data to Metrc. `metrcGet_` hardcodes `get` and takes no method
-  argument; do not add one, and do not add a second fetch that can reach production.
-- **`metrc_setup` and `metrc_probe` are sandbox bootstrap tools that POST, and they refuse unless
-  `METRC_BASE` is a Metrc sandbox host** (`metrcSandboxOnly_`, an allowlist — an unset base is
-  production). The evaluation they were written for is finished.
+  argument; do not add one. **It is the only fetch in the connector — do not add a second to any
+  Metrc host**, sandbox included. `tests/metrc_v2_test.js` fails on a second fetch, a write method,
+  a request body, or a Metrc host or key named anywhere outside the connector.
+- **The sandbox bootstrap routes (`metrc_setup`, `metrc_probe`) are gone and must not come back.**
+  They held the only POSTs in the connector. Sandbox work belongs in the `METRC API` folder's own
+  scripts, not in Crew's engine.
 - **`METRC_BASE` unset means production**, which is what the connector runs against. The audit and
   the permit sync both refuse the sandbox, because it holds test data, not our staff.
 - **v2 only — "v2 keys can not use v1 calls" (Metrc, 2026-10-12).** A v2 list is

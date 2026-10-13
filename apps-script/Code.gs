@@ -366,8 +366,9 @@ function route_(e) {
 
       // ── METRC connector (worker permits) ───────────────────────────────────
       case 'metrc_health': return json_(metrcHealth_(p), p.callback);
-      case 'metrc_setup':  return json_(metrcSandboxSetup_(p), p.callback);
-      case 'metrc_probe':  return json_(metrcAuthProbe_(p), p.callback);
+      /* REMOVED 2026-10-12: `metrc_setup` and `metrc_probe`. They were sandbox bootstrap tools
+         for Metrc's evaluation, which is finished, and they held the only POSTs in the connector.
+         Every route left here reads. Do not add one that sends Metrc anything but a GET. */
       case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
       // Permit expiration dates, Metrc -> Crew's own sheet. A preview unless confirm=yes.
       case 'metrc_permit_sync': return json_(metrcPermitSync_(p), p.callback);
@@ -1564,33 +1565,19 @@ function metrcCreds_() {
  *
  * Dutchie already reports Green Cross sales to Metrc. A second system writing there would create
  * duplicate records and an OLCC traceability problem, so Sky's standing rule is that production
- * receives GET and nothing else. That is held in two places, both pinned by
+ * receives GET and nothing else. It is held by construction, and pinned by
  * tests/metrc_v2_test.js:
- *   • metrcGet_ hardcodes method 'get' and takes no method argument, so there is nothing to pass.
- *   • the two sandbox bootstrap tools below, which do POST, refuse outright unless METRC_BASE is a
- *     Metrc SANDBOX host (metrcSandboxOnly_). They can never run against the default base.
- * Do not add a method parameter here, and do not add a second fetch that can reach production.
+ *   • metrcGet_ is the ONLY fetch in this connector. It hardcodes method 'get', sends no payload,
+ *     and takes no method argument, so there is nothing to pass.
+ *   • the two sandbox bootstrap tools that used to POST (metrc_setup, metrc_probe) were removed on
+ *     2026-10-12, once the evaluation they served was finished. Nothing here sends a body.
+ * Do not add a method parameter here, and do not add a second fetch to any Metrc host.
  *
  * THE API IS v2. Metrc, in writing, 2026-10-12: "v2 keys can not use v1 calls." Green Cross's
  * production keys are v2 keys, so every path here is /…/v2/. v2 wraps a list as
  * { Data: […], Total, TotalRecords, PageSize, RecordsOnPage, Page, CurrentPage, TotalPages } where
  * v1 returned a bare array — read lists through metrcGetAll_, which unwraps and follows the pages.
  */
-function metrcIsSandbox_(base) {
-  return /^https:\/\/sandbox-api-[a-z]{2}\.metrc\.com$/i.test(String(base || ''));
-}
-
-/* null when the base is a sandbox host; otherwise the refusal to return. Deliberately an ALLOWLIST
-   of the sandbox host shape rather than "not production": an unset METRC_BASE falls back to
-   production, and a typo'd base must not read as permission to POST. */
-function metrcSandboxOnly_(base, what) {
-  if (metrcIsSandbox_(base)) return null;
-  return { ok: false, refused: true,
-           error: 'Refusing to run ' + what + ' against ' + base + '. This is a sandbox bootstrap ' +
-                  'tool that sends a POST, and production Metrc is read-only for Crew: Dutchie is ' +
-                  'the only system that writes Green Cross data to Metrc. Nothing was sent.' };
-}
-
 var METRC_MAX_PAGES = 50;
 
 /**
@@ -1719,135 +1706,6 @@ function metrcHealth_(p) {
     out.last_nightly_permit_sync = last ? JSON.parse(last) : null;
   } catch (e2) { out.last_nightly_permit_sync = null; }
   return out;
-}
-
-
-/**
- * Bootstrap a SANDBOX user key. Metrc's sandbox lets an integrator mint its own industry user
- * key via POST /sandbox/v2/integrator/setup, authenticated with the vendor key on an
- * `x-metrc-key` HEADER — note that is API-Key auth, unlike every other endpoint, which uses
- * Basic base64(vendor:user). Getting that wrong is the obvious first stumble.
- *
- * The returned key is written STRAIGHT INTO SCRIPT PROPERTIES and never included in the
- * response: a credential that travels back over HTTP to a caller has been exposed to the
- * caller's logs, terminal history and mine. We return its shape, not its value.
- */
-function metrcSandboxSetup_(p) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
-  var c = metrcCreds_();
-  /* The refusal comes BEFORE the key check, so the answer on production is always "this does not
-     run here" and never a prompt to go and set a key so that it can. */
-  var refusal = metrcSandboxOnly_(c.base, 'sandbox setup (metrc_setup)');
-  if (refusal) return refusal;
-  if (!c.vendor) return { ok: false, error: 'METRC_VENDOR_KEY is not set' };
-  var res = UrlFetchApp.fetch(c.base + '/sandbox/v2/integrator/setup', {
-    method: 'post', muteHttpExceptions: true, contentType: 'application/json',
-    headers: { 'x-metrc-key': c.vendor }, payload: '{}'
-  });
-  var code = res.getResponseCode();
-  var body = res.getContentText();
-  if (code >= 300) return { ok: false, http: code, error: body.slice(0, 400) };
-
-  /*
-   * This endpoint is ASYNCHRONOUS and does not hand back the key. Observed live:
-   *   first call  -> 200 "User queued for creation"  (plain text, not JSON)
-   *   later calls -> 200 with an empty body          (nothing left to do)
-   * Neither is an error, and calling either one a failure sends you debugging a working
-   * integration. The key itself is issued into Metrc Connect, not returned over the wire.
-   */
-  var trimmed = String(body || '').trim();
-  var data = null;
-  if (trimmed) { try { data = JSON.parse(trimmed); } catch (e) { data = null; } }
-  if (!data) {
-    return { ok: true, http: code, user_key_stored: false, async: true,
-             metrc_said: trimmed || '(empty body)',
-             note: trimmed
-               ? 'Metrc QUEUED the sandbox user. It does not return the key — collect it from ' +
-                 'Metrc Connect > Users, then set METRC_USER_KEY.'
-               : 'Nothing to do: the sandbox user already exists from an earlier call. Collect ' +
-                 'its key from Metrc Connect > Users, then set METRC_USER_KEY.' };
-  }
-
-  // The field name is not documented consistently across states — find the key without guessing.
-  var found = '', foundIn = '';
-  function scan(o, path) {
-    if (!o || typeof o !== 'object') return;
-    Object.keys(o).forEach(function (k) {
-      var v = o[k];
-      if (typeof v === 'string' && v.length >= 20 && /key/i.test(k) && !found) {
-        found = v; foundIn = (path ? path + '.' : '') + k;
-      } else if (v && typeof v === 'object') { scan(v, (path ? path + '.' : '') + k); }
-    });
-  }
-  scan(Array.isArray(data) ? { list: data } : data, '');
-
-  var out = { ok: true, http: code, response_fields: Object.keys(
-    Array.isArray(data) ? (data[0] || {}) : data).sort() };
-  if (found) {
-    PropertiesService.getScriptProperties().setProperty('METRC_USER_KEY', found);
-    out.user_key_stored = true;
-    out.found_in_field = foundIn;
-    out.key_length = found.length;   // shape only — never the value
-    out.note = 'Sandbox user key written to METRC_USER_KEY. Its value is deliberately not returned.';
-  } else {
-    out.user_key_stored = false;
-    out.raw_preview = body.slice(0, 400);
-    out.note = 'No key-like field found. Inspect response_fields and set METRC_USER_KEY by hand.';
-  }
-  return out;
-}
-
-
-/**
- * Auth probe. Metrc's sandbox setup call is asynchronous and returns no key, and the docs list
- * no GET to retrieve one — so before anyone goes hunting through the portal, establish what the
- * vendor key alone can actually reach, and whether the key comes back in a HEADER we ignored.
- * Read-only target (tagtypes) so nothing is created while probing.
- */
-function metrcAuthProbe_(p) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
-  var c = metrcCreds_();
-  /* This probe re-runs the setup POST to read its response headers. Until 2026-10-12 nothing
-     stopped it doing that against whatever METRC_BASE held, production included. */
-  var refusal = metrcSandboxOnly_(c.base, 'the sandbox auth probe (metrc_probe)');
-  if (refusal) return refusal;
-  if (!c.vendor) return { ok: false, error: 'METRC_VENDOR_KEY is not set' };
-
-  var target = c.base + '/sandbox/v2/tagtypes';
-  var b64 = function (x) { return Utilities.base64Encode(x); };
-  var attempts = [
-    { how: 'Basic vendor:vendor', headers: { Authorization: 'Basic ' + b64(c.vendor + ':' + c.vendor) } },
-    { how: 'Basic vendor:(empty)', headers: { Authorization: 'Basic ' + b64(c.vendor + ':') } },
-    { how: 'x-metrc-key header only', headers: { 'x-metrc-key': c.vendor } },
-    { how: 'x-metrc-key + Basic vendor:vendor', headers: {
-        'x-metrc-key': c.vendor, Authorization: 'Basic ' + b64(c.vendor + ':' + c.vendor) } }
-  ];
-  var results = attempts.map(function (a) {
-    try {
-      var r = UrlFetchApp.fetch(target, { method: 'get', muteHttpExceptions: true, headers: a.headers });
-      return { how: a.how, http: r.getResponseCode(), body: r.getContentText().slice(0, 120) };
-    } catch (e) { return { how: a.how, error: String((e && e.message) || e) }; }
-  });
-
-  // Re-run setup and capture RESPONSE HEADERS — a key handed back out-of-band would be here.
-  var setupHeaders = {}, setupCode = null, setupBody = '';
-  try {
-    var sr = UrlFetchApp.fetch(c.base + '/sandbox/v2/integrator/setup', {
-      method: 'post', muteHttpExceptions: true, contentType: 'application/json',
-      headers: { 'x-metrc-key': c.vendor }, payload: '{}'
-    });
-    setupCode = sr.getResponseCode();
-    setupBody = sr.getContentText().slice(0, 200);
-    var h = sr.getAllHeaders();
-    Object.keys(h).forEach(function (k) {
-      // Names and lengths only — if a credential IS in here, do not print it.
-      var v = h[k];
-      setupHeaders[k] = (typeof v === 'string' && v.length > 40) ? '<' + v.length + ' chars>' : v;
-    });
-  } catch (e) { setupBody = 'error: ' + String((e && e.message) || e); }
-
-  return { ok: true, base: c.base, target: target, attempts: results,
-           setup_http: setupCode, setup_body: setupBody, setup_headers: setupHeaders };
 }
 
 /* One comparable form of a permit number. Metrc's are short letter-and-digit codes; a sheet cell can
