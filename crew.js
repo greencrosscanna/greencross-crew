@@ -1184,7 +1184,16 @@
     ui.pane.style.display = onInc ? 'none' : '';
     ui.inc.style.display = onInc ? '' : 'none';
     syncDocTitle();                 // leaving incentive puts the tab name back
-    if (!onInc) return;
+    if (!onInc) {
+      /* Leaving the screen takes its address with it — a reload on the roster must not reopen the
+         incentive tab. */
+      try {
+        if (window.location && /^#incentive/i.test(window.location.hash)) {
+          history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+      } catch (e) {}
+      return;
+    }
     /* Fetched once per visit rather than on every tab click: the live period asks Leaderboard for
        a fortnight of transactions, which is slow enough to notice. */
     if (!inc.data && !inc.loading) loadIncentive(inc.pp || '');
@@ -2634,14 +2643,37 @@
      Editing follows the roster's rule — no Edit mode, no Save button. A checkbox commits on
      change, a SPIFF field on a 600ms pause and on blur, and a toast names what was written. */
 
-  var inc = { data: null, pp: '', loading: false, error: '',
+  var inc = { data: null, pp: '', store: '', loading: false, error: '',
               approvePp: '', approveToken: '' };
 
-  /* The two links Crew emails out:
-       #incentive/<pp>        open that period to look at it
-       #approve/<pp>/<token>  open it AND carry the one-time approval token
+  /* The links Crew emails out and the address the screen keeps for itself:
+       #incentive/<pp>            open that period to look at it (every store)
+       #incentive/<pp>/<store_id> the same period, ONE store (store_id: bend, river-rd, …)
+       #approve/<pp>/<token>      open it AND carry the one-time approval token
      The token is read once and the hash is cleared immediately, so it does not sit in the address
-     bar to be bookmarked, shared or replayed — and a refresh after approving does not try again. */
+     bar to be bookmarked, shared or replayed — and a refresh after approving does not try again.
+
+     THE ADDRESS FOLLOWS THE SCREEN (incSyncHash, from paintIncentive): picking a period or a store
+     rewrites it, so a reload or a copied link returns to the same view. Before 2026-10-12 it was
+     read once on load and never written, so a copied link always jumped back to the old period.
+     The store is a store_id — the registry's key — never a display name, so a rename in Command
+     Center cannot break a link that is already in somebody's inbox. */
+  function incHashFor(pp, store) {
+    return '#incentive' + (pp ? '/' + pp + (store ? '/' + store : '') : '');
+  }
+  function incParseHash(h) {
+    var m = /^#incentive(?:\/([a-z0-9-]+)(?:\/([a-z0-9-]+))?)?$/i.exec(String(h || ''));
+    return m ? { pp: m[1] || '', store: String(m[2] || '').toLowerCase() } : null;
+  }
+  function incSyncHash() {
+    if (state.tab !== 'incentive' || !inc.data || inc.loading || inc.error) return;
+    var want = incHashFor(inc.pp, inc.store);
+    try {
+      if (window.location && window.location.hash !== want) {
+        history.replaceState(null, '', window.location.pathname + window.location.search + want);
+      }
+    } catch (e) { /* an address that cannot be updated is not worth failing the screen over */ }
+  }
   function incReadHash() {
     var h = String((window.location && window.location.hash) || '');
     var m = /^#approve\/([0-9-]+)\/([a-z0-9]+)$/i.exec(h);
@@ -2652,9 +2684,23 @@
       catch (e) { window.location.hash = ''; }
       return true;
     }
-    m = /^#incentive(?:\/([0-9-]+))?$/i.exec(h);
-    if (m) { inc.pp = m[1] || ''; state.tab = 'incentive'; return true; }
+    m = incParseHash(h);
+    if (m) { inc.pp = m.pp; inc.store = m.store; state.tab = 'incentive'; return true; }
     return false;
+  }
+  /* The address edited by hand, or a link pasted into a tab that is already open. A store change is
+     only a repaint; a period change is a fetch. Ignored for anything that is not an incentive
+     address — in particular #approve/…, whose token must never be re-read from here. */
+  function incOnHashChange() {
+    var m = incParseHash(window.location && window.location.hash);
+    if (!m || state.tab !== 'incentive') return;
+    var storeChanged = m.store !== inc.store;
+    inc.store = m.store;
+    if (m.pp && m.pp !== inc.pp) { loadIncentive(m.pp); return; }
+    if (storeChanged) paintIncentive();
+  }
+  if (window && typeof window.addEventListener === 'function') {
+    window.addEventListener('hashchange', incOnHashChange);
   }
   var incTimers = Object.create(null);
   /* Which cells the approver has deliberately unlocked this sitting. Not persisted: an unlock is
@@ -2813,7 +2859,15 @@
        against a bar that no longer exists. Marking those rows green against today's 1.5% would be
        asserting they hit a target that did not apply to them. No scheme, no marks. */
     var T = d.thresholds || null;
-    var buds = d.budtenders || [], mgrs = d.managers || [];
+    var allBuds = d.budtenders || [], allMgrs = d.managers || [];
+    /* ONE STORE IS A FILTER OVER WHAT IS ALREADY HERE, NOT A SECOND CALCULATION. Every figure below
+       is computed by the same budCalc/mgrCalc, from the same rows, as on the all-store screen — only
+       the rows SHOWN and SUMMED change. `allBuds` still goes into mgrCalc so a manager's team
+       attendance is counted exactly as it is there. The payload holds EVERY store: this narrows
+       what is drawn, it is not an access boundary. Pinned by tests/store_view_test.js. */
+    var storeId = inc.store || '';
+    var buds = storeId ? incInStore(allBuds, storeId) : allBuds;
+    var mgrs = storeId ? incInStore(allMgrs, storeId) : allMgrs;
 
     /* Computed for a live period, read straight off the row for an imported one. Same shape either
        way so one renderer serves both — the difference is which side produced the number. */
@@ -2826,7 +2880,7 @@
       if (isImported) return { bonus: m.bonus, payroll: m.payroll, spiff: m.spiff, hr: m.per_hour,
                                pct: incFrozenPct(m.sales, m.target),
                                salesB: null, discB: null, aovB: null, teamA: m.team_attendance };
-      return calcMgr(m, T, incInputs(), buds);
+      return calcMgr(m, T, incInputs(), allBuds);
     }
 
     var h = [];
@@ -2840,10 +2894,12 @@
     }
     var budTotal = buds.reduce(function (a, b) { return a + (paidOf(b, budCalc(b)) || 0); }, 0);
     var mgrTotal = mgrs.reduce(function (a, m) { return a + (paidOf(m, mgrCalc(m)) || 0); }, 0);
-    var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll,
+    var showAdmin = d.admin && !storeId;      // Admin belongs to no store
+    var adm = showAdmin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll,
                                         pct: incFrozenPct(d.admin.sales, d.admin.target) }
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (paidOf(d.admin, adm) || 0) : 0;
+    var storeLabel = storeId ? incStoreLabel(storeId, allMgrs.concat(allBuds)) : '';
     var spiffTot = incSpiffTotal(buds.map(budCalc).concat(mgrs.map(mgrCalc)));
 
     var isPractice = incIsPractice(d);
@@ -2863,19 +2919,23 @@
              'tab. Nobody is paid, and the real period is untouched.</div>');
     }
 
-    var gearHtml = incGearHtml(d);
+    /* In the store view the approve / send / export steps are not offered: they act on the WHOLE
+       period, and a button on a one-store page reads as acting on one store. Those live on the
+       all-store screen, one click away. */
+    var gearHtml = storeId ? '' : incGearHtml(d);
     h.push('<div class="crew-inc-band' + (gearHtml ? ' has-gear' : '') + '">' + gearHtml +
            '<div class="crew-inc-head"><div class="crew-inc-headl">');
-    h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive</span>' +
+    h.push('<div class="crew-inc-titlerow"><span class="crew-inc-title">Incentive' +
+           (storeId ? ' — ' + esc(storeLabel) : '') + '</span>' +
            '<span class="crew-inc-badge ' +
              (isPractice ? 'is-practice">Practice'
             : isImported ? 'is-imported">As paid'
                          : 'is-live"><span class="crew-inc-dotlive"></span>Live') +
-           '</span>' + incToDateHtml(d.to_date) + '</div>');
-    h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) +
-           '<span class="crew-inc-facts">' + esc(incFacts(d, buds, mgrs)) + '</span></div>');
+           '</span>' + (storeId ? '' : incToDateHtml(d.to_date)) + '</div>');   // to-date is company-wide
+    h.push('<div class="crew-inc-sub">' + incPeriodSelect(d) + incStoreSelect(storeId, allMgrs.concat(allBuds)) +
+           '<span class="crew-inc-facts">' + esc(incFacts(d, buds, mgrs, !storeId)) + '</span></div>');
     h.push('</div><div class="crew-inc-spacer"></div>');
-    h.push(incHeadActions(d, isImported));
+    h.push(storeId ? incStoreActions(d) : incHeadActions(d, isImported));
     h.push('</div>');
 
     /* Totals as tiles, the grand total green-edged — it is the number the screen exists to
@@ -2889,14 +2949,24 @@
     h.push('<div class="is-spiff" title="Vendor-funded. Not included in Total payroll.">' +
            '<dd>' + (spiffTot.any ? esc(m0(spiffTot.total)) : '—') + '</dd>' +
            '<dt>SPIFF · vendor-funded</dt></div>');
-    h.push('<div><dd>' + esc(m0(admPay)) + '</dd><dt>Admin</dt></div>');
-    h.push('<div class="is-total"><dd>' + esc(m0(budTotal + mgrTotal + admPay)) +
-           '</dd><dt>Total payroll</dt></div>');
+    if (storeId) {
+      /* No Admin tile in a store's view (admin belongs to no store), and the total says whose it is. */
+      h.push('<div class="is-total"><dd>' + esc(m0(budTotal + mgrTotal)) +
+             '</dd><dt>Store payroll</dt></div>');
+    } else {
+      h.push('<div><dd>' + esc(m0(admPay)) + '</dd><dt>Admin</dt></div>');
+      h.push('<div class="is-total"><dd>' + esc(m0(budTotal + mgrTotal + admPay)) +
+             '</dd><dt>Total payroll</dt></div>');
+    }
     h.push('</dl></div>');
 
-    h.push('<div class="crew-inc-body">');
+    h.push('<div class="crew-inc-body' + (storeId ? ' crew-inc-storeview' : '') + '">');
 
-    if (d.admin) h.push(incAdminTable(d.admin, adm, isImported));
+    if (storeId && !mgrs.length && !buds.length) {
+      h.push('<div class="crew-inc-msg">No one is on record for this store in this pay period. ' +
+             'Pick another store or period above.</div>');
+    }
+    if (showAdmin) h.push(incAdminTable(d.admin, adm, isImported));
     h.push(incMgrTable(mgrs, mgrCalc, isImported, editable, T));
     h.push(incBudTable(buds, budCalc, isImported, editable, T));
 
@@ -3043,6 +3113,7 @@
     host.innerHTML = h.join('');
     incWire(host, d, isImported, editable);
     incRefocus(host, refocus);
+    incSyncHash();
   }
 
   /* Identify the focused cell by the row key it carries rather than by position: the tables are
@@ -3464,8 +3535,10 @@
   /* "Current period · closes in 3 days · 13 people" — all derived from what is already loaded,
      never a new fetch. On a closed or imported period the middle clause is the window instead,
      because "closes in -4 days" is nonsense and silence is worse. */
-  function incFacts(d, buds, mgrs) {
-    var n = (buds || []).length + (mgrs || []).length + (d.admin ? 1 : 0);
+  function incFacts(d, buds, mgrs, withAdmin) {
+    /* `withAdmin` is false only in the one-store view, where the admin is not in the list. Undefined
+       (every older caller) keeps counting them. */
+    var n = (buds || []).length + (mgrs || []).length + (d.admin && withAdmin !== false ? 1 : 0);
     var people = n + (n === 1 ? ' person' : ' people');
     var pp = d.payPeriod || {};
     /* Checked BEFORE `imported`: an approved practice period is served from a history tab and would
@@ -3592,6 +3665,53 @@
         (at <= 0 ? ' disabled' : '') + ' aria-label="Newer period">›</button></span>' +
       '<span class="crew-inc-printpp">' + (incIsPractice(d) ? 'PRACTICE — ' : '') +
         'Pay period ' + esc(incPPDate(cur)) + ' → ' + esc(end) + '</span>';
+  }
+
+  /* ── The one-store view ─────────────────────────────────────────────────────────────────────
+     Rows for one store, by the registry's key. A floater is booked to corporate by the fold, so
+     they appear in no store's view — the same place they sit on the all-store screen. */
+  function incInStore(rows, storeId) {
+    return (rows || []).filter(function (r) { return incStoreId(r) === storeId; });
+  }
+  /* The store's printed name: the registry first, then whatever a row of that store carried, and
+     only then the bare id — so an unknown id in a hand-typed link still says something. */
+  function incStoreLabel(storeId, rows) {
+    var reg = '';
+    try { reg = (window.GXStores && GXStores.name && GXStores.name(storeId)) || ''; } catch (e) { reg = ''; }
+    if (reg) return reg;
+    var hit = incInStore(rows, storeId)[0];
+    return (hit && (hit.storeName || hit.store_label)) || storeId;
+  }
+  /* Stores to offer = the stores that have people in THIS payload (never a typed-in list), in the
+     screen's own store order. The chosen store is always offered, even with nobody in it, so the
+     select cannot silently show "All stores" for a link that asked for something else. */
+  function incStoreOptions(rows, chosen) {
+    var seen = Object.create(null), out = [];
+    incByStore(rows).forEach(function (r) {
+      var id = incStoreId(r);
+      if (!id || id === 'corporate' || seen[id]) return;
+      seen[id] = true; out.push({ id: id, name: incStoreLabel(id, rows) });
+    });
+    if (chosen && !seen[chosen]) out.push({ id: chosen, name: incStoreLabel(chosen, rows) });
+    return out;
+  }
+  function incStoreSelect(chosen, rows) {
+    var opts = incStoreOptions(rows, chosen).map(function (o) {
+      return '<option value="' + esc(o.id) + '"' + (o.id === chosen ? ' selected' : '') + '>' +
+             esc(o.name) + '</option>';
+    }).join('');
+    return '<span class="crew-inc-per crew-inc-storepick"><select id="incStore" aria-label="Store">' +
+           '<option value=""' + (chosen ? '' : ' selected') + '>All stores</option>' + opts +
+           '</select></span>';
+  }
+  /* What the one-store page offers instead of the period's steps: print this page, and go back.
+     Print is NOT behind the payout gate — that gate orders the steps of CLOSING a period, and this
+     page is a review copy; it prints on a running period too, which is when a manager review is
+     most useful. The page says which period and how far along it is in its own heading. */
+  function incStoreActions(d) {
+    return '<div class="crew-inc-actions">' +
+           '<button type="button" class="gx-btn gx-btn-green" id="incStorePrint">Print this store</button>' +
+           '<button type="button" class="gx-btn" id="incAllStores">All stores</button></div>';
   }
 
   function incSecHead(label, n, extra) {
@@ -3762,6 +3882,12 @@
   function incWire(host, d, isImported, editable) {
     var sel = host.querySelector('#incPeriod');
     if (sel) sel.addEventListener('change', function () { loadIncentive(sel.value); });
+    var ss = host.querySelector('#incStore');
+    if (ss) ss.addEventListener('change', function () { inc.store = ss.value; paintIncentive(); });
+    var sp0 = host.querySelector('#incStorePrint');
+    if (sp0) sp0.addEventListener('click', function () { window.print(); });
+    var al = host.querySelector('#incAllStores');
+    if (al) al.addEventListener('click', function () { inc.store = ''; paintIncentive(); });
     /* The arrows step the same array the select holds — one source of truth for what exists. */
     function step(delta) {
       var list = (d.periods || []), cur = d.pp_start || (d.payPeriod && d.payPeriod.start);
@@ -4147,7 +4273,10 @@
     var a = incMMDDYY(incPPDate(d.pp_start || src));
     var b = incMMDDYY(d.pp_end   || (d.payPeriod && d.payPeriod.end));
     if (!a || !b) return '';
-    return (incIsPractice(d) ? 'PRACTICE - ' : '') + 'Incentive Dashboard - ' + a + '-' + b;
+    /* A one-store printout names its store, so it cannot be filed over — or mistaken for — the
+       all-store payout record whose name the engine's PDF follows (pdf_name_agreement_test). */
+    var who = inc.store ? ' - ' + incStoreLabel(inc.store, (d.managers || []).concat(d.budtenders || [])) : '';
+    return (incIsPractice(d) ? 'PRACTICE - ' : '') + 'Incentive Dashboard' + who + ' - ' + a + '-' + b;
   }
   /* THE TITLE IS SET WHEN THE VIEW PAINTS, NOT WHEN PRINTING STARTS — and that is the second
      attempt at this. Doing it on `beforeprint` was still too late in practice: Sky printed the

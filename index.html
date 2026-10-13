@@ -724,7 +724,7 @@
          should not depend on that. */
       .gx-topnav, .crew-subnav, .crew-rail, .crew-pane,
       .gx-bug-fab, #gxBugFab, #gxBugOverlay, .gx-bug-modal,
-      .crew-toast, .crew-inc-actions, #incPeriod, .gxdev-banner,
+      .crew-toast, .crew-inc-actions, #incPeriod, .crew-inc-storepick, .gxdev-banner,
       .crew-inc-returned, .inc-tray, .inc-tray-back, .crew-inc-gear,
       .crew-inc-nav, .crew-inc-group, .crew-inc-edit, .crew-inc-revert,
       .crew-imp-back, .crew-inc-todate,
@@ -746,6 +746,11 @@
       .crew-inc-band { background: #fff !important; border-bottom: 1px solid #bbb !important;
         padding: 0 0 10px !important; }
       .crew-inc-body { padding: 0 !important; }
+      /* ONE STORE, ONE PAGE: a manager and a store's budtenders are short enough that tighter rows
+         fit them on a single sheet, and a row is never split across two. */
+      .crew-inc-storeview .crew-inc-tbl td, .crew-inc-storeview .crew-inc-tbl th {
+        padding-top: 3px !important; padding-bottom: 3px !important; font-size: 10.5px; }
+      .crew-inc-storeview .crew-inc-tbl tr, .crew-inc-storeview .crew-inc-wrap { break-inside: avoid; }
       .crew-inc-tot { display: flex !important; gap: 26px; margin: 10px 0 12px; max-width: none; }
       .crew-inc-tot div { border: 0 !important; background: none !important; padding: 0 !important; }
       .crew-inc-tot dd { font-size: 15px; }
@@ -1176,6 +1181,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.412"></script>
+  <script src="crew.js?v=1.413"></script>
 </body>
 </html>
