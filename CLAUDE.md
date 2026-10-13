@@ -345,6 +345,26 @@ overview minus Employee of the Month).
   a scope outside the recorded grant. To add one: revoke-and-reconsent first, confirm with
   `scopes_check`, then move the test's `GRANTED` list.
 
+## Store incentive email — Monday and Thursday 05:00, one table per store
+Built for Mike (2026-10-12). **It carries every person's name and pay in the body.**
+
+- **Which period:** the **previous** one on a pay period's first day (the Monday after it ends),
+  the **current** one every other send. `storeEmailPeriod_` reads "today" and the calendar from the
+  same clock; never test it with the two disagreeing.
+- **Same figures as the screen, by construction:** rows come from `getIncentive_` itself and live rows
+  are scored by `incCalcBud_` / `incCalcMgr_` with the payroll override applied after. A closed
+  period is read as stored. **Do not write a third copy of the bonus math here.**
+- **`getIncentive_(p, preAuth)`: `preAuth` is a function argument, never a request parameter.** It
+  skips sign-in only when it carries the in-process `__system === true` marker, which no request can
+  produce. Do not read it off `p`.
+- **Recipients are the Script Property `STORE_EMAIL_TO`** (`?action=store_email_to&to=<mailbox>`),
+  company-domain only, no fallback list; one bad entry refuses the whole change. Not an opt-in
+  checkbox: this email is a deliberate decision about who sees pay.
+- **A failed build from the trigger mails a notice with NO figures.** Corporate and the admin get no
+  table. The one MailApp call stays `sendMail_`.
+- Routes (deploy secret): `store_email` (preview; `send=yes`, `show=html`, `pp_start=`, `today=`),
+  `store_email_to`. Pinned by `tests/store_email_test.js`.
+
 ## Avatars are written by GX Core now
 `GXCore.setAvatar(ref, config, by)` (v225) is the single avatar write in the suite: seed pinned to
 `employee_number`, lock contention retried, a clear NAMED in `clear=` and then verified.

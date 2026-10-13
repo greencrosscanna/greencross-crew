@@ -473,6 +473,17 @@ function route_(e) {
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(sendDigest_(p), p.callback);
 
+      /* The store incentive email (Mondays and Thursdays 05:00). Previews by default; send=yes mails
+         it; pp_start= / today= choose the period for a test; show=html returns the body in a
+         preview. store_email_to reads or sets WHO gets it. Both are deploy-secret: the body carries
+         every store's pay. */
+      case 'store_email':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(sendStoreEmail_(p), p.callback);
+      case 'store_email_to':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(storeEmailSetTo_(p), p.callback);
+
       // Is Dutchie's existing permit data good enough to skip the Metrc integrator application?
       case 'permit_coverage':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
@@ -4073,6 +4084,273 @@ function sendDigestNow() {
   return r;
 }
 
+/* ══ The store incentive email ═══════════════════════════════════════════════════════════════════
+ *
+ * Mondays and Thursdays at 05:00 store time, one table per store — the same figures the incentive
+ * screen shows, laid out so the recipient can copy a store's table and paste it to that manager.
+ * Asked for by Mike (Director of Retail), 2026-10-12; decided with Sky the same day.
+ *
+ * WHICH PERIOD (Sky, 2026-10-12): on the first day of a pay period — the Monday after one ends —
+ * the PREVIOUS period, which is the one being closed that week. Every other send, the CURRENT one.
+ *
+ * SAME FIGURES AS THE SCREEN, BY CONSTRUCTION. The rows come from getIncentive_ itself (called with
+ * a fixed read-only identity), and live rows are scored by the engine's incCalcBud_/incCalcMgr_ —
+ * the copies pinned against the frozen oracle — with the recorded payroll override applied after,
+ * as everywhere else. A closed period is read as stored and never recomputed. Nothing here is a
+ * third implementation of the bonus math.
+ *
+ * WHO GETS IT: the Script Property STORE_EMAIL_TO — mailbox names on ACCOUNT_DOMAIN, set through
+ * ?action=store_email_to. No fallback list, and anything off the company domain is refused: this
+ * email carries every person's pay.
+ *
+ * REAL NAMES AND PAY ARE IN THE BODY. That is the product, and the reason the recipient list is a
+ * deliberate setting rather than an opt-in checkbox. A failed build mails the recipients a notice
+ * with NO figures in it, because a 5am trigger nobody watches that fails silently is a report that
+ * simply stops arriving. */
+var STORE_EMAIL_TO_PROP = 'STORE_EMAIL_TO';
+var LAST_STORE_EMAIL_PROP = 'CREW_LAST_STORE_EMAIL';
+/* Read-only, and `__system` is what getIncentive_ checks. A request cannot produce this object. */
+var STORE_EMAIL_AUTH_ = { ok: true, user: 'store-email', role: 'viewer', __system: true };
+
+function storeEmailPeriod_(todayIso) {
+  var ps = computedPeriods_(1);
+  if (!ps.length) return { ok: false, error: 'no pay-period anchor is set (cfg.payPeriodAnchor in GX Core)' };
+  var cur = ps[0], prev = ps[1];
+  if (todayIso === cur.start) {
+    if (!prev) return { ok: false, error: 'it is the first day of the first pay period and there is no previous one' };
+    return { ok: true, pp_start: prev.start, pp_end: prev.end, which: 'previous' };
+  }
+  return { ok: true, pp_start: cur.start, pp_end: cur.end, which: 'current' };
+}
+
+function storeEmailAddress_(raw) {
+  var x = String(raw || '').trim().toLowerCase();
+  if (!x) return '';
+  var a = x.indexOf('@') > 0 ? x : x + '@' + ACCOUNT_DOMAIN;
+  var ok = /^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(a) &&
+           a.slice(a.lastIndexOf('@') + 1) === ACCOUNT_DOMAIN;
+  return ok ? a : '';
+}
+function storeEmailList_(raw) {
+  var seen = Object.create(null), out = [];
+  String(raw || '').split(/[,;\s]+/).forEach(function (t) {
+    var a = storeEmailAddress_(t);
+    if (a && !seen[a]) { seen[a] = 1; out.push(a); }
+  });
+  return out;
+}
+function storeEmailRecipients_() {
+  var raw = '';
+  try { raw = PropertiesService.getScriptProperties().getProperty(STORE_EMAIL_TO_PROP) || ''; } catch (e) {}
+  return storeEmailList_(raw);
+}
+
+/* Deploy-secret route: ?action=store_email_to[&to=mike]. No `to` reads; an empty one clears. A value
+   with ANY entry that is not on the company domain is refused whole, never trimmed to what passes. */
+function storeEmailSetTo_(p) {
+  if (p.to == null) return { ok: true, recipients: storeEmailRecipients_() };
+  var tokens = String(p.to).split(/[,;\s]+/).filter(function (t) { return t; });
+  var good = storeEmailList_(p.to);
+  if (good.length !== tokens.length) {
+    return { ok: false, error: 'every recipient must be a mailbox on ' + ACCOUNT_DOMAIN +
+             ' — nothing was changed' };
+  }
+  var props = PropertiesService.getScriptProperties();
+  if (!good.length) props.deleteProperty(STORE_EMAIL_TO_PROP);
+  else props.setProperty(STORE_EMAIL_TO_PROP, good.join(','));
+  return { ok: true, recipients: good };
+}
+
+/* The rows the email prints, per store. Corporate is not a store (floaters and the owner are booked
+   there) and the admin belongs to none, so neither has a table — the same rule as the store view. */
+function storeEmailModel_(d, labelOf) {
+  var imported = d.source === 'imported', T = d.thresholds, inputs = d.inputs || {};
+  var by = Object.create(null), order = [];
+  function slot(id) {
+    if (!by[id]) { by[id] = { id: id, label: labelOf(id), mgrs: [], buds: [] }; order.push(id); }
+    return by[id];
+  }
+  function idOf(r) { return String(r.store_id || r.storeSlug || ''); }
+  function nameOf(r) { return String(r.pdf_name || r.name || ''); }
+  function pctOf(sales, target) {
+    var s = Number(sales), t = Number(target);
+    if (sales == null || sales === '' || target == null || target === '') return null;
+    return (isFinite(s) && isFinite(t) && t > 0) ? s / t * 100 : null;
+  }
+  (d.managers || []).forEach(function (m) {
+    var id = idOf(m); if (!id || id === 'corporate') return;
+    var row;
+    if (imported) {
+      row = { name: nameOf(m), target: m.target, sales: m.sales, pct: pctOf(m.sales, m.target),
+              disc: m.discount_pct, aov: m.aov, team: m.team_attendance, spiff: m.spiff,
+              bonus: m.bonus, payroll: m.payroll };
+    } else {
+      var c = incCalcMgr_(m, T, inputs, d.budtenders || []);
+      var i = inputs[m.employee_id || m.nameKey] || {};
+      row = { name: nameOf(m), target: m.target, sales: m.sales, pct: c.pct, disc: m.discount * 100,
+              aov: m.aov, team: c.teamA, spiff: c.spiff, bonus: c.bonus,
+              payroll: incPayroll_(c.payroll, i) };
+    }
+    slot(id).mgrs.push(row);
+  });
+  (d.budtenders || []).forEach(function (b) {
+    var id = idOf(b); if (!id || id === 'corporate') return;
+    var row;
+    if (imported) {
+      row = { name: nameOf(b), sales: b.sales, disc: b.discount_pct, aov: b.aov, spiff: b.spiff,
+              bonus: b.bonus, payroll: b.payroll };
+    } else {
+      var c = incCalcBud_(b, T, inputs);
+      var i = inputs[b.employee_id || b.nameKey] || {};
+      row = { name: nameOf(b), sales: b.sales, disc: b.discount * 100, aov: b.aov, spiff: c.spiff,
+              bonus: c.bonus, payroll: incPayroll_(c.payroll, i) };
+    }
+    slot(id).buds.push(row);
+  });
+  order.sort(function (a, b) {
+    var x = by[a].label.toLowerCase(), y = by[b].label.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0;
+  });
+  return order.map(function (id) {
+    var s = by[id];
+    s.total = s.mgrs.concat(s.buds).reduce(function (a, r) { return a + (Number(r.payroll) || 0); }, 0);
+    return s;
+  });
+}
+
+function storeEmailDates_(start, end) {
+  var M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function part(iso) { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso)); return m ? { y: m[1], m: M[+m[2] - 1], d: +m[3] } : null; }
+  var a = part(start), b = part(end);
+  return (a && b) ? a.m + ' ' + a.d + ' – ' + b.m + ' ' + b.d + ', ' + b.y : start + ' – ' + end;
+}
+
+function storeEmailHtml_(model, meta) {
+  var esc = function (x) { return String(x == null ? '' : x).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  function m0(n) { return '$' + Math.round(Number(n) || 0).toLocaleString('en-US'); }
+  function m2(n) { return '$' + (Math.round((Number(n) || 0) * 100) / 100).toFixed(2); }
+  function dash(v, f) { return (v == null || v === '' || !Number(v)) ? '—' : (f || m0)(v); }
+  function pct1(n) { return (Math.round(n * 10) / 10).toFixed(1) + '%'; }
+  var R = function (v) { return '<td align="right">' + v + '</td>'; };
+  var html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">' +
+    '<h2 style="margin:0 0 4px">Store incentive reports</h2>' +
+    '<p style="margin:0;color:#555">Pay period <b>' + esc(meta.dates) + '</b> · ' + esc(meta.status) + '</p>' +
+    '<p style="margin:6px 0 0;color:#777;font-size:12px">Copy any store\'s table and paste it to that manager.</p>';
+  (meta.warnings || []).forEach(function (w) {
+    html += '<p style="background:#fff3cd;padding:8px 12px;border-radius:6px;margin:10px 0">⚠️ ' + esc(w) + '</p>';
+  });
+  model.forEach(function (s) {
+    html += '<h3 style="margin:22px 0 4px;font-size:15px">' + esc(s.label) + '</h3>' +
+      '<div style="margin:0 0 6px;font-size:12px;color:#666">Store payroll ' + m0(s.total) + ' · ' +
+      '<a href="' + esc(CREW_URL + '#incentive/' + meta.pp_start + '/' + s.id) + '">open live page</a></div>' +
+      '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse;font-size:12px;border-color:#ccc">' +
+      '<thead><tr><th align="left">Name</th><th>Target</th><th>Sales</th><th>% Goal</th><th>Discount</th>' +
+      '<th>AOV</th><th>Team att.</th><th>SPIFF</th><th>Bonus</th><th>Payroll</th></tr></thead><tbody>';
+    s.mgrs.forEach(function (r) {
+      html += '<tr><td>' + esc(r.name) + ' <i>(manager)</i></td>' + R(dash(r.target)) + R(dash(r.sales)) +
+        R(r.pct == null ? '—' : pct1(r.pct)) + R((Number(r.disc) || 0).toFixed(2) + '%') + R(m2(r.aov)) +
+        R(dash(r.team)) + R(dash(r.spiff, m2)) + R(dash(r.bonus)) + R(dash(r.payroll)) + '</tr>';
+    });
+    s.buds.forEach(function (r) {
+      html += '<tr><td>' + esc(r.name) + '</td>' + R('—') + R(dash(r.sales)) + R('—') +
+        R((Number(r.disc) || 0).toFixed(2) + '%') + R(m2(r.aov)) + R('—') + R(dash(r.spiff, m2)) +
+        R(dash(r.bonus)) + R(dash(r.payroll)) + '</tr>';
+    });
+    html += '</tbody></table>';
+  });
+  return html + '</div>';
+}
+
+/* Which period, its rows, and the words around them. Returns the whole answer or an error — never a
+   half-built email. */
+function storeEmailBuild_(p) {
+  var today = String(p.today || '') || Utilities.formatDate(new Date(), STORE_TZ, 'yyyy-MM-dd');
+  var per = p.pp_start ? { ok: true, pp_start: String(p.pp_start), which: 'asked for' } : storeEmailPeriod_(today);
+  if (!per.ok) return per;
+  var d = getIncentive_({ pp_start: per.pp_start }, STORE_EMAIL_AUTH_);
+  if (!d || d.ok === false) return { ok: false, error: 'could not read the period: ' + ((d && d.error) || 'unknown') };
+  var names = {};
+  try { (GXCore.getStores() || []).forEach(function (x) { names[x.store_id] = x.display_name || x.store_id; }); }
+  catch (e) { /* a label is a nicety; the id still reads */ }
+  var model = storeEmailModel_(d, function (id) { return names[id] || id; });
+  if (!model.length) return { ok: false, error: 'the period has no store rows — nothing to send' };
+
+  var end = d.pp_end || (d.payPeriod && d.payPeriod.end) || per.pp_end || '';
+  var status = d.source === 'imported' ? 'as paid (approved)'
+             : (d.payPeriod && d.payPeriod.current) ? 'still running — figures will change'
+             : 'closed, not yet approved — figures may still change';
+  var warnings = [];
+  if (d.source !== 'imported') {
+    if (d.coverage && d.coverage.ok === false) {
+      warnings.push('Some stores may be missing from these figures — the roster shows staff there but no sales were found. Check before relying on them.');
+    }
+    var st = (d.payPeriod && d.payPeriod.current) ? null : d.store_totals;
+    if (st && st.state === 'mismatch') {
+      warnings.push('These figures do not agree with Dutchie\'s closing report for at least one store.');
+    }
+  }
+  var meta = { pp_start: per.pp_start, dates: storeEmailDates_(per.pp_start, end), status: status, warnings: warnings };
+  return { ok: true, which: per.which, pp_start: per.pp_start, pp_end: end, source: d.source, meta: meta,
+           model: model, html: storeEmailHtml_(model, meta),
+           subject: 'Store incentive reports — ' + meta.dates + ' (' + status.split(' —')[0] + ')' };
+}
+
+function sendStoreEmail_(p) {
+  var source = String(p.source || 'webapp');
+  var override = p.to ? storeEmailList_(p.to) : null;
+  var recipients = override || storeEmailRecipients_();
+  if (!recipients.length) {
+    return { ok: false, error: 'nobody is set to receive the store email',
+             fix: 'Set STORE_EMAIL_TO with ?action=store_email_to&to=<mailbox name>.' };
+  }
+  var b = storeEmailBuild_(p);
+  var at = new Date().toISOString();
+  function note(res) {
+    try { PropertiesService.getScriptProperties().setProperty(LAST_STORE_EMAIL_PROP, scrubSecrets_(JSON.stringify(res))); }
+    catch (e) { /* a nicety; never fail the send over it */ }
+    return res;
+  }
+  if (!b.ok) {
+    /* A report that silently stops arriving is worse than one that says it could not be built — and
+       this notice carries no figures, only the reason. Trigger runs only; a hand-run sees the error. */
+    if (source === 'trigger') {
+      try { sendMail_({ to: recipients.join(','), subject: 'Store incentive reports — could not be built today',
+                        body: 'Today\'s store incentive email could not be built: ' + b.error +
+                              '\n\nNothing was sent. Tell Sky; the incentive screen in GX Crew still works.',
+                        name: 'GX Crew' }); } catch (e) {}
+    }
+    return note({ ok: false, at: at, source: source, error: b.error });
+  }
+  var facts = { period: b.pp_start + ' → ' + b.pp_end, which: b.which, status: b.meta.status,
+                stores: b.model.map(function (s) { return s.label + ' ' + (s.mgrs.length + s.buds.length); }),
+                warnings: b.meta.warnings };
+  if (String(p.send || '') !== 'yes') {
+    var out = { ok: true, mode: 'preview', source: source, would_send_to: recipients, subject: b.subject,
+                facts: facts, note: 'Nothing sent. Repeat with send=yes.' };
+    if (String(p.show || '') === 'html') out.html = b.html;
+    return out;
+  }
+  try {
+    sendMail_({ to: recipients.join(','), subject: b.subject, htmlBody: b.html, name: 'GX Crew' });
+  } catch (e) {
+    return note({ ok: false, at: at, source: source, to: recipients, needs_authorization: true,
+                  error: String((e && e.message) || e) });
+  }
+  return note({ ok: true, at: at, source: source, mode: 'sent', to: recipients, subject: b.subject, facts: facts });
+}
+
+/* Trigger entry points. Two triggers, one handler: the email's content decides which period it is. */
+function storeIncentiveEmail() { return sendStoreEmail_({ send: 'yes', source: 'trigger' }); }
+
+/* Editor-runnable twin, for authorizing once and for sending by hand. THROWS on a failed send, for
+   the same reason sendDigestNow does: a run that did not send must read Failed, not Completed. */
+function sendStoreEmailNow() {
+  var r = sendStoreEmail_({ send: 'yes', source: 'editor' });
+  if (!r.ok) throw new Error((r.error || 'store email failed') + (r.fix ? ' — ' + r.fix : ''));
+  return r;
+}
+
 // ─── Nightly: who does Dutchie say works here that Crew has never heard of? ─────
 /*
  * THE GAP THIS CLOSES. Nothing polled anything. A new hire appeared in Crew only when a human
@@ -4205,7 +4483,8 @@ function installNightlyScanUnsafe_(p) {
   var canMail = true;
   try { MailApp.getRemainingDailyQuota(); } catch (e) { canMail = false; }
 
-  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest', 'weeklyBackup', 'approvalEscalationSweep']
+  var handlers = canMail ? ['nightlyDutchieScan', 'weeklyDigest', 'weeklyBackup', 'approvalEscalationSweep',
+                            'storeIncentiveEmail']
                          : ['nightlyDutchieScan', 'weeklyBackup'];
   var removed = 0;
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -4231,6 +4510,13 @@ function installNightlyScanUnsafe_(p) {
      digest above. The sweep reads one small tab and is a no-op on almost every run. */
   if (canMail) {
     ScriptApp.newTrigger('approvalEscalationSweep').timeBased().everyMinutes(15).create();
+    /* The store incentive email: Monday and Thursday 05:00. Which period it carries is decided by
+       the email itself (storeEmailPeriod_), not by the schedule. Mails nobody until STORE_EMAIL_TO
+       is set, and says so in its last-attempt record. */
+    ScriptApp.newTrigger('storeIncentiveEmail').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY)
+      .atHour(5).inTimezone(STORE_TZ).create();
+    ScriptApp.newTrigger('storeIncentiveEmail').timeBased().onWeekDay(ScriptApp.WeekDay.THURSDAY)
+      .atHour(5).inTimezone(STORE_TZ).create();
   }
   /* PROVE THE CRON PATH, NOW, WHILE SOMEBODY IS WATCHING.
    *
@@ -4262,6 +4548,7 @@ function installNightlyScanUnsafe_(p) {
   return { ok: true, enabled: true, replaced: removed,
            nightly_scan_hour: 5, timezone: STORE_TZ, cron_path_check: dry,
            backup_trigger: 'installed, SUNDAY 03:00',
+           store_email_trigger: canMail ? 'installed, MONDAY and THURSDAY 05:00' : 'LEFT UNTOUCHED (no mail here)',
            digest_trigger: canMail ? 'installed, MONDAY 07:00' :
              'LEFT UNTOUCHED — this context cannot send mail, so reinstalling it here would ' +
              'replace a working trigger with one that fails silently. Run installNightlyScan() ' +
@@ -5939,13 +6226,19 @@ function defaultIncentivePeriod_(importedBy) {
   return (prev && !importedBy[prev.start]) ? prev.start : '';
 }
 
-function getIncentive_(p) {
+/* `preAuth` IS A FUNCTION ARGUMENT, NOT A REQUEST PARAMETER, and that is the whole guard. The router
+   calls getIncentive_(p) with one argument, so no URL can supply it; the one in-process caller is the
+   scheduled store email (storeEmailData_), which reads exactly the rows the screen does by the same
+   code instead of a second reader that could disagree with it, and passes a fixed read-only identity.
+   Never read it off `p` — `p` is `e.parameter`, and a truthy string there is how incentive_history
+   once leaked a whole closed period. Pinned by tests/store_email_test.js. */
+function getIncentive_(p, preAuth) {
   /* STAGE TIMINGS, returned on the live payload as `timings` (ms). The live load runs close to the
      browser's 45s JSONP timeout (2026-09-15: 42s measured, and Sky hit the timeout), and a number
      per stage is the only way to tell GX Core being slow from Crew being slow without guessing. */
   var T0 = Date.now(), tLast = T0, timings = {};
   var mark = function (k) { var n = Date.now(); timings[k] = n - tLast; tLast = n; };
-  var auth = requireCrew_(p);
+  var auth = (preAuth && preAuth.ok === true && preAuth.__system === true) ? preAuth : requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   mark('auth');
 
