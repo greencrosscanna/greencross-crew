@@ -475,15 +475,24 @@ the tray, never from a doc.**
   ten minutes to reach `full_name` on a closed period (and so the Capstone export). No figure comes
   from that list.
 - **The live screen keeps GX Core's performance answer for five minutes** (`PERF_SCREEN_CACHE_S`,
-  in Crew's own script cache, one entry per pay period asked for). It keeps the door's answer
+  in Crew's own script cache, one entry per question asked of the door). It keeps the door's answer
   as it arrived and nothing Crew derives from it; the mapping, stamp, fold, scheme, SPIFF, inputs
   and overrides run fresh on every load.
   - **The age is never reset.** A kept answer is as old as the door said plus the time it has sat
     in Crew, rounded up, and `perfSnapshotRefusal_` — the one freshness rule — is run again on that
     figure. `perf_age_minutes` on the payload is that same figure. Do not write a second rule.
   - **Never kept:** a refusal, an error, a stale answer, one with no age, one for another period, an
-    in-process answer, an ended period with no `max_age_minutes`, anything over
-    `PERF_SCREEN_MAX_BODY`, and a load that names no period.
+    in-process answer, an ended period with no `max_age_minutes`, and anything over
+    `PERF_SCREEN_MAX_BODY`.
+  - **A load that names no period is kept under today's date** — `current@<Los Angeles day>`
+    (`perfScreenToday_`, never `toISOString`), so after midnight the door is asked. That is the
+    first open of the tab once the last fortnight is approved.
+    - **The door is still asked with no period.** Do not work out the running fortnight from
+      Crew's calendar and ask for it by date; that is a different question.
+    - **Only a running period that contains today is kept or served there**
+      (`perfScreenPeriodOk_`): `payPeriod.current` exactly `true`, a plain-date start not after
+      today, and an end, when the answer states one, not before today.
+    - **It never shares an entry with a dated load**, even of the same fortnight.
   - **Two locks, and a write path must hold neither.** `perfFromSnapshot_` is reached only with
     `{ snapshot: true }`, and the copy is read only while `_perfScreenArmed_` is exactly `true` —
     which `getIncentive_` sets for the router's call alone, and which is cleared by the one look at

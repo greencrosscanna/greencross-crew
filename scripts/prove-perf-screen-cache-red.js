@@ -25,7 +25,8 @@ function inFn(s, name, from, to) {
   const out = typeof from === 'string' ? body.split(from).join(to) : body.replace(from, to);
   return s.slice(0, i) + out + (j < 0 ? '' : s.slice(j));
 }
-const PERIOD_CHECK = "    if (String((d.payPeriod && d.payPeriod.start) || d.pp_start || '') !== String(ppStart || '')) return ";
+const PERIOD_CHECK = "    if (!perfScreenPeriodOk_(d, ppStart, perfScreenToday_())) return ";
+const DAY_RE = "/^\\d{4}-\\d{2}-\\d{2}$/";
 
 const MUTATIONS = [
   /* The age. */
@@ -86,9 +87,43 @@ const MUTATIONS = [
   ['an entry that is not a snapshot answer is used',
    (s) => inFn(s, 'perfScreenCacheGet_', "if (!d || d.ok === false || d.snapshot !== true) return null;", "if (!d) return null;")],
   ['the key ignores the pay period',
-   (s) => inFn(s, 'perfScreenKey_', "PERF_SCREEN_CACHE_PREFIX + pp : ''", "PERF_SCREEN_CACHE_PREFIX : ''")],
-  ['anything at all makes a key — "the current period" included',
-   (s) => inFn(s, 'perfScreenKey_', "/^\\d{4}-\\d{2}-\\d{2}$/.test(pp) ?", "true ?")],
+   (s) => inFn(s, 'perfScreenKey_', ".test(pp)) tail = pp;", ".test(pp)) tail = 'period';")],
+  ['any text at all makes a key',
+   (s) => inFn(s, 'perfScreenKey_', "else if (" + DAY_RE + ".test(pp)) tail = pp;", "else tail = pp;")],
+
+  /* A load that names no period — "the current one". */
+  ['a load that names no period is not kept at all (as it was before v1.420)',
+   (s) => inFn(s, 'perfScreenKey_', "tail = today ? 'current@' + today : '';", "tail = '';")],
+  ['the no-period key does not carry the day',
+   (s) => inFn(s, 'perfScreenKey_', "tail = today ? 'current@' + today : '';", "tail = today ? 'current@' : '';")],
+  ['a no-period load shares the dated entry\'s key space (keyed on the day alone)',
+   (s) => inFn(s, 'perfScreenKey_', "tail = today ? 'current@' + today : '';", "tail = today;")],
+  ['the day is taken from toISOString — UTC, tomorrow from 5 PM Pacific',
+   (s) => inFn(s, 'perfScreenToday_', "String(Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'))", "new Date().toISOString().slice(0, 10)")],
+  ['a date that cannot be had fails the screen',
+   (s) => inFn(s, 'perfScreenToday_', "  } catch (e) { return ''; }", "  } catch (e) { throw e; }")],
+  ['a day in any shape is used as it comes',
+   (s) => inFn(s, 'perfScreenToday_', "return " + DAY_RE + ".test(day) ? day : '';", "return day;")],
+  ['a period that is NOT running is kept as the current one',
+   (s) => inFn(s, 'perfScreenPeriodOk_', "if (!per || per.current !== true) return false;", "if (!per) return false;")],
+  ['a truthy stand-in counts as running',
+   (s) => inFn(s, 'perfScreenPeriodOk_', "per.current !== true", "!per.current")],
+  ['a start that is not a plain date is accepted',
+   (s) => inFn(s, 'perfScreenPeriodOk_', "if (!day.test(start) || ", "if (")],
+  ['the rule runs without a readable today',
+   (s) => inFn(s, 'perfScreenPeriodOk_', " || !day.test(String(today || ''))", "")],
+  ['a period that has not started yet is accepted',
+   (s) => inFn(s, 'perfScreenPeriodOk_', " || start > today) return false;", ") return false;")],
+  ['a period that ended before today is accepted',
+   (s) => inFn(s, 'perfScreenPeriodOk_', " || today > String(per.end)) return false;", ") return false;")],
+  ['an end that cannot be read is waved through',
+   (s) => inFn(s, 'perfScreenPeriodOk_', "if (!day.test(String(per.end)) || ", "if (")],
+  ['a no-period answer is not checked at all',
+   (s) => inFn(s, 'perfScreenPeriodOk_', "  if (pp !== '') return ", "  if (pp === '') return true;\n  if (pp !== '') return ")],
+  ['a named period accepts an answer for any period',
+   (s) => inFn(s, 'perfScreenPeriodOk_', "|| d.pp_start || '') === pp;", "|| d.pp_start || '') !== '';")],
+  ['a no-period load asks the door for a period by date',
+   (s) => inFn(s, 'perfFromSnapshot_', "{ pp_start: ppStart || '' }", "{ pp_start: ppStart || Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd') }")],
 
   /* The bust. */
   ['a bust is not looked for',

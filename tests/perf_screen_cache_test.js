@@ -56,8 +56,12 @@ process.on('uncaughtException', (e) => {
 });
 
 const RUNNING = '2026-10-12', ENDED = '2026-09-28', CLOSED = '2026-09-14';
+const TODAY = '2026-10-13', RUNNING_END = '2026-10-25';     // the harness clock, as a Los Angeles day
+/* A moment on a Los Angeles calendar day, as the clock the engine reads (PDT, UTC-7, all October). */
+const LA = (day, hh, mm) => Date.UTC(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10), hh + 7, mm || 0, 0);
 const SEC = 1000, MIN = 60 * SEC;
 const PREFIX = 'crew:perf_screen:v1:', BUST = 'crew:perf_screen:busted_at';
+const CUR = PREFIX + 'current@' + TODAY;                    // where a load that names no period is kept, today
 const isPerf = (k) => /^crew:perf_screen:/.test(String(k));
 
 /* GX Core's door, as it answers live: the snapshot, with its age. What it says is set per test. */
@@ -281,12 +285,10 @@ console.log('\nA refusal, an error or a stale answer is never kept');
      len < 100000 && len >= S.g('PERF_SCREEN_MAX_BODY') && S.load({ pp_start: RUNNING }).returns_not_counted[0].length === 95500);
 
   const A = mk(SRC_NEW);
-  delete A.kv['cfg.payPeriodAnchor'];
-  const none = A.touch(() => A.load({}));
-  ok('a load that names no period ("the current one") is not kept: the door is asked each time',
-     none.r.ok === true && none.r.perf_cache === 'skip' && A.door.calls.join() === '' && A.keys().length === 0 && A.touch(() => A.load({})).door === 1);
   const key = A.g('perfScreenKey_');
-  ok('only a plain calendar day makes a key', key('') === '' && key('practice-2026-09-28') === '' && key('2026-9-28') === '' && key(undefined) === '' && key(ENDED) === PREFIX + ENDED);
+  ok('a plain calendar day makes that period\'s key; no period makes today\'s; anything else makes none',
+     key(ENDED) === PREFIX + ENDED && key('') === PREFIX + 'current@' + TODAY && key(undefined) === key('') && key(null) === key('') &&
+     key('practice-2026-09-28') === '' && key('2026-9-28') === '' && key('current') === '' && key('current@' + TODAY) === '' && key(0) === '');
 
   /* A good answer is kept; what comes after it does not disturb the rule. */
   const G = mk(SRC_NEW);
@@ -383,18 +385,36 @@ const ACK = { coverage_ok: 'yes', totals_ok: 'yes', spiff_unavailable: 'yes' };
 const rid = (s) => 'rq-' + s + '-' + '0'.repeat(20);
 /* A whole close with the screen's copy warm before every write — and holding DIFFERENT figures from
    the ones GX Core's live route returns, so a write that read it would freeze the wrong sales. */
-function writeScenario(W) {
+function writeScenario(W, firstOpen) {
   W.door.bump = 5000;
-  const rec = [], out = [];
-  const warm = () => { W.load({ pp_start: ENDED }); W.load({ pp_start: RUNNING }); W.load({ pp_start: PRACTICE }); W.load({}); };
+  const rec = [], out = [], defaults = [];
+  const REASON = 'Bo was paid forty dollars by hand and the record must say so before it is frozen.';
+  /* `firstOpen`: the entry kept for a load that names NO period is warm as well. That load only
+     happens once the ended fortnight is approved, so it is approved, the tab opened, and the period
+     reopened — all before the first recorded request — and the same nine requests then run. */
+  if (firstOpen) {
+    const a0 = W.get(Object.assign({ action: 'incentive_approve', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('A0') }, ACK));
+    const open = W.load({});
+    const u0 = W.get({ action: 'incentive_unapprove', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('U0'), reason: REASON });
+    if (!(a0.ok === true && a0.written === 6 && open.ok === true && open.payPeriod.start === RUNNING && u0.ok === true)) throw new Error('setup: could not open the tab on the running period');
+  }
+  /* Is the no-period entry in the cache right now, usable, and holding the door's (different) figures? */
+  const curWarm = () => {
+    const raw = W.cache.get(CUR);
+    if (!raw) return false;
+    const env = JSON.parse(raw), busted = Number(W.cache.get(BUST));
+    return env.d.budtenders[0].sales === DOOR_SALES(RUNNING) + 5000 && !(busted >= env.at) && W.clock.t - env.at <= 5 * MIN;
+  };
+  const warm = () => { W.load({ pp_start: ENDED }); W.load({ pp_start: RUNNING }); W.load({ pp_start: PRACTICE }); const d = W.load({}); defaults.push((d.perf_cache || '-') + ':' + d.payPeriod.start + ':' + bea(d).sales); };
   const call = (label, p) => {
     warm();
+    const cur = curWarm();
     const e0 = W.events.length;
     let reads = null;
     const t = W.touch(() => { let d = null; reads = W.count(() => { d = W.get(p); }); return d; });
     delete t.r.timings;
     out.push(t.r);
-    rec.push({ label, door: t.door, perf: t.perf, perfReads: t.reads, fetches: t.fetches, events: W.events.slice(e0), reads });
+    rec.push({ label, cur, door: t.door, perf: t.perf, perfReads: t.reads, fetches: t.fetches, events: W.events.slice(e0), reads });
     return t.r;
   };
   const dry = call('the dry run (the preparer)', Object.assign({ action: 'incentive_approve', token: 'T-mike', pp_start: ENDED }, ACK));
@@ -406,10 +426,9 @@ function writeScenario(W) {
   const done = call('approve', Object.assign({ action: 'incentive_approve', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('A') }, ACK));
   const frozen = W.load({ pp_start: ENDED });
   const again = call('a retry of that approval', Object.assign({ action: 'incentive_approve', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('A') }, ACK));
-  const reopened = call('reopen', { action: 'incentive_unapprove', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('U'),
-                                    reason: 'Bo was paid forty dollars by hand and the record must say so before it is frozen.' });
+  const reopened = call('reopen', { action: 'incentive_unapprove', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('U'), reason: REASON });
   const screen = W.load({ pp_start: RUNNING });
-  return { rec, out, dry, preview, sent, done, frozen, again, reopened, screen, text: JSON.stringify(out), book: W.book(), mails: JSON.stringify(W.mails),
+  return { rec, out, defaults, dry, preview, sent, done, frozen, again, reopened, screen, text: JSON.stringify(out), book: W.book(), mails: JSON.stringify(W.mails),
            fetches: JSON.stringify(rec.map((r) => r.fetches)), events: JSON.stringify(rec.map((r) => r.events)), reads: JSON.stringify(rec.map((r) => r.reads)) };
 }
 const WRITE_FNS = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incentiveUnapprove_', 'incentiveUnapproveLocked_',
@@ -432,7 +451,9 @@ function fnText(src, name) {
      n.dry.ok === true && n.preview.ok === true && n.sent.status === 'pending' && n.done.ok === true && n.done.written === 6 &&
      n.again.already_applied === true && n.reopened.ok === true && n.frozen.source === 'imported');
   ok('the copy was warm throughout, and held figures the live route does not (' + (DOOR_SALES(RUNNING) + 5000) + ' against ' + DOOR_SALES(RUNNING) + ')',
-     n.screen.perf_cache === 'hit' && bea(n.screen).sales === DOOR_SALES(RUNNING) + 5000 && N.keys().length === 2);
+     n.screen.perf_cache === 'hit' && bea(n.screen).sales === DOOR_SALES(RUNNING) + 5000 &&
+     /* Both fortnights by date — and, from the approval on, the no-period entry the tab then opens on. */
+     N.keys().join() === [PREFIX + ENDED, PREFIX + RUNNING, CUR].join());
   const touched = n.rec.filter((r) => r.door !== 0 || r.perfReads !== 0 || r.perf.some(([op, k]) => op === 'put' && k !== BUST));
   ok('none of the ' + n.rec.length + ' write requests asked the door, read the copy or kept one' + (touched.length ? ' — BUT: ' + touched.map((r) => r.label).join('; ') : ''),
      touched.length === 0 && n.rec.length === 9);
@@ -457,6 +478,194 @@ function fnText(src, name) {
     ok('the source of all ' + WRITE_FNS.length + ' functions the write paths run is unchanged' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
        moved.length === 0 && WRITE_FNS.every((f) => fnText(SRC_NEW, f)));
   }
+}
+
+console.log('\n…nor the copy kept for a load that names no period (the same nine requests, with that entry warm too)');
+{
+  const N = mk(SRC_NEW);
+  const n = writeScenario(N, true);
+  ok('the same close ran: dry run, preview, sent, approved (6 rows), retried, reopened',
+     n.dry.ok === true && n.preview.ok === true && n.sent.status === 'pending' && n.done.ok === true && n.done.written === 6 &&
+     n.again.already_applied === true && n.reopened.ok === true && n.frozen.source === 'imported' && n.rec.length === 9);
+  ok('the no-period entry was in the cache, usable, before EVERY one of the nine — holding ' + (DOOR_SALES(RUNNING) + 5000) + ' where the live route says ' + DOOR_SALES(RUNNING),
+     n.rec.every((r) => r.cur === true) && N.cache.has(CUR));
+  ok('…and the screen really was answered from it once the period was approved again: ' + n.defaults.filter((x) => /^hit:2026-10-12/.test(x)).length + ' no-period loads, all hits',
+     n.defaults.filter((x) => x === 'hit:' + RUNNING + ':' + (DOOR_SALES(RUNNING) + 5000)).length === 2 && n.defaults.length === 9);
+  const touched = n.rec.filter((r) => r.door !== 0 || r.perfReads !== 0 || r.perf.some(([op, k]) => op === 'put' && k !== BUST) || r.perf.some(([, k]) => k === CUR));
+  ok('none of the nine asked the door, read either copy or kept one' + (touched.length ? ' — BUT: ' + touched.map((r) => r.label).join('; ') : ''), touched.length === 0);
+  ok('each of the seven that compute still made its own fresh read of GX Core over HTTP, naming the period by date',
+     n.rec.filter((r) => r.fetches.filter((u) => /action=incentive_perf/.test(u)).length === 1).length === 7 &&
+     n.rec.every((r) => r.fetches.filter((u) => /action=incentive_perf/.test(u)).every((u) => /pp_start=2026-/.test(u))));
+  ok('what was frozen is what the LIVE route said (' + DOOR_SALES(ENDED) + ')', bea(n.frozen).sales === DOOR_SALES(ENDED));
+  if (!SRC_OLD) skip('the same close on the engine as it was, with the tab opened first', 'git cannot show ' + BASELINE + ' here');
+  else {
+    const o = writeScenario(mk(SRC_OLD), true);
+    ok('every reply, sheet and email byte-identical to the engine at ' + BASELINE, o.text === n.text && o.book === n.book && o.mails === n.mails && n.text.length > 2000);
+    ok('the same fetches, locks, writes, flushes and reads by each request, in the same order', o.fetches === n.fetches && o.events === n.events && o.reads === n.reads);
+  }
+}
+
+/* ── 8b. The first open of the tab ──────────────────────────────────────────────────────────── */
+console.log('\nThe first open of the tab — no period named — is kept under today\'s date');
+/* A workbook in which the ended fortnight is approved, so the tab opens on the running one and the
+   engine is asked with no period at all: the commonest load there is. */
+const opened = (src) => {
+  const W = mk(src);
+  const r = W.get(Object.assign({ action: 'incentive_approve', token: 'T-sky', pp_start: ENDED, confirm: 'yes', request_id: rid('A0') }, ACK));
+  if (!(r.ok === true && r.written === 6)) throw new Error('setup: could not approve the ended period');
+  return W;
+};
+/* A workbook with no pay-period calendar: every no-period load asks the door with no period, on any date. */
+const bare = () => { const W = mk(SRC_NEW); delete W.kv['cfg.payPeriodAnchor']; return W; };
+{
+  const W = opened(SRC_NEW);
+  const a = W.touch(() => W.load({}));
+  ok('with the last fortnight approved the tab opens on the running one, and the door is asked with NO period — not a date Crew worked out',
+     a.r.ok === true && a.r.payPeriod.start === RUNNING && a.r.payPeriod.current === true && W.door.calls.length === 1 && W.door.calls[0] === '');
+  ok('that load is a miss, and its answer is kept under today\'s Los Angeles date, for 300 seconds',
+     a.r.perf_cache === 'miss' && a.r.perf_source === 'snapshot' && W.keys().join() === CUR && W.ttl.get(CUR) === 300);
+  W.door.bump = 5000;
+  const b = W.touch(() => W.load({}));
+  ok('the second open makes ZERO door calls and shows the same figures', b.door === 0 && b.r.perf_cache === 'hit' && same(a.r) === same(b.r) && bea(b.r).sales === DOOR_SALES(RUNNING) && b.r.perf_age_minutes === 7);
+  W.clock.t = NOW + 90 * SEC;
+  ok('the age grows with the clock here too (7 → 9 after 90 seconds)', W.load({}).perf_age_minutes === 9 && W.door.calls.length === 1);
+  const dated = W.touch(() => W.load({ pp_start: RUNNING }));
+  ok('a load that NAMES the running period is a different question: it asks the door by date and keeps its own entry',
+     dated.door === 1 && W.door.calls.join('|') === '|' + RUNNING && dated.r.perf_cache === 'miss' && W.keys().join() === [PREFIX + RUNNING, CUR].join());
+  ok('…and each is then answered from its own', W.touch(() => [W.load({}), W.load({ pp_start: RUNNING })]).door === 0 &&
+     bea(W.load({})).sales === DOOR_SALES(RUNNING) && bea(W.load({ pp_start: RUNNING })).sales === DOOR_SALES(RUNNING) + 5000);
+  const D = opened(SRC_NEW);
+  D.load({ pp_start: RUNNING });
+  ok('the other way round too: an entry kept for the dated question is not served to the no-period one', D.touch(() => D.load({})).door === 1 && D.door.calls.join('|') === RUNNING + '|');
+
+  if (!SRC_OLD) skip('the first open, before against after', 'git cannot show ' + BASELINE + ' here');
+  else {
+    const O = opened(SRC_OLD), N = opened(SRC_NEW);
+    const o1 = O.load({}), n1 = N.load({}), o2 = O.load({}), n2 = N.load({});
+    ok('the engine as it was and the new one agree on every byte but the marker, asking the door (load 1) and from the copy (load 2)',
+       sameAged(o1) === sameAged(n1) && sameAged(o2) === sameAged(n2) && n1.perf_cache === 'miss' && n2.perf_cache === 'hit' && sameAged(o1).length > 500);
+    ok('…the old engine asked the door both times, the new one once, and both asked with no period', O.door.calls.join('|') === '|' && N.door.calls.length === 1 && N.door.calls[0] === '');
+  }
+
+  /* Everything that holds for a dated entry holds for this one. */
+  const F = opened(SRC_NEW);
+  F.door.age = 17; F.load({});
+  const fat = (ms) => { F.clock.t = NOW + ms; return F.touch(() => F.load({})); };
+  const f1 = fat(3 * MIN), f2 = fat(3 * MIN + SEC);
+  ok('the freshness rule is run again on it: 17 min at the door is used at 20 and refused at 21', f1.door === 0 && f1.r.perf_age_minutes === 20 && f2.door === 1 && f2.r.perf_age_minutes === 17);
+  const L = opened(SRC_NEW);
+  L.door.age = 1; L.load({});
+  const lat = (ms) => { L.clock.t = NOW + ms; return L.touch(() => L.load({})); };
+  ok('five minutes, counted by Crew: the copy at 5:00, the door at 5:01', lat(5 * MIN).door === 0 && lat(5 * MIN + SEC).door === 1);
+  const B = opened(SRC_NEW);
+  B.load({});
+  B.g('bustPerfScreenCache_')(); B.clock.t += SEC;
+  ok('a bust voids it', B.touch(() => B.load({})).door === 1);
+  [['the door refuses', (X) => { X.door.mode = 'refuse'; }], ['the door throws', (X) => { X.door.mode = 'throw'; }], ['the answer is 25 min old', (X) => { X.door.age = 25; }],
+   ['the cache will not write', (X) => { X.cmode.put = true; }]].forEach(([label, setup]) => {
+    const X = opened(SRC_NEW); setup(X);
+    const x1 = X.touch(() => X.load({})), x2 = X.touch(() => X.load({}));
+    ok(label + ' → answered, nothing kept, asked again next time', x1.r.ok === true && x2.r.ok === true && X.keys().length === 0 && x1.door === 1 && x2.door === 1 && x1.r.perf_cache !== 'hit');
+  });
+  const G = opened(SRC_NEW);
+  G.load({}); G.cmode.get = true;
+  ok('a cache that will not read → the door is asked', G.touch(() => G.load({})).door === 1);
+  const E = opened(SRC_NEW);
+  E.load({}); E.door.bump = 5000;
+  const mail = E.touch(() => E.get({ action: 'store_email', secret: SECRET, show: 'html' }));
+  ok('the store email the schedule would send still asks the door, by date, and touches neither copy',
+     mail.r.ok === true && mail.door === 1 && E.door.calls[1] === RUNNING && mail.reads === 0 && mail.entryPuts === 0 && !mail.perf.some(([, k]) => k === CUR));
+}
+
+console.log('\n"The current period" is a different question tomorrow');
+{
+  const M = opened(SRC_NEW);
+  M.door.age = 1;
+  M.clock.t = LA(TODAY, 23, 58);
+  const a = M.load({});
+  M.clock.t = LA(TODAY, 23, 59);
+  const same_day = M.touch(() => M.load({}));
+  M.clock.t = LA('2026-10-14', 0, 1);
+  const next = M.touch(() => M.load({}));
+  ok('kept at 11:58 PM and used at 11:59 PM; at 12:01 AM — three minutes old, well inside every other limit — the door is asked',
+     a.perf_cache === 'miss' && same_day.door === 0 && next.door === 1 && next.r.perf_cache === 'miss');
+  ok('…because the key carries the day: yesterday\'s entry is still in the cache and is simply not this question\'s',
+     M.keys().join() === [CUR, PREFIX + 'current@2026-10-14'].join());
+  const P = opened(SRC_NEW);
+  P.clock.t = LA(TODAY, 17, 30);
+  P.load({});
+  ok('the day is LOS ANGELES: at 5:30 PM Pacific — already tomorrow in UTC — the key is still today\'s', P.keys().join() === CUR);
+  const key = P.g('perfScreenKey_'), todayFn = P.g('perfScreenToday_');
+  P.clock.t = LA(TODAY, 23, 59);
+  const late = todayFn();
+  P.clock.t = LA('2026-10-14', 0, 0);
+  ok('…and it turns over at midnight Pacific, not before', late === TODAY && todayFn() === '2026-10-14' && key('') === PREFIX + 'current@2026-10-14');
+  const fd = P.sb.Utilities.formatDate;
+  P.sb.Utilities.formatDate = () => { throw new Error('no clock'); };
+  const noClock = [todayFn(), key(''), key(RUNNING)];
+  P.sb.Utilities.formatDate = () => '10/14/2026';
+  const oddClock = [todayFn(), key('')];
+  P.sb.Utilities.formatDate = fd;
+  ok('a date that cannot be had, or is not a plain day, makes no key — and a dated key is unaffected',
+     noClock.join('|') === '||' + PREFIX + RUNNING && oddClock.join('|') === '|');
+  ok('the day is never taken from toISOString', !/toISOString/.test([P.g('perfScreenToday_'), P.g('perfScreenKey_'), P.g('perfScreenPeriodOk_')].map(String).join('')) &&
+     /Utilities\.formatDate\(new Date\(\), 'America\/Los_Angeles', 'yyyy-MM-dd'\)/.test(String(P.g('perfScreenToday_'))));
+}
+
+console.log('\nOnly a RUNNING period that contains today is kept or served as "the current one"');
+{
+  const N0 = bare();
+  const first = N0.touch(() => N0.load({}));
+  ok('(a workbook with no calendar: the door is asked with no period, and a running period that contains today is kept)',
+     first.r.ok === true && N0.door.calls[0] === '' && first.r.perf_cache === 'miss' && N0.keys().join() === CUR && N0.touch(() => N0.load({})).door === 0);
+  const lastDay = bare();
+  lastDay.clock.t = LA(RUNNING_END, 23, 50);
+  lastDay.load({});
+  lastDay.clock.t = LA(RUNNING_END, 23, 55);
+  ok('on the period\'s LAST day it is still kept and used', lastDay.keys().join() === PREFIX + 'current@' + RUNNING_END && lastDay.touch(() => lastDay.load({})).door === 0);
+  /* The door, as these worlds fake it, goes on calling 2026-10-12 "current" on any date — which is
+     exactly a snapshot left over from before the fortnight turned. */
+  [['the day AFTER the period it names has ended', (W) => { W.clock.t = LA('2026-10-26', 0, 5); }],
+   ['a day BEFORE the period it names has started', (W) => { W.clock.t = LA('2026-10-11', 12, 0); }],
+   ['an answer for a period that is NOT running', (W) => { W.door.answerFor = ENDED; }]].forEach(([label, setup]) => {
+    const W = bare(); setup(W);
+    const a = W.touch(() => W.load({})), b = W.touch(() => W.load({}));
+    ok(label + ' → shown (the door\'s own rule accepted it), but NOT kept, and the door is asked again',
+       a.r.ok === true && a.r.perf_source === 'snapshot' && a.r.perf_cache === 'skip' && W.keys().length === 0 && a.entryPuts === 0 && a.door === 1 && b.door === 1);
+  });
+
+  const per = (o) => (W) => { const d = doorAnswer(Object.assign({}, W.door, { bump: 7777 }), RUNNING); d.payPeriod = Object.assign({}, d.payPeriod, o); return JSON.stringify({ at: W.clock.t, d }); };
+  const PLANTS = [
+    ['an ENDED period\'s answer', (W) => JSON.stringify({ at: W.clock.t, d: doorAnswer(Object.assign({}, W.door, { bump: 7777 }), ENDED) }), CUR],
+    ['a period marked current by a stand-in (1, not true)', per({ current: 1 }), CUR],
+    ['a period marked current by the text "true"', per({ current: 'true' }), CUR],
+    ['a start that is not a plain date (a practice key)', per({ start: 'practice-2026-10-12' }), CUR],
+    ['a start that is nearly a date ("2026-10-1")', per({ start: '2026-10-1' }), CUR],
+    ['a period that starts tomorrow', per({ start: '2026-10-14', end: '2026-10-27' }), CUR],
+    ['a period that ended yesterday', per({ start: '2026-09-29', end: '2026-10-12' }), CUR],
+    ['an end that cannot be read as a date', per({ end: 'Oct 25' }), CUR],
+    ['an answer with no payPeriod at all', (W) => { const d = doorAnswer(Object.assign({}, W.door, { bump: 7777 }), RUNNING); delete d.payPeriod; return JSON.stringify({ at: W.clock.t, d }); }, CUR],
+    ['a good answer, under YESTERDAY\'s key', per({}), PREFIX + 'current@2026-10-12'],
+    ['a good answer, under a key with no day', per({}), PREFIX + 'current@'],
+  ];
+  PLANTS.forEach(([label, plant, where]) => {
+    const W = bare();
+    W.cache.set(where, plant(W));
+    const t = W.touch(() => W.load({}));
+    ok(label + ' → not served: the door is asked, and its figures are the ones shown', t.door === 1 && t.r.ok === true && bea(t.r).sales === DOOR_SALES(RUNNING));
+  });
+  const ok1 = bare(); ok1.cache.set(CUR, per({})(ok1));
+  const ok2 = bare(); ok2.cache.set(CUR, per({ end: undefined })(ok2));
+  ok('(a well-formed entry planted the same way IS served — and so is one whose answer states no end: the day in the key covers it)',
+     ok1.touch(() => ok1.load({})).door === 0 && bea(ok1.load({})).sales === DOOR_SALES(RUNNING) + 7777 && ok2.touch(() => ok2.load({})).door === 0);
+  const chk = bare().g('perfScreenPeriodOk_');
+  const run = { payPeriod: { start: RUNNING, end: RUNNING_END, current: true } };
+  ok('the rule itself: today inside the period, on its first day and on its last — and nothing without a readable today',
+     chk(run, '', TODAY) === true && chk(run, '', RUNNING) === true && chk(run, '', RUNNING_END) === true && chk(run, '', '2026-10-26') === false &&
+     chk(run, '', '2026-10-11') === false && chk(run, '', '') === false && chk(run, '', undefined) === false && chk(run, undefined, TODAY) === true);
+  ok('…and a NAMED period is judged as before: the answer must be for that period, running or not, whatever the date',
+     chk(run, RUNNING, '') === true && chk(run, ENDED, TODAY) === false && chk({ pp_start: ENDED }, ENDED, TODAY) === true &&
+     chk({ payPeriod: { start: ENDED, current: false } }, ENDED, '2031-01-01') === true);
 }
 
 /* ── 9. Two locks, and a write path holds neither key ───────────────────────────────────────── */
@@ -521,7 +730,12 @@ console.log('\nThe copy is behind two locks, and only the router\'s screen call 
      /function route_\(e\) \{\s*_crewSheetMemo_ = null;[^\n]*\n\s*_perfScreenArmed_ = false;/.test(SRC_NEW) &&
      /var armed = \(_perfScreenArmed_ === true\);\s*_perfScreenArmed_ = false;\s*return armed;/.test(fns.perfScreenArmedTake_) &&
      /var armed = perfScreenArmedTake_\(\);\s*var key = armed \? perfScreenKey_\(ppStart\) : '';/.test(fns.perfFromSnapshot_));
-  const holders = rest.filter((f) => ['getIncentive_', 'perfScreenCacheGet_', 'perfScreenCachePut_', 'perfScreenArmedTake_', 'perfScreenKey_', 'route_'].indexOf(f) >= 0 || /_perfScreenArmed_/.test(code(fns[f])));
+  ok('the two helpers that decide what "the current period" may hold are used by the copy and by nothing else',
+     users('perfScreenToday_').sort().join() === 'perfScreenCacheGet_,perfScreenCachePut_,perfScreenKey_' && users('perfScreenPeriodOk_').sort().join() === 'perfScreenCacheGet_,perfScreenCachePut_');
+  ok('the door is asked exactly as it always was — with whatever period it was handed, and never one worked out from Crew\'s calendar',
+     /d = GXCore\.incentivePerf\(\{ pp_start: ppStart \|\| '' \}\);/.test(fns.perfFromSnapshot_) && (code(fns.perfFromSnapshot_).match(/incentivePerf\(/g) || []).length === 1 &&
+     ['perfFromSnapshot_', 'perfScreenKey_', 'perfScreenCacheGet_', 'perfScreenCachePut_', 'perfScreenPeriodOk_', 'perfScreenToday_'].every((f) => !/computedPeriods_|defaultIncentivePeriod_|getKv|payPeriodAnchor/.test(code(fns[f]))));
+  const holders = rest.filter((f) => ['getIncentive_', 'perfScreenCacheGet_', 'perfScreenCachePut_', 'perfScreenArmedTake_', 'perfScreenKey_', 'perfScreenToday_', 'perfScreenPeriodOk_', 'route_'].indexOf(f) >= 0 || /_perfScreenArmed_/.test(code(fns[f])));
   ok('no write route, and nothing any of them runs, can arm it or reach the copy any other way' + (holders.length ? ' — BUT: ' + holders.join(', ') : ''), holders.length === 0);
   ok('getIncentive_ is called by the router and by the store email, and by nothing else', users('getIncentive_').sort().join() === 'route_,storeEmailBuild_');
   ok('the bust only ever writes a timestamp; it reads nothing', !/\.get\(|getAll/.test(code(fns.bustPerfScreenCache_)) && /put\(PERF_SCREEN_BUST_KEY, String\(Date\.now\(\)\), PERF_SCREEN_BUST_S\)/.test(fns.bustPerfScreenCache_));
