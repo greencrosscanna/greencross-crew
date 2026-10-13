@@ -448,6 +448,25 @@ Where they overlap the **import wins**. **Never recompute a closed period** — 
 moved, so the PDFs are history, *not* a penny-match corpus. **Read `budtender.discountMaxPct` from
 the tray, never from a doc.**
 
+### What the incentive SCREEN may reuse, and what it may not
+- **A closed period reads the history tab once.** `getIncentive_` hands `incentiveHistory_` the rows
+  it already read, as a second **function argument** (`{ __screen: true, rows }`) — never a request
+  parameter, the same guard as `preAuth`. An approved practice period does the same with its own tab.
+- **The closed screen's legal names come from the screen's 10-minute registry cache**
+  (`CORE_EMP_CACHE_KEY`). Every Crew write busts it; a rename made in the Command Center can take
+  ten minutes to reach `full_name` on a closed period (and so the Capstone export). No figure comes
+  from that list.
+- **Only the screen gets either.** The deploy-secret `incentive_history` route, approve, send, reopen
+  and the PDF backfill read their own rows and the registry live. Do not pass `{ snapshot: true }`,
+  the hand-over or `coreEmployeesCached_()` into a write path.
+- **The period list, the to-date totals and "is this period approved" are NOT cached, on purpose.**
+  They are re-derived from the history tab on every load. A cache there could show an approved
+  period as open after a write whose bust failed, and after any hand edit of the sheet — and busting
+  it would mean adding code inside approve and reopen. Do not add one without Sky's word.
+
+Pinned by `tests/incentive_read_speedup_test.js`, which loads the whole engine and drives its real
+router; `scripts/prove-incentive-read-red.js` is its mutation proof (`CODE_GS`).
+
 ### Which period the tab opens on, and in what order
 - **With no period asked for, the tab opens on the LAST completed fortnight until it is approved,
   then on the running one** (`defaultIncentivePeriod_`). "Approved" means **in the real history

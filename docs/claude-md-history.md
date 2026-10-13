@@ -901,6 +901,45 @@ tray, never from this paragraph.*
 Leaderboard still has this bug in miniature: its performance figures freeze but its thresholds do
 not, so editing the discount goal re-scores every period it already paid.
 
+### What the incentive SCREEN may reuse, and what it may not (2026-10-13)
+
+The 2026-10-12 diagnosis named three display-only costs on the incentive read. By the time this was
+built, one was already gone: the live screen reads the history tab once and passes the rows to the
+period list, the to-date totals and the history band. Two were left, both on the CLOSED-period path:
+`incentiveHistory_` read the history tab a second time, and asked GX Core for the whole employee
+registry on every load (measured the night before at 5.1 to 10.4 seconds for a closed period, with no
+stage timings on that path to say where it went). An approved practice period read its tab twice
+for the same reason.
+
+**What was built.** `getIncentive_` hands `incentiveHistory_` the rows it holds, and the closed
+screen reads the registry through the cache the live screen has used since 2026-09-30. The closed
+path also gained stage marks (`closed_record`, `closed_extras`), so `request_stats` can now say
+where a closed-period load spends its time.
+
+**What was deliberately not built: a cache of the period list and the to-date totals.** The brief
+allowed it only if every writer of the history tab could be shown to bust it. They cannot:
+
+- the tab has four code writers (`incentiveImport_`, `incentiveRelink_`, the approval write,
+  `incentiveUnapproveLocked_`) — and two of those are the frozen write paths this change was not
+  allowed to touch, so the bust itself would have been a change to approve and reopen;
+- a bust is a `CacheService.remove`, which can fail, and an execution can die between the sheet
+  write and the bust. Either leaves a period that was just approved reading as open for the life of
+  the cache, which is exactly the one thing the screen must never show;
+- the sheet is edited by hand in a real emergency, and nothing can bust on that.
+
+The saving on offer was also small once the tab is read only once per load. The mutation proof
+carries this case on purpose: it adds that cache to a scratch copy and the test goes red on "the
+very next load shows it closed".
+
+**The one staleness this does introduce,** stated rather than discovered later: `full_name` on a
+closed period comes from a list that can be ten minutes old when a name is changed outside Crew.
+That is the name the Capstone export prints. The test pins both halves — a rename through Crew
+shows at once, one made elsewhere does not until the cache ages out.
+
+**Not measured live.** The test reports the saving on a simulated clock (one sheet read and one
+registry read fewer). The real figure is whatever `./gxcrewstats.sh` shows for the `incentive`
+route's `closed_record` stage after this is deployed.
+
 ### Which period the tab opens on, and in what order (2026-09-14)
 
 **With no period asked for, the tab opens on the LAST completed fortnight until it is approved, then

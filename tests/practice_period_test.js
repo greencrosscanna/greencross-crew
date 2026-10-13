@@ -114,10 +114,11 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
   /* getIncentive_ is run for real, with every collaborator injected so the two strings can be
      watched as they travel. The practice helpers are the SHIPPED ones — stubbing those would test
      the stub. */
-  const seen = { fetched: null, spiff: null, inputs: null, wf: null, history: [] };
+  const seen = { fetched: null, spiff: null, inputs: null, wf: null, history: [], tabs: [] };
   const run = (want) => {
     seen.fetched = seen.spiff = seen.inputs = seen.wf = null;
     seen.history = [];
+    seen.tabs = [];
     const src =
       PREFIX + fnSrc(GS, 'isPracticePeriod_') + fnSrc(GS, 'practiceSource_') + fnSrc(GS, 'practiceInfo_') +
       /* THE SHIPPED perfForWrite_, not a stub. The window/key split moved inside it, and it is the
@@ -126,6 +127,9 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       /* Request timing's stage marker, the SHIPPED one, with no request open — which is how it runs
          from a trigger or the editor, and it must be a no-op there. */
       'var _reqT_ = null;\n' + fnSrc(GS, 'reqMark_') +
+      /* The SHIPPED tab router: getIncentive_ asks the practice twin directly whether the period is
+         approved (2026-10-13), and which tab that is must be incTab_'s answer, not this file's. */
+      fnSrc(GS, 'incTab_') +
       fnSrc(GS, 'getIncentive_') + '; return getIncentive_;';
     const fn = new Function(
       'requireCrew_', 'historyPeriods_', 'incentiveHistory_', 'periodList_', 'canApprove_',
@@ -156,13 +160,15 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       () => ({ ok: true, checked: true, missing: [] }),
       () => ({ state: 'ok', stores: [], mismatches: [] }),
       () => ({ periods: 0 }),
-      () => [], 'crew_incentive_history', [],
+      (tab) => { seen.tabs.push(tab); return []; }, 'crew_incentive_history', [],
       () => ({ can_decide: false, backup: [] }));
     return fn({ pp_start: want });
   };
 
   const d = run('practice-2026-08-17');
   ok('the PERFORMANCE fetch asks for the real fortnight', seen.fetched === '2026-08-17');
+  ok('"is it approved" is asked of the PRACTICE history tab, and only of that one besides the real read',
+     seen.tabs.join() === 'crew_incentive_history,crew_incentive_history_practice');
   /* The whole reason the fold runs before the remap. A vendor program is matched on its dates, and
      `practice-2026-08-17` matches no program's dates at all — so getting this wrong does not error,
      it scores every SPIFF at zero and the vendor column reads as a quiet fortnight. */
@@ -199,10 +205,16 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
 console.log('\nAn approved practice period is served like any other closed record');
 {
   const G = decomment(fnSrc(GS, 'getIncentive_'));
-  const branch = G.slice(G.indexOf('if (isPracticePeriod_(want) &&'),
-                         G.indexOf("if (want && importedBy[want]) {"));
-  ok('it is served from its own history tab', /historyPeriods_\(want\)/.test(branch) &&
-     /incentiveHistory_\(/.test(branch));
+  /* The practice tab is read ONCE since 2026-10-13: the same rows answer "is it approved" and are
+     then handed to incentiveHistory_. incTab_ is still what picks the tab — the practice twin, never
+     the real one — and tests/incentive_read_speedup_test.js runs this branch for real. */
+  const from = G.indexOf('var practiceRows = isPracticePeriod_(want)');
+  const branch = G.slice(from, G.indexOf("if (want && importedBy[want]) {"));
+  ok('the approved-practice branch is where it was', from > 0 && branch.length > 200);
+  ok('it is served from its own history tab',
+     /isPracticePeriod_\(want\) \? readTab_\(incTab_\(HISTORY_TAB, want\), HISTORY_HEADERS\) : null/.test(branch) &&
+     /practiceRows\.some\(function \(r\) \{ return r\.pp_start === want; \}\)/.test(branch) &&
+     /incentiveHistory_\(/.test(branch) && /rows: practiceRows/.test(branch));
   /* THE BUG, stated as an absence. Setting source here is what bypassed every money guard in the
      browser — `isImported` is derived from it, and the live calculators then ran over history rows
      that have no `target`, scoring every manager against a missing goal. */
