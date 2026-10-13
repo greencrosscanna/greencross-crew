@@ -369,6 +369,8 @@ function route_(e) {
       case 'metrc_setup':  return json_(metrcSandboxSetup_(p), p.callback);
       case 'metrc_probe':  return json_(metrcAuthProbe_(p), p.callback);
       case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
+      // Permit expiration dates, Metrc -> Crew's own sheet. A preview unless confirm=yes.
+      case 'metrc_permit_sync': return json_(metrcPermitSync_(p), p.callback);
 
       /* REMOVED 2026-08-25: `avatars` and `avatar_save`. They were Crew's half of a
          Leaderboard hand-off that was never wired — nothing outside this repo ever called
@@ -1557,6 +1559,86 @@ function metrcCreds_() {
   };
 }
 
+/*
+ * PRODUCTION METRC IS READ-ONLY, AND metrcGet_ IS THE ONLY CALL THAT REACHES IT.
+ *
+ * Dutchie already reports Green Cross sales to Metrc. A second system writing there would create
+ * duplicate records and an OLCC traceability problem, so Sky's standing rule is that production
+ * receives GET and nothing else. That is held in two places, both pinned by
+ * tests/metrc_v2_test.js:
+ *   • metrcGet_ hardcodes method 'get' and takes no method argument, so there is nothing to pass.
+ *   • the two sandbox bootstrap tools below, which do POST, refuse outright unless METRC_BASE is a
+ *     Metrc SANDBOX host (metrcSandboxOnly_). They can never run against the default base.
+ * Do not add a method parameter here, and do not add a second fetch that can reach production.
+ *
+ * THE API IS v2. Metrc, in writing, 2026-10-12: "v2 keys can not use v1 calls." Green Cross's
+ * production keys are v2 keys, so every path here is /…/v2/. v2 wraps a list as
+ * { Data: […], Total, TotalRecords, PageSize, RecordsOnPage, Page, CurrentPage, TotalPages } where
+ * v1 returned a bare array — read lists through metrcGetAll_, which unwraps and follows the pages.
+ */
+function metrcIsSandbox_(base) {
+  return /^https:\/\/sandbox-api-[a-z]{2}\.metrc\.com$/i.test(String(base || ''));
+}
+
+/* null when the base is a sandbox host; otherwise the refusal to return. Deliberately an ALLOWLIST
+   of the sandbox host shape rather than "not production": an unset METRC_BASE falls back to
+   production, and a typo'd base must not read as permission to POST. */
+function metrcSandboxOnly_(base, what) {
+  if (metrcIsSandbox_(base)) return null;
+  return { ok: false, refused: true,
+           error: 'Refusing to run ' + what + ' against ' + base + '. This is a sandbox bootstrap ' +
+                  'tool that sends a POST, and production Metrc is read-only for Crew: Dutchie is ' +
+                  'the only system that writes Green Cross data to Metrc. Nothing was sent.' };
+}
+
+var METRC_MAX_PAGES = 50;
+
+/**
+ * Every row of a v2 list, across every page.
+ *
+ * AN UNEXPECTED SHAPE THROWS, IT DOES NOT READ AS "NOBODY". A caller that got [] from a response it
+ * could not parse would report that no retired staff hold access, or that nobody's permit needs
+ * updating — both of which look exactly like good news. Same for a short read: when Metrc states
+ * how many records exist and a different number arrived, the read is incomplete and says so.
+ *
+ * pageSize is deliberately not sent. Metrc's maximum is not something this code knows, and the
+ * default plus TotalPages reads everything without guessing at it.
+ */
+function metrcGetAll_(path, params) {
+  var all = [], page = 1, totalPages = 1, expected = null;
+  do {
+    var q = {};
+    Object.keys(params || {}).forEach(function (k) { q[k] = params[k]; });
+    q.pageNumber = page;
+    var res = metrcGet_(path, q);
+    if (!res || Array.isArray(res) || !Array.isArray(res.Data)) {
+      throw new Error('METRC answered ' + path + ' in an unexpected shape (no Data list) — nothing ' +
+                      'read. The v2 API wraps every list as {Data: […], TotalPages: n}.');
+    }
+    all = all.concat(res.Data);
+    totalPages = Number(res.TotalPages) || 1;
+    if (res.TotalRecords != null && isFinite(Number(res.TotalRecords))) expected = Number(res.TotalRecords);
+    page++;
+  } while (page <= totalPages && page <= METRC_MAX_PAGES);
+  if (totalPages > METRC_MAX_PAGES) {
+    throw new Error('METRC reports ' + totalPages + ' pages for ' + path + ', more than the ' +
+                    METRC_MAX_PAGES + ' this reads — refusing a partial list.');
+  }
+  if (expected != null && all.length !== expected) {
+    throw new Error('METRC said ' + expected + ' records for ' + path + ' and ' + all.length +
+                    ' arrived — incomplete read, nothing used.');
+  }
+  return all;
+}
+
+/* 'YYYY-MM-DD' out of whatever Metrc sent, or ''. v2 sends a bare day; a time suffix
+   ("2029-05-19T00:00:00") is tolerated by taking the day as WRITTEN, never through a Date — a
+   Date would shift it across midnight on a timezone mismatch, and this is an expiry date. */
+function metrcDay_(v) {
+  var m = String(v == null ? '' : v).trim().match(/^(\d{4}-\d{2}-\d{2})(?:$|[T ])/);
+  return m ? normDate_(m[1]) : '';
+}
+
 function metrcGet_(path, params) {
   var c = metrcCreds_();
   if (!c.vendor || !c.user) {
@@ -1605,9 +1687,22 @@ function metrcHealth_(p) {
     return out;
   }
   try {
-    var rows = metrcGet_('/employees/v1/', { licenseNumber: c.licenses[0] }) || [];
+    /* ONE page of ONE license — this is a probe, not a read. It reports the envelope as Metrc
+       sent it, so a shape change shows up here before it shows up as a wrong answer elsewhere. */
+    var res = metrcGet_('/employees/v2/', { licenseNumber: c.licenses[0], pageNumber: 1 });
     out.probe_license = c.licenses[0];
+    out.api = 'v2';
+    if (!res || Array.isArray(res) || !Array.isArray(res.Data)) {
+      out.ok = false;
+      out.error = 'METRC answered, but not in the v2 shape (no Data list). Top-level: ' +
+                  (Array.isArray(res) ? 'a bare array (the v1 shape)'
+                                      : Object.keys(res || {}).sort().join(', ') || 'nothing');
+      return out;
+    }
+    var rows = res.Data;
     out.records = rows.length;
+    out.total_records = res.TotalRecords == null ? null : Number(res.TotalRecords);
+    out.total_pages = res.TotalPages == null ? null : Number(res.TotalPages);
     // Shape, not content — the API's field names differ from the UI export's headers.
     out.fields = rows.length ? Object.keys(rows[0]).sort() : [];
     if (rows.length && rows[0].License && typeof rows[0].License === 'object') {
@@ -1617,6 +1712,12 @@ function metrcHealth_(p) {
     out.ok = false;
     out.error = String((e && e.message) || e);
   }
+  /* What the 5am run last did — counts only, written by nightlyMetrcPermitSync_. A trigger's log
+     is visible to nobody, so this is the one place a failing nightly sync can be seen. */
+  try {
+    var last = PropertiesService.getScriptProperties().getProperty(METRC_LAST_SYNC_PROP);
+    out.last_nightly_permit_sync = last ? JSON.parse(last) : null;
+  } catch (e2) { out.last_nightly_permit_sync = null; }
   return out;
 }
 
@@ -1634,11 +1735,11 @@ function metrcHealth_(p) {
 function metrcSandboxSetup_(p) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var c = metrcCreds_();
+  /* The refusal comes BEFORE the key check, so the answer on production is always "this does not
+     run here" and never a prompt to go and set a key so that it can. */
+  var refusal = metrcSandboxOnly_(c.base, 'sandbox setup (metrc_setup)');
+  if (refusal) return refusal;
   if (!c.vendor) return { ok: false, error: 'METRC_VENDOR_KEY is not set' };
-  if (!/sandbox/i.test(c.base)) {
-    return { ok: false, error: 'Refusing to run sandbox setup against ' + c.base +
-             ' — this endpoint only exists in the sandbox environment.' };
-  }
   var res = UrlFetchApp.fetch(c.base + '/sandbox/v2/integrator/setup', {
     method: 'post', muteHttpExceptions: true, contentType: 'application/json',
     headers: { 'x-metrc-key': c.vendor }, payload: '{}'
@@ -1706,6 +1807,10 @@ function metrcSandboxSetup_(p) {
 function metrcAuthProbe_(p) {
   if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var c = metrcCreds_();
+  /* This probe re-runs the setup POST to read its response headers. Until 2026-10-12 nothing
+     stopped it doing that against whatever METRC_BASE held, production included. */
+  var refusal = metrcSandboxOnly_(c.base, 'the sandbox auth probe (metrc_probe)');
+  if (refusal) return refusal;
   if (!c.vendor) return { ok: false, error: 'METRC_VENDOR_KEY is not set' };
 
   var target = c.base + '/sandbox/v2/tagtypes';
@@ -1745,30 +1850,54 @@ function metrcAuthProbe_(p) {
            setup_http: setupCode, setup_body: setupBody, setup_headers: setupHeaders };
 }
 
-/** Everyone METRC currently knows about, deduped across licenses, keyed by permit number. */
+/* One comparable form of a permit number. Metrc's are short letter-and-digit codes; a sheet cell can
+   hold the same one in another case or with a stray space. An all-digit one is compared without
+   its leading zeros, because that is what Sheets strips if the column ever loses its plain-text
+   format — the failure that already defeated the employee-number uniqueness guard once. */
+function metrcPermitKey_(v) {
+  var s = String(v == null ? '' : v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^\d+$/.test(s) ? s.replace(/^0+(?=\d)/, '') : s;
+}
+
+/**
+ * Everyone listed on any of our licenses, deduped across licenses, keyed by permit number.
+ *
+ * "IN METRC" MEANS LISTED ON A LICENSE, AND THAT IS THE ONLY SIGNAL v2 GIVES. A v2 employee row is
+ * exactly FullName, License {Number, EmployeeLicenseNumber, StartDate, EndDate, LicenseType},
+ * IsOwner, IsManager, IsIndustryAdmin. There is no IsActive and no Status. The v1-era code here
+ * read both and treated a missing flag as active, so against v2 it would have gone on looking like
+ * a check while answering "active" for everybody. It is gone rather than left in: a person in this
+ * map is on at least one Green Cross license and so still holds access; a person absent from it is
+ * on none. Nothing in the response says more than that, and nothing here pretends to.
+ *
+ * A license that could not be read is named in `errors`, and a caller must treat the map as
+ * INCOMPLETE when that list is not empty — "absent" then means "not seen", not "removed".
+ */
 function metrcAllEmployees_() {
   var c = metrcCreds_();
   var byPermit = {}, errors = [], seen = 0;
   c.licenses.forEach(function (lic) {
     var rows;
-    try { rows = metrcGet_('/employees/v1/', { licenseNumber: lic }) || []; }
+    try { rows = metrcGetAll_('/employees/v2/', { licenseNumber: lic }); }
     catch (e) { errors.push(lic + ': ' + String((e && e.message) || e)); return; }
     rows.forEach(function (r) {
       seen++;
-      var L = r.License || {};
-      var permit = String(L.Number || r.LicenseNumber || '').trim();
-      var name = String(r.FullName || r.Name || '').trim();
+      var L = (r && r.License) || {};
+      var permit = String(L.Number || L.EmployeeLicenseNumber || '').trim();
+      var name = String((r && r.FullName) || '').trim();
       if (!name) return;
-      var key = permit || ('name:' + nameToKey_(name));
+      var key = metrcPermitKey_(permit) || ('name:' + nameToKey_(name));
+      var end = metrcDay_(L.EndDate);
       var rec = byPermit[key] || (byPermit[key] = {
-        permit: permit, name: name, licenses: [], start: String(L.StartDate || ''),
-        end: String(L.EndDate || ''), active: false
+        permit: permit, name: name, licenses: [], start: metrcDay_(L.StartDate),
+        end: end, end_dates_differ: false
       });
       if (rec.licenses.indexOf(lic) < 0) rec.licenses.push(lic);
-      // Metrc marks the person per facility; active anywhere means they still hold access.
-      var isActive = r.IsActive !== false && String(r.Status || 'Active').toLowerCase() !== 'inactive';
-      if (isActive) rec.active = true;
-      if (L.EndDate && (!rec.end || String(L.EndDate) > rec.end)) rec.end = String(L.EndDate);
+      /* One permit, one expiry — the same person is listed once per license. If two licenses ever
+         disagree the later date is used (a renewal reaches one list before another) and the fact
+         is carried, so the sync can say it happened instead of quietly picking. */
+      if (end && rec.end && end !== rec.end) rec.end_dates_differ = true;
+      if (end && (!rec.end || end > rec.end)) rec.end = end;
     });
   });
   return { people: byPermit, errors: errors, rows_seen: seen };
@@ -1793,29 +1922,282 @@ function metrcAccessAudit_(p) {
   var metrcPeople = Object.keys(m.people).map(function (k) { return m.people[k]; });
   var joined = rosterJoin_();
 
-  var stillActive = [], properlyRemoved = [], notInMetrc = [];
+  /* TWO OUTCOMES, NOT THREE. v2 has no per-person active flag (see metrcAllEmployees_), so a
+     retired person is either still LISTED on one of our licenses — which is live access — or
+     absent from all of them. The old third bucket, "found in Metrc but marked inactive", cannot
+     occur and its count (`properly_deactivated`) is no longer returned: absent IS the removed
+     state. Matched on permit number first, the name only where Crew holds no number. */
+  var stillListed = [], absent = 0;
   joined.rows.forEach(function (r) {
     if (!r.retired) return;
     var hit = null;
-    for (var i = 0; i < metrcPeople.length; i++) {
-      if (samePerson_(r.name, metrcPeople[i].name)) { hit = metrcPeople[i]; break; }
+    var pk = metrcPermitKey_(r.permit_number);
+    if (pk) hit = m.people[pk] || null;
+    for (var i = 0; !hit && i < metrcPeople.length; i++) {
+      if (samePerson_(r.name, metrcPeople[i].name)) hit = metrcPeople[i];
     }
-    if (!hit) { notInMetrc.push(r.name); return; }
-    if (hit.active) stillActive.push({ name: r.name, licenses: hit.licenses.length });
-    else properlyRemoved.push(r.name);
+    if (hit) stillListed.push({ name: r.name, licenses: hit.licenses.length });
+    else absent++;
   });
 
+  /* A license that failed to read makes "absent" unprovable — the person may be on the one list
+     that did not arrive. Say so rather than report a clean result off a partial read. */
+  var partial = m.errors.length > 0;
   return {
     ok: true, metrc_rows_seen: m.rows_seen, metrc_people: metrcPeople.length,
     retired_in_crew: joined.rows.filter(function (r) { return r.retired; }).length,
-    still_active_in_metrc: stillActive,
-    properly_deactivated: properlyRemoved.length,
-    retired_and_absent_from_metrc: notInMetrc.length,
+    still_active_in_metrc: stillListed,
+    retired_and_absent_from_metrc: absent,
+    partial_read: partial,
     errors: m.errors,
-    note: stillActive.length
-      ? stillActive.length + ' retired staff still hold METRC access — revoke in METRC, this only reports.'
-      : 'No retired staff hold active METRC access.'
+    note: (stillListed.length
+      ? stillListed.length + ' retired staff are still listed on a METRC license, which is live access — revoke in METRC, this only reports.'
+      : 'No retired staff are listed on a METRC license.') +
+      (partial ? ' INCOMPLETE: ' + m.errors.length + ' license(s) could not be read, so an absence here is not proof.' : '')
   };
+}
+
+// ─── METRC → Crew: worker-permit expiration dates ────────────────────────────────
+/*
+ * Sky, 2026-10-12: "part of the reason we built the metrc API pipe was to get the real data on
+ * license expirations." Until now a permit's expiry reached Crew by somebody typing it, so a
+ * renewal showed as an expiring or expired permit until a person noticed. This makes Metrc the
+ * source of `permit_expires` for ACTIVE staff.
+ *
+ * WHAT IT WRITES: `permit_expires` in Crew's own crew_attributes sheet, plus the row's updated_at /
+ * updated_by. Nothing else — not the permit number, not the status, not the granted date, not
+ * hire_date (Metrc's StartDate is when the permit was issued, not when the person was hired), and
+ * NOT THE NAME. Name disagreements stay in the review queue, where Sky's ruling (Metrc wins on
+ * spelling) sets what is proposed and a human applies it. It writes nothing to GX Core and nothing,
+ * ever, to Metrc.
+ *
+ * WHY NOT THROUGH hrImport_. That route matches on NAME, rewrites the identity row in GX Core for
+ * every person it is handed, and stamps the incoming name into the attribute row — three things
+ * this must not do. The write itself is the shared one: the live attribute row is read, one field
+ * is changed on a copy of it, and it goes back through writeAttrs_, the single writer hrImport_
+ * and saveRosterAttrs_ both use. No column is ever blanked, because every column is carried.
+ *
+ * MATCHING. Permit number first — it is the state's own key and it does not drift the way a name
+ * does. The name (samePerson_, the same matcher hrImport_ uses) is tried ONLY for an active person
+ * with no permit number on file, only against Metrc people no permit number already claimed, and
+ * only when exactly one candidate answers and nobody else on the roster answers to the same one.
+ * Anything else is reported by name and left alone.
+ *
+ * SAFE TO RUN EVERY NIGHT. It compares before it writes, so a second run changes nothing. A Metrc
+ * read that failed on ANY license, or returned nobody, changes nothing either — same rule as the
+ * Dutchie scan: an unreadable source must not look like news. An empty or unreadable Metrc date
+ * never replaces a date Crew holds.
+ */
+var METRC_LAST_SYNC_PROP = 'CREW_LAST_METRC_SYNC';
+
+/**
+ * PURE: what a sync would do, given the three things it reads. No I/O, so the whole decision is
+ * testable without a sheet. `identity` is GX Core's employee rows, `attrs` is readAttrs_()'s map,
+ * `people` is metrcAllEmployees_().people.
+ */
+function metrcPermitPlan_(identity, attrs, people) {
+  var metrc = Object.keys(people || {}).map(function (k) { return people[k]; });
+  var byPermit = Object.create(null);
+  metrc.forEach(function (m) { var k = metrcPermitKey_(m.permit); if (k) byPermit[k] = m; });
+
+  var matched = [], claimed = [], unpermitted = [];
+  var out = { changes: [], agree: 0, active_people: 0,
+              not_in_metrc: [], no_permit_no_match: [], ambiguous: [], metrc_no_date: [],
+              matched_by_name: [], end_dates_differ: [], in_metrc_not_on_active_roster: [] };
+
+  (identity || []).forEach(function (r) {
+    var id = String((r && r.employee_id) || '').trim();
+    if (!id || !statusIsLive_(r.status)) return;
+    out.active_people++;
+    var a = (attrs && attrs[id]) || {};
+    var who = { employee_id: id, name: String(r.full_name || ''), attrs: a };
+    var pk = metrcPermitKey_(a.permit_number);
+    if (!pk) { unpermitted.push(who); return; }
+    var hit = byPermit[pk];
+    if (!hit) { out.not_in_metrc.push(who.name); return; }
+    claimed.push(hit);
+    matched.push({ who: who, m: hit, by: 'permit', permit_key: pk });
+  });
+
+  // The name fallback — only for people with no number, only against unclaimed Metrc people.
+  var free = metrc.filter(function (m) { return claimed.indexOf(m) < 0; });
+  var tentative = [];
+  unpermitted.forEach(function (who) {
+    var cands = free.filter(function (m) { return samePerson_(who.name, m.name); });
+    if (!cands.length) { out.no_permit_no_match.push(who.name); return; }
+    if (cands.length > 1) { out.ambiguous.push(who.name); return; }
+    tentative.push({ who: who, m: cands[0], by: 'name', permit_key: '' });
+  });
+  tentative.forEach(function (t) {
+    var rivals = tentative.filter(function (x) { return x.m === t.m; });
+    if (rivals.length > 1) { out.ambiguous.push(t.who.name); return; }
+    claimed.push(t.m);
+    matched.push(t);
+    out.matched_by_name.push(t.who.name);
+  });
+
+  matched.forEach(function (x) {
+    if (x.m.end_dates_differ) out.end_dates_differ.push(x.who.name);
+    var to = metrcDay_(x.m.end);
+    if (!to) { out.metrc_no_date.push(x.who.name); return; }
+    var raw = String(x.who.attrs.permit_expires || '').trim();
+    var from = normDate_(raw);
+    if (from === to) { out.agree++; return; }
+    out.changes.push({ employee_id: x.who.employee_id, name: x.who.name,
+                       from: from || raw, to: to, matched_by: x.by, permit_key: x.permit_key,
+                       /* `earlier` is worth a second look and is named for that reason: Metrc is
+                          still the source, so it is applied, but a date moving BACK is unusual. */
+                       direction: !from ? 'filled' : (to > from ? 'later' : 'earlier') });
+  });
+
+  out.in_metrc_not_on_active_roster = metrc.filter(function (m) { return claimed.indexOf(m) < 0; })
+                                           .map(function (m) { return m.name; });
+  return out;
+}
+
+/* The run. `write` false is a preview. Returns names — callers decide who may see them; the
+   nightly wrapper below keeps counts only. */
+function metrcPermitSyncRun_(write, by) {
+  var c = metrcCreds_();
+  if (/sandbox/i.test(c.base)) {
+    return { ok: false, skipped: 'sandbox', error: 'METRC_BASE points at the sandbox, which holds ' +
+             'Metrc test data and not Green Cross staff. Nothing read, nothing changed.' };
+  }
+  if (!c.vendor || !c.user) {
+    return { ok: false, skipped: 'no_keys', error: 'METRC keys are not set (METRC_VENDOR_KEY and ' +
+             'METRC_USER_KEY in this script\'s properties). Nothing read, nothing changed.' };
+  }
+  if (!c.licenses.length) {
+    return { ok: false, skipped: 'no_licenses', error: 'METRC_LICENSES is not set. Nothing read, nothing changed.' };
+  }
+
+  var m = metrcAllEmployees_();
+  if (m.errors.length) {
+    return { ok: false, error: m.errors.length + ' of ' + c.licenses.length + ' METRC license(s) ' +
+             'could not be read, so nothing was changed. A partial read is not acted on.',
+             license_errors: m.errors };
+  }
+  if (!Object.keys(m.people).length) {
+    return { ok: false, error: 'METRC returned nobody on any license — nothing changed.' };
+  }
+
+  var identity;
+  try { identity = GXCore.getEmployees() || []; }
+  catch (e) { return { ok: false, error: 'could not read GX Core identity: ' + String((e && e.message) || e) }; }
+  if (!identity.length) return { ok: false, error: 'GX Core returned no employees — nothing changed.' };
+
+  var plan = metrcPermitPlan_(identity, readAttrs_(), m.people);
+  var out = {
+    ok: true, mode: write ? 'commit' : 'preview',
+    metrc_people: Object.keys(m.people).length, metrc_rows_seen: m.rows_seen,
+    active_in_crew: plan.active_people,
+    already_agree: plan.agree,
+    to_change: plan.changes.length,
+    changes: plan.changes.map(function (ch) {
+      return { name: ch.name, from: ch.from, to: ch.to, matched_by: ch.matched_by, direction: ch.direction };
+    }),
+    moved_earlier: plan.changes.filter(function (ch) { return ch.direction === 'earlier'; })
+                               .map(function (ch) { return ch.name; }),
+    matched_by_name: plan.matched_by_name,
+    has_permit_but_not_in_metrc: plan.not_in_metrc,
+    no_permit_and_no_metrc_match: plan.no_permit_no_match,
+    ambiguous_left_alone: plan.ambiguous,
+    metrc_has_no_date: plan.metrc_no_date,
+    metrc_dates_differ_between_licenses: plan.end_dates_differ,
+    in_metrc_not_on_active_roster: plan.in_metrc_not_on_active_roster,
+    written: 0, failed: [], skipped_changed_underneath: []
+  };
+  if (!write) {
+    out.note = 'PREVIEW — nothing written. Repeat with confirm=yes to apply.';
+    return out;
+  }
+  if (!plan.changes.length) {
+    out.note = 'Crew already agrees with METRC — nothing written.';
+    return out;
+  }
+
+  /* RE-READ BEFORE WRITING. writeAttrs_ replaces the whole row, so the copy it is handed must be
+     the row as it is NOW, not as it was before six Metrc calls. Anything a person edited in
+     between is carried; and if they changed the very fields this decision rested on, the row is
+     left alone and named. */
+  var fresh = readAttrs_();
+  var byId = Object.create(null);
+  identity.forEach(function (r) { byId[String(r.employee_id || '').trim()] = r; });
+  plan.changes.forEach(function (ch) {
+    var was = fresh[ch.employee_id] || null;
+    if (ch.matched_by === 'permit' && metrcPermitKey_(was && was.permit_number) !== ch.permit_key) {
+      out.skipped_changed_underneath.push(ch.name); return;
+    }
+    if (ch.matched_by === 'name' && was && metrcPermitKey_(was.permit_number)) {
+      out.skipped_changed_underneath.push(ch.name); return;
+    }
+    if (was && normDate_(was.permit_expires) === ch.to) return;   // somebody got there first
+    var rec = {};
+    if (was) Object.keys(was).forEach(function (k) { rec[k] = was[k]; });
+    else {
+      var core = byId[ch.employee_id] || {};
+      rec.name_key = nameToKey_(core.full_name);
+      rec.full_name = String(core.full_name || '');
+    }
+    rec.employee_id = ch.employee_id;
+    rec.permit_expires = ch.to;
+    rec.updated_at = new Date().toISOString();
+    rec.updated_by = String(by || 'metrc-sync');
+    try { writeAttrs_(rec); out.written++; }
+    catch (e) { out.failed.push(ch.name); }
+  });
+  if (out.written) bustRosterCache_();
+  if (out.failed.length) out.ok = false;
+  out.note = out.written + ' permit expiration date(s) updated from METRC.' +
+             (out.failed.length ? ' ' + out.failed.length + ' could not be written.' : '');
+  return out;
+}
+
+/**
+ * ?action=metrc_permit_sync[&confirm=yes]
+ * A preview unless confirm=yes. The deploy secret, or a signed-in Crew user — and a write needs an
+ * edit-grade role, same as any other roster change.
+ */
+function metrcPermitSync_(p) {
+  var write = String((p && p.confirm) || '') === 'yes';
+  var by = 'metrc-sync';
+  if (!deploySecretOk_(p)) {
+    var auth = requireCrew_(p);
+    if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+    if (write && !canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+    by = 'metrc-sync (' + String(auth.user || '') + ')';
+  }
+  return metrcPermitSyncRun_(write, by);
+}
+
+/* The 5am run, called from nightlyDutchieScan. IT NEVER THROWS and it returns and records COUNTS
+   ONLY: a trigger's log and a script property are not places for staff names. Not being connected
+   yet (no keys, no licenses, sandbox) is recorded as skipped, not as a failure. */
+function nightlyMetrcPermitSync_() {
+  var note;
+  try {
+    var r = metrcPermitSyncRun_(true, 'metrc-sync (nightly)') || {};
+    note = { ok: !!r.ok };
+    if (r.skipped) note.skipped = r.skipped;
+    if (r.error) note.error = r.error;
+    if (r.license_errors) note.license_errors = r.license_errors.length;
+    ['metrc_people', 'active_in_crew', 'already_agree', 'to_change', 'written'].forEach(function (k) {
+      if (r[k] != null) note[k] = r[k];
+    });
+    ['failed', 'moved_earlier', 'matched_by_name', 'has_permit_but_not_in_metrc',
+     'no_permit_and_no_metrc_match', 'ambiguous_left_alone', 'metrc_has_no_date',
+     'skipped_changed_underneath'].forEach(function (k) {
+      if (r[k] && r[k].length) note[k] = r[k].length;      // how many, never who
+    });
+  } catch (e) {
+    note = { ok: false, error: String((e && e.message) || e) };
+  }
+  note.at = new Date().toISOString();
+  try {
+    PropertiesService.getScriptProperties().setProperty(METRC_LAST_SYNC_PROP, scrubSecrets_(JSON.stringify(note)));
+  } catch (e2) { /* the record is a convenience; failing to keep it must not fail the night */ }
+  try { Logger.log('metrc permit sync: ' + scrubSecrets_(JSON.stringify(note))); } catch (e3) {}
+  return note;
 }
 
 // ─── Review queue ───────────────────────────────────────────────────────────────
@@ -3918,6 +4300,14 @@ function dutchieNewHireScan_(secret) {
 function nightlyDutchieScan() {
   var out = dutchieNewHireScan_();
   Logger.log(JSON.stringify(out));
+  /* THE SAME 5AM TRIGGER ALSO REFRESHES PERMIT EXPIRATION DATES FROM METRC (added 2026-10-12).
+     It rides this handler rather than getting a trigger of its own, so there is no new schedule to
+     install, authorize or forget. It runs AFTER the scan and cannot change what the scan returns:
+     nightlyMetrcPermitSync_ never throws, and `out` below is the scan's answer alone — which is
+     what install_triggers reads for its cron-path check. Unlike the scan, this one WRITES (one
+     field, in Crew's own sheet); see the block above metrcPermitPlan_ for exactly what and why
+     that is safe unattended. What it did is readable at ?action=metrc_health. */
+  nightlyMetrcPermitSync_();
   return out;
 }
 
