@@ -2707,6 +2707,29 @@
     if (!v) return '<span class="crew-inc-zero">—</span>';
     return esc((fmt || m0)(v));
   }
+  /* % OF GOAL ON A CLOSED PERIOD — A LABEL, NEVER AN INPUT. The frozen record carries what was paid;
+     the store goal rides beside it from its own tab (engine: GOALS_TAB) so the closed screen can say
+     how the store did. This divides two stored numbers for display and feeds NOTHING: the frozen
+     bonus and payroll are returned by mgrCalc untouched, and no tier is looked up from the result.
+     null — which renders as a dash — whenever either number is missing, so the 27 periods imported
+     from the payout PDFs keep saying they do not know. Pinned by tests/closed_period_goals_test.js. */
+  function incFrozenPct(sales, target) {
+    var s = Number(sales), t = Number(target);
+    if (sales == null || sales === '' || target == null || target === '') return null;
+    return (isFinite(s) && isFinite(t) && t > 0) ? s / t * 100 : null;
+  }
+  /* Where a closed period's Target came from, said on hover only when it was NOT frozen by the
+     approval itself — a goal read from GX Core afterwards is today's reading of that fortnight. */
+  function incGoalTip() {
+    var d = inc.data;
+    if (!d || d.source !== 'imported' || d.goals_source !== 'backfill') return '';
+    return 'Store goal read from GX Core on ' + String(d.goals_frozen_at || '').slice(0, 10) +
+           ', after this period closed. Display only — it changes no pay figure.';
+  }
+  function incTargetCell(v) {
+    var tip = (v != null && v) ? incGoalTip() : '';
+    return tip ? '<span title="' + esc(tip) + '">' + incDash(v) + '</span>' : incDash(v);
+  }
   /* The store's own color, from the same registry every app in the suite reads, so Century is the
      same blue here as on the kiosk. Imported rows print the store label the REPORT used ("Hillsboro"
      for what is now Baseline) but color the dot by the resolved store_id — so a year of history
@@ -2801,7 +2824,8 @@
     }
     function mgrCalc(m) {
       if (isImported) return { bonus: m.bonus, payroll: m.payroll, spiff: m.spiff, hr: m.per_hour,
-                               pct: null, salesB: null, discB: null, aovB: null, teamA: m.team_attendance };
+                               pct: incFrozenPct(m.sales, m.target),
+                               salesB: null, discB: null, aovB: null, teamA: m.team_attendance };
       return calcMgr(m, T, incInputs(), buds);
     }
 
@@ -2816,7 +2840,8 @@
     }
     var budTotal = buds.reduce(function (a, b) { return a + (paidOf(b, budCalc(b)) || 0); }, 0);
     var mgrTotal = mgrs.reduce(function (a, m) { return a + (paidOf(m, mgrCalc(m)) || 0); }, 0);
-    var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll }
+    var adm = d.admin ? (isImported ? { bonus: d.admin.bonus, payroll: d.admin.payroll,
+                                        pct: incFrozenPct(d.admin.sales, d.admin.target) }
                                     : calcAdmin(d.admin, T)) : null;
     var admPay = adm ? (paidOf(d.admin, adm) || 0) : 0;
     var spiffTot = incSpiffTotal(buds.map(budCalc).concat(mgrs.map(mgrCalc)));
@@ -3587,7 +3612,7 @@
         incTh(9, 'Bonus') + incTh(10, '$/hr') + incTh(11, 'Payroll') +
       '</tr></thead><tbody><tr>' +
         incTd(0, esc(incName(a)), 'l crew-inc-name') + incTd(1, '', 'l') +
-        incTd(2, incDash(a.target), 'crew-inc-bar') + incTd(3, incDash(a.actual || a.sales)) +
+        incTd(2, incTargetCell(a.target), 'crew-inc-bar') + incTd(3, incDash(a.actual || a.sales)) +
         incTd(4, calc.pct == null ? '—' : esc(pct1(calc.pct)),
               calc.pct == null ? 'crew-inc-zero' : incGoal(calc.pct >= 100)) +
         '<td colspan="4"></td>' +
@@ -3615,7 +3640,7 @@
       return '<tr>' +
         incTd(0, esc(incName(m)), 'l crew-inc-name') +
         incTd(1, incDot(m) + incStoreName(m), 'l') +
-        incTd(2, incDash(m.target), 'crew-inc-bar') +
+        incTd(2, incTargetCell(m.target), 'crew-inc-bar') +
         incTd(3, incDash(m.sales)) +
         incTd(4, c.pct == null ? '—' : esc(pct1(c.pct)),
               c.pct == null ? 'crew-inc-zero' : incGoal(c.pct >= 100)) +

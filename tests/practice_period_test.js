@@ -95,7 +95,7 @@ console.log('\nEvery incentive tab is routed through incTab_, and the streams ne
   /* The five tabs that hold anything keyed on a pay period. If a sixth is ever added and not
      listed here, the reset assertion further down is what catches it. */
   const TABS = ['crew_incentive_history', 'crew_incentive_inputs', 'crew_incentive_workflow',
-                'crew_incentive_voided', 'crew_incentive_schemes'];
+                'crew_incentive_voided', 'crew_incentive_schemes', 'crew_incentive_goals'];
   const real = TABS.filter(t => T(t, '2026-08-17') === t);
   ok('a real period reads and writes the real tabs', real.length === TABS.length);
   const prac = TABS.filter(t => T(t, 'practice-2026-08-17') === t + '_practice');

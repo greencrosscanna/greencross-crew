@@ -371,12 +371,28 @@ the tray, never from a doc.**
   the printed name (`incByStore`), corporate and unresolved last. **Display only — the Capstone
   export keeps Capstone's block order.** Pinned by `tests/incentive_defaults_test.js`.
 
+### Target and % Goal on a closed period — the goals live in their OWN tab
+Approval freezes sales and bonus into `crew_incentive_history` and the **store goals into
+`crew_incentive_goals`** (`freezeGoals_`, one row per period, keyed on `store_id`); the closed
+screen reads them back (`attachGoals_`) and divides for display (`incFrozenPct`).
+
+- **Never add a target column to `HISTORY_HEADERS`.** History rows are read by position by the
+  approval email, the payout PDF, the void log and the reopen.
+- **The percent on a closed period is a label, never an input** — no tier is looked up from it and
+  `mgrCalc` still returns the frozen bonus and payroll.
+- **A missing goal is a dash, not a zero.** The 27 PDF-imported periods have none and are never
+  backfilled; `incentive_goals_backfill` (deploy-secret, dry run by default) refuses them, and
+  writes only the goals tab, marked `backfill`, which the screen says on hover.
+- The freeze runs after `wfSet_` and cannot fail an approval.
+
+Pinned by `tests/closed_period_goals_test.js`.
+
 ### The practice pay period — rehearse the close without paying anybody
 A real fortnight under a different key: `practice-2026-08-17` is where rows go; `2026-08-17` is the
 fortnight fetched and scored. Real staff, real numbers.
 
-- **The isolation is the TAB, not a filter.** Each of the five incentive tabs has a `_practice`
-  twin (`crew_incentive_history_practice`, `crew_incentive_inputs_practice`, …) chosen by
+- **The isolation is the TAB, not a filter.** Every incentive tab keyed on a pay period has a
+  `_practice` twin (`crew_incentive_history_practice`, `crew_incentive_inputs_practice`, …) chosen by
   `incTab_(BASE, pp)`, the one place the suffix is written. Never keep practice rows in the real
   tabs and filter them out. **Practice never appears in any enumeration of what the company
   actually closed** — `historyPeriods_()`, the Capstone export, the digest, the payout backfill.
