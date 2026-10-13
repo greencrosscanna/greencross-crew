@@ -181,7 +181,7 @@ console.log('\n2. Same figures as the screen\n');
      cr.mgrs[0].payroll === 777 && cr.buds[0].payroll === 333 && cr.total === 1110);
   ok('target and % goal come from the record; a missing target is a dash, not an invented one',
      Math.abs(cr.mgrs[0].pct - 80) < 1e-9 && cb.mgrs[0].pct === null);
-  const html = w.ctx.storeEmailHtml_(cm, { pp_start: '2026-09-28', dates: 'Sep 28 – Oct 11, 2026', status: 'as paid (approved)', warnings: [] });
+  const html = w.ctx.storeEmailHtml_(cm, { pp_start: '2026-09-28', dates: 'Sep 28 – Oct 11, 2026', status: 'as paid', warnings: [] });
   ok('the table is plain HTML a recipient can copy', /<table border="1"/.test(html) && html.includes('$125,000') && html.includes('80.0%'));
   ok('each store links to its live page by store id', html.includes('#incentive/2026-09-28/river-rd') && html.includes('#incentive/2026-09-28/bend'));
   ok('names are HTML-escaped', w.ctx.storeEmailHtml_([{ id: 'x', label: 'A<b>', mgrs: [], buds: [{ name: 'Tom <script>', sales: 1, disc: 1, aov: 1, bonus: 0, payroll: 0 }], total: 0 }],

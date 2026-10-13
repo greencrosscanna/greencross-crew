@@ -4277,7 +4277,7 @@ function storeEmailBuild_(p) {
   if (!model.length) return { ok: false, error: 'the period has no store rows — nothing to send' };
 
   var end = d.pp_end || (d.payPeriod && d.payPeriod.end) || per.pp_end || '';
-  var status = d.source === 'imported' ? 'as paid (approved)'
+  var status = d.source === 'imported' ? 'as paid'
              : (d.payPeriod && d.payPeriod.current) ? 'still running — figures will change'
              : 'closed, not yet approved — figures may still change';
   var warnings = [];
