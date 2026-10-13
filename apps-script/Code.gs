@@ -5332,7 +5332,26 @@ function incentiveRelink_(p) {
 }
 
 /** Read imported history back: ?action=incentive_history[&pp_start=YYYY-MM-DD]. */
-function incentiveHistory_(p) {
+/* `have` IS A FUNCTION ARGUMENT, NEVER A REQUEST PARAMETER — the same guard as getIncentive_'s
+   `preAuth`. The router calls incentiveHistory_(p) with one argument, so no URL can supply it; the
+   one caller that does is getIncentive_, painting the closed-period SCREEN, and it hands over two
+   things it already paid for (2026-10-13):
+
+     have.rows   the history tab it read a moment ago, in this same execution — so the closed screen
+                 reads that tab once instead of twice. Same rows, same instant; nothing is cached.
+     the registry list, from the screen's existing 10-minute cache (CORE_EMP_CACHE_KEY) rather than
+                 a second GXCore.getEmployees() — the list the live screen has used since 2026-09-30.
+
+   It is honored only when it carries `__screen === true` AND an array of rows. Anything else — the
+   deploy-secret route, tooling, a future caller that forgets — reads the tab and the registry
+   itself, fresh, exactly as before. THE WRITE PATHS NEVER COME THROUGH HERE WITH IT: approve, send,
+   reopen and the PDF backfill read their own rows and must keep doing so.
+
+   WHAT THE CACHED LIST CAN GET WRONG, stated so nobody is surprised by it: `full_name` on a closed
+   period (the legal name the Capstone export prints) can be up to ROSTER_CACHE_TTL old when a name
+   is changed OUTSIDE Crew, in the Command Center. Every Crew write busts the cache. No figure comes
+   from this list — only that name. */
+function incentiveHistory_(p, have) {
   /* getIncentive_ calls this after its own requireCrew_ gate, so an internal call skips the
      secret check rather than the engine having to hold its own secret to talk to itself.
 
@@ -5346,14 +5365,24 @@ function incentiveHistory_(p) {
   if (p.__internal !== true && !deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
   var want = String(p.pp_start || '');
   if (!want) return { ok: true, periods: historyPeriods_() };
-  var rows = readTab_(incTab_(HISTORY_TAB, want), HISTORY_HEADERS).filter(function (r) { return r.pp_start === want; });
+  var fromScreen = !!(have && have.__screen === true && Array.isArray(have.rows));
+  var rows = (fromScreen ? have.rows : readTab_(incTab_(HISTORY_TAB, want), HISTORY_HEADERS))
+    .filter(function (r) { return r.pp_start === want; });
   if (!rows.length) return { ok: false, error: 'no imported history for ' + want };
   /* Imported rows store the name the REPORT printed, which is what the document said and what the
      screen shows. The export needs the legal name, so the registry is joined in here rather than
      the history tab carrying a copy that would go stale the next time somebody is renamed. */
   var legalById = Object.create(null), midById = Object.create(null);
   try {
-    (GXCore.getEmployees() || []).forEach(function (e) {
+    /* The SCREEN may read the cached registry list; every other caller reads it live. A miss, an
+       empty or unreadable cache all fall through to the live read (coreEmployeesCached_ returns
+       null), and only a non-empty live read is cached — the rule stampEmployeeIds_ already follows. */
+    var emps = fromScreen ? coreEmployeesCached_() : null;
+    if (!emps) {
+      emps = GXCore.getEmployees() || [];
+      if (fromScreen) coreEmployeesCachePut_(emps);
+    }
+    emps.forEach(function (e) {
       if (e.employee_id) legalById[String(e.employee_id)] = String(e.full_name || '');
     });
   } catch (e) {}
@@ -6615,9 +6644,15 @@ function getIncentive_(p, preAuth) {
      and the break-glass reopen are both part of what gets rehearsed. `importedBy` is the REAL
      history and deliberately does not contain it; asking the practice tab directly is what keeps
      practice out of every enumeration of what the company actually closed. */
-  if (isPracticePeriod_(want) &&
-      historyPeriods_(want).some(function (h) { return h.pp_start === want; })) {
-    var ph = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
+  /* The practice history tab, read ONCE: the same rows answer "is it approved" and then paint it.
+     `historyPeriods_(want)` groups exactly these rows by pp_start, so asking it "is there a period
+     called `want`" and asking the rows "does any of you carry `want`" are one question. */
+  reqMark_('period_pick');
+  var practiceRows = isPracticePeriod_(want) ? readTab_(incTab_(HISTORY_TAB, want), HISTORY_HEADERS) : null;
+  if (practiceRows && practiceRows.some(function (r) { return r.pp_start === want; })) {
+    var ph = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true },
+                               { __screen: true, rows: practiceRows });
+    reqMark_('closed_record');
     ph.periods = periodList_(imported, null);
     ph.to_date = incentiveToDate_(imported);
     ph.can_edit = false;
@@ -6643,11 +6678,16 @@ function getIncentive_(p, preAuth) {
     ph.can_reset_practice = canEdit_(auth);
     ph.why_read_only = 'Practice period, already approved — the figures as they were frozen. '
                      + 'Reopen it or reset practice to run through the close again.';
+    reqMark_('closed_extras');   // the period list, to-date totals, approver lookups and the inputs tab
     return ph;
   }
 
   if (want && importedBy[want]) {
-    var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true });
+    /* `historyRows` IS the tab this period lives in, read at the top of this function. Handing it
+       over is what makes the closed screen one history read instead of two. */
+    var h = incentiveHistory_({ secret: 'internal', pp_start: want, __internal: true },
+                              { __screen: true, rows: historyRows });
+    reqMark_('closed_record');
     h.periods = periodList_(imported, null);
     h.to_date = incentiveToDate_(imported);
     h.can_edit = false;
@@ -6672,13 +6712,14 @@ function getIncentive_(p, preAuth) {
        them and the screen keeps saying it does not know — which is the truth. */
     h.inputs = inputsFor_(want);
     h.why_read_only = 'Imported from the payout report for this period — the figures as paid.';
+    reqMark_('closed_extras');   // the period list, to-date totals, approver lookups and the inputs tab
     return h;
   }
 
   /* Shared with both write paths — the fetch (with the practice window split), the stamp and the
      floater fold. See `perfForWrite_`. The screen is not a write path, but it is the thing the
      approver LOOKS at, so it must be shaped by the same code that shapes what gets frozen. */
-  reqMark_('period_pick');  // choosing the default period (kv reads), so it is not billed to perf_fetch
+  reqMark_('practice_check');  // the practice tab read above, when the period is a practice one
   var live = perfForWrite_(want, timings, { snapshot: true });
   tLast = Date.now();
   if (live.ok === false) return live;
