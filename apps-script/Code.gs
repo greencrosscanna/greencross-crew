@@ -288,6 +288,7 @@ function route_(e) {
   _crewSheetMemo_ = null;   // per request — see crewSheet_
   var p = (e && e.parameter) || {};
   var action = p.action || 'health';
+  reqBegin_(action);        // request timing — see the REQUEST TIMING block below route_
   var body = null;
   if (e && e.postData && e.postData.contents) {
     try { body = JSON.parse(e.postData.contents); } catch (err) { body = null; }
@@ -552,17 +553,356 @@ function route_(e) {
       case 'pay_audit':           return json_(payAudit_(p), p.callback);
       // Remove ONE exact-duplicate inputs row that pay_audit found. Dry by default. See inputsDedupe_.
       case 'inputs_dedupe':       return json_(inputsDedupe_(p), p.callback);
+      /* How long each route takes, and where approve/send spend it. Durations and counts only.
+         Deploy-secret and nothing else — never a session, so no signed-in viewer can read it. */
+      case 'request_stats':
+        if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
+        return json_(reqStats_(p), p.callback);
 
       // ── To build (see /gxwhatsnext) ─────────────────────────────────────────
       // case 'export':       return json_(buildCapstoneExport_(p), p.callback);// payroll export (CSV/PDF)
       // case 'snapshot':     return json_(monthlySnapshot_(p), p.callback);    // monthly review snapshot
 
       default:
+        reqUnknown_();      // the caller's own text must never become a stored name
         return json_({ ok: false, error: 'unknown action: ' + action }, p.callback);
     }
   } catch (err) {
+    reqThrew_();
     return json_({ ok: false, error: String((err && err.message) || err) }, p.callback);
+  } finally {
+    reqEnd_();              // swallows everything; a throw above still propagates unchanged
   }
+}
+
+/* ─── REQUEST TIMING — which route was slow, and where approve/send spent it ─────────────────────
+ *
+ * WHY. On 2026-10-12 the Executions log showed 29 web requests with one at 37.5s, and could not say
+ * which ROUTE any of them was. The diagnosis had to infer it. This records, for every request that
+ * passes through route_: the action, the total milliseconds and ok/failed — and, inside the pay
+ * routes, how long each stage took. `?action=request_stats` (deploy-secret) reads it back.
+ *
+ * WHAT IS STORED: route names, stage names, counts and milliseconds. NOTHING ELSE, and that is the
+ * rule to keep: no user, no token, no parameter, no payload, no name, no figure. A name is stored
+ * only when it is a literal from the code —
+ *   - the action, only if the switch in route_ MATCHED it. An unmatched action is the caller's own
+ *     text (it can be a pasted token or a person's name) and is recorded as '(unknown)';
+ *   - stage and variant names, which are string literals at their call sites.
+ * reqEnd_ and reqStats_ both re-check the shape, so a hand-edited tab cannot put prose in a reply.
+ *
+ * WHAT IT COSTS A REQUEST: one CacheService get and one put, once, at the end. The stage marks are
+ * in-memory arithmetic. No lock, no sheet, no script property, no fetch on the request path — a
+ * sheet append per request would be a new slow step and a new way to fail inside the thing being
+ * measured (GX Core's gxReqCount_ carries the same warning, and this follows its shape).
+ *
+ * IT CAN NEVER FAIL A REQUEST. Every function here swallows everything. A cache that is down, full
+ * or throwing costs that request's sample and nothing else. A cache READ that throws skips the write
+ * too, so an outage cannot overwrite an hour's bucket with a fresh empty one.
+ *
+ * COUNTS ARE APPROXIMATE. CacheService has no atomic increment; two requests finishing in the same
+ * instant can lose one sample. Crew serves tens of requests an hour. Do not build anything that
+ * needs these to balance.
+ *
+ * ONE WRITE, AT THE END — unlike GX Core, which also counts at the start so an execution that never
+ * returns is still counted. Here that second round trip is not worth it: a Crew request that dies
+ * at Google's execution limit is missing from these numbers, and the Executions log still shows it.
+ *
+ * WHERE IT LIVES. Hourly buckets in CacheService (6h, the maximum). The 15-minute
+ * approvalEscalationSweep trigger copies each CLOSED hour into the `crew_request_stats` tab — never
+ * the request — and trims the tab to REQT_KEEP_ROWS. The flush is self-recovering by construction:
+ * it writes every closed hour still in cache that the TAB does not hold, so an hour whose write
+ * failed is retried on every tick for six hours (GX Core lost two hours of telemetry on 2026-09-03
+ * to a swallowed one-shot flush; see its reqstats_flush_recovery test). The last flush outcome is
+ * kept and request_stats reports it. `request_stats&flush=yes` runs a flush by hand.
+ *
+ * THE TAB IS REACHED BY THE STORED ID, NEVER THROUGH crewSheet_() — that path can CREATE a workbook.
+ * No stored id means no flush, not a new spreadsheet.
+ *
+ * PERCENTILES ARE BUCKETED. Each name keeps a histogram over REQT_EDGES, so typical and p90 are the
+ * upper edge of the bucket they fall in (capped at the true max). count, average and max are exact.
+ * ─────────────────────────────────────────────────────────────────────────────────────────────── */
+/* ONE SPACE BEFORE EACH `=`, on purpose: the test harnesses lift a declaration by the literal text
+   `var NAME =`, and a column-aligned one is silently not found. */
+var REQT_PREFIX = 'crewreq:';
+var REQT_TTL_S = 21600;                      // 6h, the CacheService maximum
+var REQT_TAB = 'crew_request_stats';
+var REQT_HEADERS = ['hour', 'name', 'stats', 'flushed_at'];
+var REQT_KEEP_ROWS = 3000;                   // roughly two to three weeks at Crew's volume
+var REQT_MAX_NAMES = 120;                    // names in one hour's bucket
+var REQT_MAX_STAGES = 40;                    // stages under one name
+var REQT_MAX_BODY = 90000;                   // CacheService refuses a value past 100KB
+var REQT_MAX_HOURS = 336;                    // the most request_stats will read back (14 days)
+var REQT_EDGES = [250, 500, 1000, 2000, 3000, 5000, 7500, 10000, 15000, 20000, 30000, 45000,
+                  60000, 90000, 120000, 180000, 360000];
+var REQT_NAME_RE = new RegExp('^(?:\\(unknown\\)|[a-z_]{1,40})(?:\\.[a-z]{1,12})?$');
+var REQT_STAGE_RE = new RegExp('^[a-z0-9_]{1,32}$');
+
+/* The collector for THIS request. Module-global, so reqBegin_ replaces it and reqEnd_ clears it: a
+   warm instance outlives the request, and a trigger running on one must not add to a dead request. */
+var _reqT_ = null;
+
+function reqHour_(ms) {
+  return Utilities.formatDate(new Date(ms == null ? Date.now() : ms), 'America/Los_Angeles', 'yyyy-MM-dd HH');
+}
+
+function reqBegin_(action) {
+  try {
+    var n = Date.now();
+    _reqT_ = { action: String(action || ''), t0: n, last: n, variant: '', known: true,
+               failed: false, threw: false, replied: false, stages: {} };
+  } catch (e) { _reqT_ = null; }
+}
+function reqUnknown_() { try { if (_reqT_) _reqT_.known = false; } catch (e) {} }
+function reqThrew_()   { try { if (_reqT_) _reqT_.threw = true; } catch (e) {} }
+/* Called by json_ once the reply is built. Reads `ok` and nothing else off the reply. */
+function reqReplied_(obj) {
+  try {
+    if (!_reqT_) return;
+    _reqT_.replied = true;
+    _reqT_.failed = !!(obj && obj.ok === false);
+  } catch (e) {}
+}
+/* Which KIND of this action: dry / confirm for approve, send / preview for send. FIRST CALL WINS,
+   so incentive_send — which runs incentiveApprove_ as its dry run — stays a send. */
+function reqVariant_(v) { try { if (_reqT_ && !_reqT_.variant) _reqT_.variant = String(v || ''); } catch (e) {} }
+/* Everything since the previous mark is charged to `stage`. Marks are disjoint, so a request's
+   stages add up to at most its total and what is left over is reported as unattributed. A no-op
+   outside a web request (a trigger, the editor, a test that calls a handler directly). */
+function reqMark_(stage) {
+  try {
+    if (!_reqT_) return;
+    var n = Date.now();
+    _reqT_.stages[stage] = (_reqT_.stages[stage] || 0) + Math.max(0, n - _reqT_.last);
+    _reqT_.last = n;
+  } catch (e) {}
+}
+
+function reqBucketOf_(ms) {
+  for (var i = 0; i < REQT_EDGES.length; i++) if (ms <= REQT_EDGES[i]) return i;
+  return REQT_EDGES.length;
+}
+
+/* Add one sample to an hour's bucket, in place. Bounded: past REQT_MAX_NAMES / REQT_MAX_STAGES a
+   NEW name is dropped rather than growing the bucket; an existing one still counts. */
+function reqFold_(b, name, ms, failed, threw, stages) {
+  var e = b[name];
+  if (!e) {
+    if (Object.keys(b).length >= REQT_MAX_NAMES) return;
+    e = b[name] = { n: 0, f: 0, x: 0, ms: 0, hi: 0, h: {}, st: {} };
+  }
+  e.n++; if (failed) e.f++; if (threw) e.x++;
+  e.ms += ms; if (ms > e.hi) e.hi = ms;
+  var k = reqBucketOf_(ms);
+  e.h[k] = (e.h[k] || 0) + 1;
+  Object.keys(stages || {}).forEach(function (sn) {
+    if (!REQT_STAGE_RE.test(sn)) return;
+    var s = e.st[sn];
+    if (!s) {
+      if (Object.keys(e.st).length >= REQT_MAX_STAGES) return;
+      s = e.st[sn] = { n: 0, ms: 0, hi: 0 };
+    }
+    var d = Math.max(0, Math.round(Number(stages[sn]) || 0));
+    s.n++; s.ms += d; if (d > s.hi) s.hi = d;
+  });
+}
+
+function reqEnd_() {
+  var t = _reqT_;
+  _reqT_ = null;
+  try {
+    if (!t) return;
+    var ms = Math.max(0, Date.now() - t.t0);
+    var name = (t.known && /^[a-z_]{1,40}$/.test(t.action)) ? t.action : '(unknown)';
+    if (t.variant && /^[a-z]{1,12}$/.test(t.variant)) name += '.' + t.variant;
+    var threw = !!t.threw || !t.replied;
+    var cache = CacheService.getScriptCache();
+    var key = REQT_PREFIX + reqHour_();
+    var raw = cache.get(key);                 // a THROW here skips the write — see the header
+    var b = {};
+    if (raw) { try { b = JSON.parse(raw) || {}; } catch (e) { b = {}; } }
+    reqFold_(b, name, ms, !!t.failed || threw, threw, t.stages);
+    var body = JSON.stringify(b);
+    if (body.length < REQT_MAX_BODY) cache.put(key, body, REQT_TTL_S);
+  } catch (e) { /* telemetry must never break, or be the slow part of, a request */ }
+}
+
+/* The stats tab, by the STORED id only. null when there is no id — never a new workbook. */
+function reqStatsSheet_(create) {
+  var id = String(PropertiesService.getScriptProperties().getProperty(CREW_SHEET_ID_PROP) || '');
+  if (!id) return null;
+  var ss = SpreadsheetApp.openById(id);
+  var sh = ss.getSheetByName(REQT_TAB);
+  if (!sh && create) {
+    sh = ss.insertSheet(REQT_TAB);
+    sh.getRange(1, 1, 1, REQT_HEADERS.length).setValues([REQT_HEADERS]).setFontWeight('bold');
+    sh.setFrozenRows(1);
+  }
+  return sh || null;
+}
+
+function reqHourText_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/Los_Angeles', 'yyyy-MM-dd HH');
+  return String(v == null ? '' : v).trim();
+}
+
+/* Copy every CLOSED hour still in cache, and not yet in the tab, into the tab. Called by the
+   15-minute trigger and by request_stats&flush=yes — NEVER by reqEnd_. Returns its outcome and
+   never throws; the outcome is also kept so a broken writer is visible instead of merely quiet. */
+function reqStatsFlush_() {
+  var out = { ok: true, flushed: [], already: [], rows: 0, at: new Date().toISOString() };
+  var cache = null;
+  try {
+    cache = CacheService.getScriptCache();
+    var nowMs = Date.now(), open = reqHour_(nowMs), pending = [], seen = {};
+    for (var h = 1; h <= 6; h++) {
+      var hour = reqHour_(nowMs - h * 3600000);
+      if (hour === open || seen[hour]) continue;
+      seen[hour] = 1;
+      if (cache.get(REQT_PREFIX + 'done:' + hour)) continue;   // a hint only; the tab is the record
+      var raw = cache.get(REQT_PREFIX + hour);
+      if (raw) pending.push({ hour: hour, raw: raw });
+    }
+    if (pending.length) {
+      var sh = reqStatsSheet_(true);
+      if (!sh) throw new Error('no ' + CREW_SHEET_ID_PROP + ' is stored, so there is no workbook to flush to');
+      var have = {}, last = sh.getLastRow();
+      if (last >= 2) {
+        sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { have[reqHourText_(r[0])] = 1; });
+      }
+      var rows = [], wrote = [];
+      pending.forEach(function (pd) {
+        if (have[pd.hour]) { out.already.push(pd.hour); return; }
+        var b = {};
+        try { b = JSON.parse(pd.raw) || {}; } catch (e) { b = {}; }
+        Object.keys(b).forEach(function (name) {
+          if (!REQT_NAME_RE.test(name)) return;
+          rows.push([pd.hour, name, JSON.stringify(b[name]), out.at]);
+        });
+        wrote.push(pd.hour);
+      });
+      if (rows.length) {
+        var rng = sh.getRange(last + 1, 1, rows.length, REQT_HEADERS.length);
+        rng.setNumberFormat('@');             // the hour is TEXT; Sheets would read it as a date
+        rng.setValues(rows);
+        out.rows = rows.length;
+      }
+      out.flushed = wrote;
+      wrote.concat(out.already).forEach(function (hr) {
+        try { cache.put(REQT_PREFIX + 'done:' + hr, '1', REQT_TTL_S); } catch (e) {}
+      });
+      /* The ring. Oldest rows go first; the tab cannot grow past REQT_KEEP_ROWS. */
+      var n = sh.getLastRow() - 1;
+      if (n > REQT_KEEP_ROWS) { sh.deleteRows(2, n - REQT_KEEP_ROWS); out.pruned = n - REQT_KEEP_ROWS; }
+    }
+  } catch (e) {
+    out.ok = false;
+    out.error = scrubSecrets_(String((e && e.message) || e)).slice(0, 200);
+  }
+  try { if (cache) cache.put(REQT_PREFIX + 'lastflush', JSON.stringify(out), REQT_TTL_S); } catch (e) {}
+  return out;
+}
+
+function reqMergeEntry_(into, e) {
+  if (!e || typeof e !== 'object') return;
+  into.n += Number(e.n) || 0; into.f += Number(e.f) || 0; into.x += Number(e.x) || 0;
+  into.ms += Number(e.ms) || 0;
+  if ((Number(e.hi) || 0) > into.hi) into.hi = Number(e.hi) || 0;
+  Object.keys(e.h || {}).forEach(function (k) {
+    if (!/^\d{1,2}$/.test(k)) return;
+    into.h[k] = (into.h[k] || 0) + (Number(e.h[k]) || 0);
+  });
+  Object.keys(e.st || {}).forEach(function (sn) {
+    if (!REQT_STAGE_RE.test(sn)) return;
+    var s = e.st[sn] || {}, t = into.st[sn] || (into.st[sn] = { n: 0, ms: 0, hi: 0 });
+    t.n += Number(s.n) || 0; t.ms += Number(s.ms) || 0;
+    if ((Number(s.hi) || 0) > t.hi) t.hi = Number(s.hi) || 0;
+  });
+}
+
+/* The upper edge of the bucket holding the q-th sample, capped at the true max. */
+function reqPercentile_(e, q) {
+  if (!e.n) return null;
+  var want = Math.max(1, Math.ceil(q * e.n)), run = 0;
+  for (var i = 0; i <= REQT_EDGES.length; i++) {
+    run += Number(e.h[i]) || 0;
+    if (run >= want) return i < REQT_EDGES.length ? Math.min(REQT_EDGES[i], e.hi) : e.hi;
+  }
+  return e.hi;
+}
+
+/* ?action=request_stats&secret=…[&hours=24][&flush=yes] — deploy-secret, checked in route_.
+   Per action: count, failed, typical, p90, max, and the stage breakdown. Durations and counts only. */
+function reqStats_(p) {
+  var hours = Math.max(1, Math.min(REQT_MAX_HOURS, Math.floor(Number((p && p.hours) || 24)) || 24));
+  var out = { ok: true, hours: hours, actions: [] };
+  if (String((p && p.flush) || '') === 'yes') out.flush_now = reqStatsFlush_();
+  var nowMs = Date.now();
+  var cutoff = reqHour_(nowMs - hours * 3600000);
+  out.from_hour = cutoff; out.to_hour = reqHour_(nowMs); out.timezone = 'America/Los_Angeles';
+
+  var byName = {}, sheetHours = {}, cacheHours = {};
+  function add(name, e) {
+    if (!REQT_NAME_RE.test(name)) return;
+    var t = byName[name] || (byName[name] = { n: 0, f: 0, x: 0, ms: 0, hi: 0, h: {}, st: {} });
+    reqMergeEntry_(t, e);
+  }
+  try {
+    var sh = reqStatsSheet_(false);
+    var last = sh ? sh.getLastRow() : 0;
+    if (last >= 2) {
+      sh.getRange(2, 1, last - 1, 3).getValues().forEach(function (r) {
+        var hour = reqHourText_(r[0]);
+        if (!/^\d{4}-\d{2}-\d{2} \d{2}$/.test(hour) || hour < cutoff) return;
+        var e = null;
+        try { e = JSON.parse(String(r[2] || '')); } catch (err) { e = null; }
+        if (!e) return;
+        sheetHours[hour] = 1;
+        add(String(r[1] || ''), e);
+      });
+    }
+  } catch (e) { out.sheet_error = String((e && e.message) || e).slice(0, 200); }
+  try {
+    var cache = CacheService.getScriptCache();
+    for (var h = 0; h <= Math.min(hours, 6); h++) {
+      var hour = reqHour_(nowMs - h * 3600000);
+      if (hour < cutoff || sheetHours[hour] || cacheHours[hour]) continue;
+      var raw = cache.get(REQT_PREFIX + hour);
+      if (!raw) continue;
+      var b = null;
+      try { b = JSON.parse(raw); } catch (err) { b = null; }
+      if (!b) continue;
+      cacheHours[hour] = 1;
+      Object.keys(b).forEach(function (name) { add(name, b[name]); });
+    }
+    try { out.last_flush = JSON.parse(cache.get(REQT_PREFIX + 'lastflush') || 'null'); } catch (err) { out.last_flush = null; }
+  } catch (e) { out.cache_error = String((e && e.message) || e).slice(0, 200); }
+
+  out.actions = Object.keys(byName).map(function (name) {
+    var e = byName[name], staged = 0;
+    var stages = Object.keys(e.st).map(function (sn) {
+      var s = e.st[sn];
+      staged += s.ms;
+      return { stage: sn, count: s.n, avg_ms: s.n ? Math.round(s.ms / s.n) : null, max_ms: s.hi,
+               total_ms: s.ms };
+    }).sort(function (a, b) { return b.total_ms - a.total_ms; });
+    var row = { name: name, count: e.n, failed: e.f, threw: e.x,
+                avg_ms: e.n ? Math.round(e.ms / e.n) : null,
+                typical_ms: reqPercentile_(e, 0.5), p90_ms: reqPercentile_(e, 0.9), max_ms: e.hi };
+    if (stages.length) {
+      row.stages = stages;
+      row.unattributed_avg_ms = e.n ? Math.max(0, Math.round((e.ms - staged) / e.n)) : null;
+    }
+    return row;
+  }).sort(function (a, b) { return (b.p90_ms || 0) - (a.p90_ms || 0) || (b.max_ms || 0) - (a.max_ms || 0); });
+  out.sources = { sheet_hours: Object.keys(sheetHours).length, cache_hours: Object.keys(cacheHours).length };
+  out.notes = ['typical_ms and p90_ms are the upper edge of a fixed bucket, capped at max_ms; '
+             + 'count, avg_ms and max_ms are exact.',
+               'Times are the engine\'s own execution, not what the browser waited.',
+               'Counts are approximate under concurrency, and a request killed at Google\'s '
+             + 'execution limit is not recorded.',
+               'The cache holds 6 hours; older hours come from the tab, which only the 15-minute '
+             + 'trigger (or flush=yes) fills.'];
+  return out;
 }
 
 /** JSON response, or JSONP when a ?callback= is supplied (gx-client uses JSONP for cross-origin GETs). */
@@ -678,6 +1018,7 @@ function loginScrub_(msg) { return scrubSecrets_(msg); }
    cannot reintroduce by returning an exception from somewhere new. */
 function json_(obj, callback) {
   var body = scrubSecrets_(JSON.stringify(obj));
+  reqReplied_(obj);         // request timing: reads `ok` only, swallows everything
   if (callback) {
     return ContentService.createTextOutput(callback + '(' + body + ')')
       .setMimeType(ContentService.MimeType.JAVASCRIPT);
@@ -6237,7 +6578,7 @@ function getIncentive_(p, preAuth) {
      browser's 45s JSONP timeout (2026-09-15: 42s measured, and Sky hit the timeout), and a number
      per stage is the only way to tell GX Core being slow from Crew being slow without guessing. */
   var T0 = Date.now(), tLast = T0, timings = {};
-  var mark = function (k) { var n = Date.now(); timings[k] = n - tLast; tLast = n; };
+  var mark = function (k) { var n = Date.now(); timings[k] = n - tLast; tLast = n; reqMark_(k); };
   var auth = (preAuth && preAuth.ok === true && preAuth.__system === true) ? preAuth : requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   mark('auth');
@@ -6337,6 +6678,7 @@ function getIncentive_(p, preAuth) {
   /* Shared with both write paths — the fetch (with the practice window split), the stamp and the
      floater fold. See `perfForWrite_`. The screen is not a write path, but it is the thing the
      approver LOOKS at, so it must be shaped by the same code that shapes what gets frozen. */
+  reqMark_('period_pick');  // choosing the default period (kv reads), so it is not billed to perf_fetch
   var live = perfForWrite_(want, timings, { snapshot: true });
   tLast = Date.now();
   if (live.ok === false) return live;
@@ -7001,6 +7343,9 @@ function incentiveApprove_(p) {
   if (!pp) return { ok: false, error: 'pp_start required' };
   /* PER PERIOD since the backup approver (2026-09-15): whether the backup may decide depends on
      THIS period — how long it has waited — so the gate needs `pp` and sits below it. */
+  /* REQUEST TIMING (here and at every reqMark_ below): additive lines that record how long the code
+     above them took. They read the clock and nothing else, and never change a value or the order. */
+  reqVariant_(String(p.confirm || '') === 'yes' ? 'confirm' : 'dry');
   var decider = String(p.confirm || '') === 'yes' ? canDecide_(auth, pp) : null;
   if (decider && !decider.ok) {
     return { ok: false, error: decider.error || (approverIds_().length
@@ -7016,6 +7361,7 @@ function incentiveApprove_(p) {
   if (historyPeriods_(pp).some(function (h) { return h.pp_start === pp; })) {
     return { ok: false, error: pp + ' is already a closed record and cannot be approved again' };
   }
+  reqMark_('precheck');     // sign-in check, approver gate, request-id hint, the history tab read
 
   /* THE SOURCE WINDOW, NOT THE KEY — `pp` is where the rows go; `practiceSource_(pp)` is the
      fortnight whose numbers they are. That split, the stamp and the floater fold are all inside
@@ -7034,6 +7380,7 @@ function incentiveApprove_(p) {
   var totalsAck = String(p.totals_ok || '') === 'yes';
   var _open = incentiveBlockers_(live, false, false, coverageAck, totalsAck);
   if (_open.length) return { ok: false, error: _open[0].message };
+  reqMark_('checks_first'); // the floater fold and the first blocker pass (coverage, store totals)
 
   /* FOLD SPIFF IN BEFORE COMPUTING. This was missing until 2026-08-31: approval computed from
      `inputs` alone, so every person whose SPIFF was MEASURED rather than typed — which is the
@@ -7042,6 +7389,7 @@ function incentiveApprove_(p) {
      history` is what every later view reads and it is immutable. Ordered after the open-period
      refusal so a period that cannot be approved does not pay for a cross-app round trip. */
   applySpiffEarnings_(live, live.payPeriod.start);
+  reqMark_('spiff_read');   // SPIFF's own /exec, read live, plus the fold
 
   /* AFTER the SPIFF fold, exactly as getIncentive_ does it and for the same reason: vendor money is
      attributed on the real dates, and everything from here on is the record being written. Both
@@ -7084,6 +7432,7 @@ function incentiveApprove_(p) {
   var scheme = approvalThresholds_(live);
   if (!scheme.ok) return { ok: false, error: scheme.error };
   live.thresholds = scheme.T;                 // so freezeScheme_ records the one that was USED
+  reqMark_('checks_second');// the second blocker pass and the scheme read from GX Core
 
   var T = scheme.T, inputs = inputsFor_(pp), rows = [];
   var now = new Date().toISOString();
@@ -7093,6 +7442,7 @@ function incentiveApprove_(p) {
      kind of thing a record has to carry, and by the time anyone asks, the closing report it
      disagreed with will have been re-cached. */
   var _tot = storeTotals_(live);
+  reqMark_('sheet_reads');  // the inputs tab, store coverage and Dutchie's closing-report totals
   var noteTxt = 'approved by ' + by + (spiffFailed ? ' — SPIFF unreadable, vendor amounts not included' : '')
     + (_cov.ok ? '' : (_cov.reason === 'registry_unreadable'
         ? ' — store coverage unverified, approved anyway'
@@ -7197,6 +7547,7 @@ function incentiveApprove_(p) {
                message: o.name + ' was paid ' + wfMoney_(o.paid) + ' by hand, above the ' +
                  o.section + ' maximum of ' + wfMoney_(o.ceiling) + '.' };
     }));
+  reqMark_('calc_and_band');// the bonus math, the ceilings and the history band (a history tab read)
   if (String(p.confirm || '') !== 'yes') {
     return { ok: true, dry_run: true, pp_start: pp, rows: rows.length, pp_end: live.payPeriod.end,
              overrides: overrides,
@@ -7262,6 +7613,9 @@ function incentiveApprove_(p) {
     rqRow = payReqRecord_(rq, 'incentive_approve', pp, by, res);
     return res;
   });
+  /* COARSER THAN "the write": the whole locked block — waiting for the lock, the re-check reads, the
+     history rows, the scheme, the workflow row, the goals, the request-id record and the flush. */
+  reqMark_('history_write');
   if (replay) return replay;
   if (!written.ok) return written;
   /* THE PAYOUT PDF, filed from the rows just written — LAST, and unable to fail the approval.
@@ -7270,10 +7624,12 @@ function incentiveApprove_(p) {
      written to history but still reading `pending`. */
   var pdf = filePayoutPdf_(pp, String(live.payPeriod.end || ''), rows, split,
                            Math.round(total * 100) / 100, by, now, overrides, spiffInfo);
+  reqMark_('pdf');
   /* …and a copy of the whole spreadsheet, the moment the record stops moving. Never rotated, never
      able to fail the approval. A rehearsal is not a record, so it gets none. */
   var backup = isPracticePeriod_(pp) ? { ok: true, skipped: 'practice period' }
                                      : backupCrewSheet_('approved ' + pp);
+  reqMark_('backup');
   /* TELL THE PREPARER. Last, after the PDF, so the email can say whether it filed — and like the
      PDF it cannot fail the approval: the record is written whatever the mail does. */
   var notified = notifyApproved_(pp, String(live.payPeriod.end || ''), wfAtApprove, by,
@@ -7285,6 +7641,7 @@ function incentiveApprove_(p) {
                                               wfMoney_(Math.round(total * 100) / 100) + ' to ' +
                                               rows.filter(function (r) { return (Number(r[14]) || 0) > 0; }).length + ' people');
   }
+  reqMark_('email');        // the preparer's notice, and the approver's when a backup decided
   var approved = { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
            payroll_total: Math.round(total * 100) / 100, split: split, spiff: spiffInfo,
            thresholds: schemeInfo, unmatched: live.unmatched || [], pdf: pdf, backup: backup,
@@ -8484,6 +8841,9 @@ function escalationMark_(pp, sentAt, why) {
 function approvalEscalationSweep() {
   var out = escalateApprovals_({});
   Logger.log(JSON.stringify(out));
+  /* Request timing rides this trigger: closed hours go from cache to their tab here, never on a
+     request. reqStatsFlush_ does not throw; the try is so that stays true whatever it becomes. */
+  try { reqStatsFlush_(); } catch (e) {}
   return out;
 }
 
@@ -8665,11 +9025,13 @@ function perfForWrite_(pp, timings, opts) {
   var t = Date.now();
   var live = fetchLivePerf_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp, opts);
   if (timings) { timings.perf_fetch = Date.now() - t; t = Date.now(); }
+  reqMark_('perf_fetch');   // request timing: GX Core's performance slice, on every path
   if (live.ok === false) return live;
   /* opts threaded through, NOT re-derived: the cached-roster decision and the snapshot decision are
      the same decision (screen vs write path) and must not become two. */
   stampEmployeeIds_(live, opts);
   if (timings) { timings.stamp = Date.now() - t; t = Date.now(); }
+  reqMark_('stamp');        // the registry read + the attributes sheet read
   foldFloaters_(live);
   if (timings) timings.fold = Date.now() - t;
   return live;
@@ -9148,6 +9510,9 @@ function incentiveSend_(p) {
      refuses. Everything else runs identically: the body comes from the same builder, because a
      preview that renders different HTML tests nothing. */
   var preview = isTruthyFlag_(p.preview || '');
+  /* REQUEST TIMING, as in incentiveApprove_: additive, clock-only. Set BEFORE the dry run below, so
+     a send is recorded as a send and not as the approve dry run it contains (first call wins). */
+  reqVariant_(preview ? 'preview' : 'send');
   var auth;
   if (preview && deploySecretOk_(p)) auth = { ok: true, user: String(p.as || 'preview'), role: 'admin' };
   else {
@@ -9173,6 +9538,7 @@ function incentiveSend_(p) {
     }
   }
 
+  reqMark_('precheck');     // sign-in check, request-id hint, the history and workflow tab reads
   var pre, _over = { rows: [], net: 0 };
   if (preview) {
     /* incentiveApprove_ refuses an open period, which is correct for approving and useless for
@@ -9218,7 +9584,9 @@ function incentiveSend_(p) {
     var _covAck = String(p.coverage_ok || '') === 'yes';
     var _totalsAck = String(p.totals_ok || '') === 'yes';
     var _paidCount = 0;
+    reqMark_('checks_second');   // the floater fold and the scheme read from GX Core
     applySpiffEarnings_(live, (live.payPeriod || {}).start || pp);
+    reqMark_('spiff_read');
     _spiffFailed = !!(live.spiff && live.spiff.ok === false);
 
     var T = _sch.T, inputs = inputsFor_(pp), n = 0;
@@ -9276,6 +9644,9 @@ function incentiveSend_(p) {
             warnings: bandWarnings_(Math.round((sp.budtender + sp.manager + sp.admin) * 100) / 100,
                                     _paidCount, historyBand_(pp)),
             would_block: incentiveBlockers_(live, _spiffFailed, _ack, _covAck, _totalsAck) };
+    /* COARSER on the preview than on approve: inputs, the math, coverage, store totals, the band
+       and the blockers are one object literal here and are timed as one block. */
+    reqMark_('calc_and_band');
   } else {
     pre = incentiveApprove_({ token: authParamValue_(p), pp_start: pp });   // dry — validates + totals
     if (pre.ok === false) return pre;
@@ -9319,6 +9690,7 @@ function incentiveSend_(p) {
       rqRow = payReqRecord_(rq, 'incentive_send', pp, auth.user, res);
       return res;
     });
+    reqMark_('claim_write');     // the whole locked block: lock wait, re-check reads, the workflow row
     if (replay) return replay;
     if (!claimed.ok) return claimed;
   }
@@ -9366,6 +9738,7 @@ function incentiveSend_(p) {
                                       to: wfApproverEmails_(), html: html,
                                       note: 'nothing sent — add &to=someone@… to actually mail it' };
 
+  reqMark_('email_build');       // rendering the email and resolving who it goes to
   var mailed = [];
   if (to.length) {
     try {
@@ -9395,6 +9768,7 @@ function incentiveSend_(p) {
       return failedSend;
     }
   }
+  reqMark_('email');             // the send itself (a FAILED send returns above and is unattributed)
   /* Same rule for the quieter failure: no approver RESOLVED, so nothing was mailed and nobody is
      waiting. Rolling back is what keeps the button pressable once cfg.crewApprover is readable
      again — a stuck `pending` with no email out is the state nobody can clear from the screen. */
