@@ -115,6 +115,8 @@ function block(kind, name) {
 const WANT = [
   ['var', 'AUTH_PARAM_NAMES_'], ['var', 'SECRET_PARAM_NAMES_'], ['var', 'SECRET_PARAM_RE_'],
   ['fn', 'authParamValue_'], ['fn', 'scrubSecrets_'], ['fn', 'loginScrub_'],
+  /* json_ tells request timing a reply was built. The shipped hook, with no request open. */
+  ['var', '_reqT_'], ['fn', 'reqReplied_'],
   ['fn', 'json_'], ['fn', 'sendMail_'], ['fn', 'requireCrew_'], ['fn', 'bugNotify_']
 ];
 const missing = WANT.filter(([k, n]) => !block(k, n)).map(([, n]) => n);

@@ -123,6 +123,9 @@ console.log('\ngetIncentive_ fetches the real fortnight and stores under the pra
       /* THE SHIPPED perfForWrite_, not a stub. The window/key split moved inside it, and it is the
          thing under test here — a stub would answer whatever this file decided it should. */
       fnSrc(GS, 'perfForWrite_') + fnSrc(GS, 'incentiveToDate_') +
+      /* Request timing's stage marker, the SHIPPED one, with no request open — which is how it runs
+         from a trigger or the editor, and it must be a no-op there. */
+      'var _reqT_ = null;\n' + fnSrc(GS, 'reqMark_') +
       fnSrc(GS, 'getIncentive_') + '; return getIncentive_;';
     const fn = new Function(
       'requireCrew_', 'historyPeriods_', 'incentiveHistory_', 'periodList_', 'canApprove_',

@@ -296,6 +296,61 @@ path only**; every write still computes live. See `tests/core_employees_cache_te
 The route returns them for exactly this reason, and a number copied forward is how the 25-48s
 outlived the fix that removed it.
 
+## Request timing — which route was slow, and where approve/send spent it (2026-10-13)
+
+**Why it exists.** On 2026-10-12, 8:00 AM to 3:00 PM Pacific, the Apps Script Executions log showed
+29 web requests to Crew's engine: typical 7.0s, one in ten at 21.8s or more, the slowest 37.5s at
+11:31 AM. The log names the function (`doGet`) and not the route, so nobody could say what that
+request was. The diagnosis had to infer it: both sampled days (2026-09-15 and 2026-10-12) were the
+Monday or Tuesday after a pay period ended, the last period was frozen at 11:46:55 AM that day, and
+the approve and send routes recompute the whole fortnight live by design. That is an inference from
+code and a timeline, not a measurement, and this section exists so the next one is a measurement.
+
+**Measured the same night** (read-only viewer session, four rounds, about 10:55 PM Pacific): the
+bare `/exec` hop 1.7-2.9s; `roster` at boot 3.8-4.4s warm and 6.7s on a cache miss; `incentive` on
+the running period 5.1 / 8.2 / 8.8 / 15.5s, of which `perf_fetch` was 1.3 / 1.3 / 3.1 / 9.3s; a
+closed period 5.1-10.4s. Approve and send could not be timed, because a read-only session may not
+call them — which is the gap the stage marks close.
+
+**What was built.** `route_` opens a collector, `json_` tells it a reply was built, and a `finally`
+folds the request into an hourly bucket in CacheService. `incentiveApprove_`, `incentiveSend_`,
+`getIncentive_` and `perfForWrite_` carry `reqMark_('<stage>')` lines. The design follows GX Core's
+`gxReqCount_` / `gxReqTiming_` (hourly cache buckets, a sheet only on the slow path, never throw
+into a request) with three differences, each deliberate:
+
+- **One cache round trip, at the end.** Core also counts at the start so an execution that never
+  returns is still counted. Crew serves tens of requests an hour; a request killed at Google's
+  execution limit is missing here and still visible in the Executions log.
+- **The flush is on a trigger, not on whichever request crosses the hour.** Core's flush is paid by
+  a request. Crew's rides `approvalEscalationSweep` (every 15 minutes), because a sheet write inside
+  a pay request is exactly the kind of step this was built to find.
+- **The flush cannot lose an hour to one failure.** Core lost two hours of telemetry on 2026-09-03
+  to a one-shot flush that swallowed its error (its `reqstats_flush_recovery` test). Here every tick
+  writes every closed hour still in cache that the tab does not hold, so a failed hour is retried
+  for six hours, and the last outcome is kept and reported by `request_stats`.
+
+**Percentiles are bucketed** because a histogram is bounded, merges across hours and survives the
+trip through a sheet row; a list of samples does none of those cleanly. Typical and p90 are the
+upper edge of the bucket, capped at the true max.
+
+**What could not be timed without restructuring, and so was timed coarser:**
+
+- *The history write.* `history_write` is the whole locked block — waiting for the lock, the
+  re-check reads, the history rows, the scheme, the workflow row, the goals, the request-id record
+  and the flush. The rows alone are one `setValues` whose cost lands at `SpreadsheetApp.flush()`
+  inside `withPayLock_`; separating them would mean moving code inside the lock.
+- *Sheet reads.* They are interleaved with everything else, so there is no single figure. They show
+  up as `precheck`, `sheet_reads`, `calc_and_band` and inside `history_write`.
+- *The send preview's math.* Inputs, the calc, coverage, store totals, the band and the blockers are
+  one object literal there and are one stage (`calc_and_band`).
+- *A failed email on send.* That branch returns from inside a `catch`; its time is unattributed.
+- *The SPIFF read* includes the fold that follows it, and `perf_fetch` on the approve/send paths
+  includes GX Core's `/exec` hop and its retries, as it should.
+
+**Three test fixtures changed** because the functions they lift now call the hooks:
+`pay_engine_harness.js`, `error_scrub_test.js` and `practice_period_test.js` lift the shipped
+helpers, which do nothing with no request open.
+
 ## Sign-in runs on Crew's OWN engine (2026-09-03)
 
 `crew.js` used to call GX Core's `/exec` directly to sign in. **That worked, and it is not why it

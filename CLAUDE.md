@@ -136,6 +136,35 @@ one person's record, or the **overview** (stat tiles, open-questions queue, Empl
   chat.** (made explicit 2026-10-09; previously implied by "Boot is one Crew-engine call now, not
   three", which cited it as "the standing rule")
 
+## Request timing — which route was slow, and where approve/send spent it
+Every request through `route_` is timed, and `?action=request_stats&secret=…[&hours=24]`
+(deploy-secret) reads it back: per action the count, failed, typical, p90 and max, plus the stage
+breakdown for `incentive_approve.dry` / `.confirm`, `incentive_send.send` / `.preview` and
+`incentive`.
+
+- **It stores route names, stage names, counts and milliseconds. Nothing else, ever** — no user, no
+  token, no parameter, no payload, no name, no figure. A name is stored only when it is a literal
+  from the code: the action only if the `switch` matched it (anything else is `(unknown)`), and
+  stage/variant names from their call sites.
+- **It must never fail or slow a request.** One CacheService get and one put, in `route_`'s
+  `finally`; every helper swallows everything. **No lock, no sheet, no script property and no fetch
+  on the request path** — do not add one, and do not call `reqStatsFlush_` from `reqEnd_`.
+- **`reqMark_` / `reqVariant_` lines are additive and clock-only.** They must not change a value,
+  move a statement or reorder anything in approve/send. A new stage is a new line after the code it
+  times.
+- **The read-back is deploy-secret only, never a session** — a signed-in viewer must not reach it.
+- **The tab `crew_request_stats` is filled by the 15-minute `approvalEscalationSweep` trigger**, not
+  by requests, and trimmed to `REQT_KEEP_ROWS`. The cache alone holds 6 hours; `&flush=yes` flushes
+  by hand. It is reached by the stored workbook id, **never through `crewSheet_()`**.
+- **Typical and p90 are bucket edges** (`REQT_EDGES`), capped at the true max; count, average and
+  max are exact. Counts are approximate under concurrency.
+- **A test that lifts a function containing `reqMark_` must lift the real `reqMark_` too** (with
+  `var _reqT_ = null;`) rather than stub it — outside a request it is a no-op, and that is the
+  behavior to keep.
+
+Pinned by `tests/request_timing_test.js`; `scripts/prove-request-timing-red.js` removes one guard at
+a time on a scratch copy (`CODE_GS`), and a removal that costs zero assertions is a failure.
+
 ## Sign-in runs on Crew's OWN engine
 The `login` route calls `GXCore.login` **in-process**, so sign-in does not queue behind GX Core's
 shared `/exec`.
