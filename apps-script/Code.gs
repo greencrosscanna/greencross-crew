@@ -498,6 +498,7 @@ function route_(e) {
       case 'incentive_relink':  return json_(incentiveRelink_(p), p.callback);
       /* Store goals for a period approved before approval kept them. Writes the goals tab ONLY. */
       case 'incentive_goals_backfill': return json_(incentiveGoalsBackfill_(p), p.callback);
+      case 'incentive_goals_printed': return json_(incentiveGoalsPrinted_(p, body), p.callback);
 
       // The dashboard itself: an imported period, or the live one from Leaderboard's slice.
       case 'incentive':      return json_(getIncentive_(p), p.callback);
@@ -4625,6 +4626,7 @@ function storeEmailHtml_(model, meta) {
     '<h2 style="margin:0 0 4px">Store incentive reports</h2>' +
     '<p style="margin:0;color:#555">Pay period <b>' + esc(meta.dates) + '</b> · ' + esc(meta.status) + '</p>' +
     '<p style="margin:6px 0 0;color:#777;font-size:12px">Copy any store\'s table and paste it to that manager.</p>';
+  if (meta.goals_note) html += '<p style="margin:6px 0 0;color:#777;font-size:12px">' + esc(meta.goals_note) + '</p>';
   (meta.warnings || []).forEach(function (w) {
     html += '<p style="background:#fff3cd;padding:8px 12px;border-radius:6px;margin:10px 0">⚠️ ' + esc(w) + '</p>';
   });
@@ -4679,6 +4681,10 @@ function storeEmailBuild_(p) {
     }
   }
   var meta = { pp_start: per.pp_start, dates: storeEmailDates_(per.pp_start, end), status: status, warnings: warnings };
+  /* Same words as the screen's note (crew.js INC_PRINTED_GOALS_NOTE). */
+  if (d.source === 'imported' && d.goals_source === GOALS_SOURCE_PRINTED) {
+    meta.goals_note = 'Targets are as printed on that period’s report, set on a different basis than today’s goals.';
+  }
   return { ok: true, which: per.which, pp_start: per.pp_start, pp_end: end, source: d.source, meta: meta,
            model: model, html: storeEmailHtml_(model, meta),
            subject: 'Store incentive reports — ' + meta.dates + ' (' + status.split(' —')[0] + ')' };
@@ -11203,9 +11209,12 @@ function freezeScheme_(pp, thresholds, by) {
  * Keyed on store_id — the same slug approval writes into the history row's store_id column — so
  * the join needs no name matching and two managers at one store both show the store's goal.
  *
- * The 27 periods imported from the payout PDFs have no goals and are never backfilled: nobody
- * recorded what the targets were, and GX Core's answer for 2025 has not been checked against a
- * single paid figure. They keep their dash.
+ *                'printed_report'  the Target PRINTED on a payout PDF, for the 27 imported periods
+ *                            (incentive_goals_printed). A different basis from today's goals.
+ *
+ * The 27 imported periods are NEVER backfilled from GX Core (its answer for 2025 has not been checked
+ * against a single paid figure) — incentive_goals_backfill still refuses them. Their targets come
+ * only from the printed reports, below; a row the report did not print keeps its dash.
  */
 var GOALS_TAB = 'crew_incentive_goals';
 var GOALS_HEADERS = ['pp_start', 'goals_json', 'frozen_at', 'frozen_by', 'source'];
@@ -11287,8 +11296,9 @@ function incentiveGoalsBackfill_(p) {
   var rows = readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS).filter(function (r) { return r.pp_start === pp; });
   if (!rows.length) return { ok: false, error: pp + ' is not a closed period — there is no frozen record to attach goals to.' };
   if (String(rows[0].format || '') !== 'approved') {
-    return { ok: false, error: pp + ' was imported from a payout PDF, not approved in Crew. Nobody recorded '
-           + 'its targets and this route does not invent them.' };
+    return { ok: false, error: pp + ' was imported from a payout PDF, not approved in Crew. This route reads '
+           + 'today\'s goals from GX Core and does not write them onto a report period — use '
+           + 'incentive_goals_printed for the targets the report itself printed.' };
   }
   var have = goalsFor_(pp);
   if (have) return { ok: false, error: pp + ' already has goals on file (' + (have.source || 'unknown source') + ', '
@@ -11319,6 +11329,141 @@ function incentiveGoalsBackfill_(p) {
     return freezeGoals_(pp, goals, 'tooling', 'backfill');
   });
   return { ok: true, pp_start: pp, written: wrote ? 1 : 0, goals: goals, rows: preview };
+}
+
+/* ══ Targets PRINTED on the payout reports ═══════════════════════════════════════════════════════
+ *
+ * The 27 periods imported from the payout PDFs printed a Target for every manager and, from
+ * 2025-10-13, for the admin row. The import never kept it (HISTORY_HEADERS has no target column and
+ * must not get one), and an earlier note here claimed nobody had recorded them — wrong about the
+ * source: the reports themselves carry them, and tools/parse_incentive_pdfs.py already reads them.
+ *
+ * This keeps them in the same goals tab as everything else, marked `printed_report` so the screen and
+ * the email can say what they are. THAT BASIS IS NOT TODAY'S: the printed targets were a six-month
+ * sales average, replaced by the August 2026 goals, so a percent of goal before and after the
+ * changeover is not comparable. Said on screen and in the email.
+ *
+ * WHAT MAKES A PRINTED TARGET TRUSTWORTHY ENOUGH TO KEEP — two checks, both against figures already on
+ * file, and a row that fails either is NOT written and is listed with the reason:
+ *   1. the sales the report printed beside the target must equal the sales stored for that person's
+ *      imported row (so the target was read from the row it belongs to, not one over);
+ *   2. where the report prints its own percent to goal (the admin row), dividing the stored sales by
+ *      the target must give that percent.
+ * The store comes from the STORED row's store_id — the import's own label mapping, already applied —
+ * so there is no store table here.
+ *
+ * Writes the goals tab only. Not history, not inputs, not the workflow, not the scheme. A period that
+ * already has goals on file is skipped, so a re-run is a no-op (and cannot overwrite an approval's or
+ * a backfill's goals with these).
+ */
+var GOALS_SOURCE_PRINTED = 'printed_report';
+
+function printedGoalsPlan_(per, histRows) {
+  var rows = [], goals = { admin: null, stores: {} }, kept = {};
+  function num(x) { var n = Number(x); return (x === '' || x == null || !isFinite(n)) ? null : n; }
+  function r2(x) { return Math.round(x * 100) / 100; }
+  function find(section, name, label) {
+    var hits = (histRows || []).filter(function (h) {
+      return String(h.section) === section && String(h.pdf_name || '').trim() === String(name || '').trim() &&
+             (section === 'admin' || String(h.store_label || '').trim() === String(label || '').trim());
+    });
+    return hits.length === 1 ? hits[0] : null;
+  }
+  ((per && per.managers) || []).forEach(function (m) {
+    var t = num(m && m.target), line = { section: 'manager', name: String(m && m.name || ''),
+      store_label: String(m && m.store_label || ''), store_id: '', printed_target: t,
+      printed_sales: num(m && m.sales), stored_sales: null, pct: null, status: 'ok', reason: '' };
+    rows.push(line);
+    if (!(t > 0)) { line.status = 'none'; line.reason = 'no target printed'; return; }
+    var h = find('manager', m.name, m.store_label);
+    if (!h) { line.status = 'refused'; line.reason = 'no single stored row for this name and store'; return; }
+    line.store_id = String(h.store_id || '').trim();
+    line.stored_sales = num(h.sales);
+    if (!line.store_id) { line.status = 'refused'; line.reason = 'the stored row has no store_id'; return; }
+    if (line.stored_sales == null) { line.status = 'refused'; line.reason = 'no sales stored for this row'; return; }
+    if (line.printed_sales == null || Math.abs(line.printed_sales - line.stored_sales) > 0.005) {
+      line.status = 'refused'; line.reason = 'printed sales ' + line.printed_sales + ' do not equal stored sales ' + line.stored_sales;
+      return;
+    }
+    line.pct = Math.round(line.stored_sales / t * 1000) / 10;
+  });
+  /* One goal per store: two managers printing different targets for one store cannot both be the
+     store's goal, so neither is kept. The same target twice is one goal. */
+  var byStore = {};
+  rows.forEach(function (l) {
+    if (l.section !== 'manager' || l.status !== 'ok') return;
+    (byStore[l.store_id] = byStore[l.store_id] || []).push(l);
+  });
+  Object.keys(byStore).forEach(function (id) {
+    var ts = {}; byStore[id].forEach(function (l) { ts[l.printed_target] = true; });
+    if (Object.keys(ts).length > 1) {
+      byStore[id].forEach(function (l) { l.status = 'refused'; l.reason = 'two different printed targets for ' + id; });
+    } else { goals.stores[id] = byStore[id][0].printed_target; }
+  });
+  var a = per && per.admin;
+  if (a) {
+    var at = num(a.target), al = { section: 'admin', name: String(a.name || ''), store_label: '', store_id: '',
+      printed_target: at, printed_sales: num(a.sales), stored_sales: null, pct: null,
+      printed_pct: num(a.pct_to_goal), status: 'ok', reason: '' };
+    rows.push(al);
+    if (!(at > 0)) { al.status = 'none'; al.reason = 'no target printed'; }
+    else {
+      var ah = find('admin', a.name, '');
+      if (!ah) { al.status = 'refused'; al.reason = 'no single stored admin row for this name'; }
+      else {
+        al.stored_sales = num(ah.sales);
+        if (al.stored_sales == null) { al.status = 'refused'; al.reason = 'no sales stored for this row'; }
+        else if (al.printed_sales == null || Math.abs(al.printed_sales - al.stored_sales) > 0.005) {
+          al.status = 'refused'; al.reason = 'printed sales ' + al.printed_sales + ' do not equal stored sales ' + al.stored_sales;
+        } else {
+          al.pct = Math.round(al.stored_sales / at * 1000) / 10;
+          if (al.printed_pct == null) { al.status = 'refused'; al.reason = 'the report prints no percent to check against'; }
+          else if (Math.abs(r2(al.stored_sales / at * 100) - al.printed_pct) > 0.02) {
+            al.status = 'refused'; al.reason = 'computed ' + r2(al.stored_sales / at * 100) + '% but the report prints ' + al.printed_pct + '%';
+          } else { goals.admin = at; }
+        }
+      }
+    }
+  }
+  return { pp_start: String(per && per.pp_start || ''), rows: rows, goals: goals,
+           keep: Object.keys(goals.stores).length + (goals.admin == null ? 0 : 1) };
+}
+
+/**
+ * ?action=incentive_goals_printed[&confirm=yes]   (deploy-secret, POST body { periods: [...] })
+ *
+ * `periods` is the parser's JSON (tools/parse_incentive_pdfs.py --out), whose managers and admin carry
+ * the printed target and sales. Dry run unless confirm=yes. Refuses a period that is not an imported
+ * PDF period, and skips one that already has goals on file.
+ */
+function incentiveGoalsPrinted_(p, body) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var periods = (body && body.periods) || [];
+  if (!periods.length) return { ok: false, error: 'no periods in payload' };
+  var confirm = String(p.confirm || '') === 'yes';
+  var out = [], wrote = 0;
+  periods.forEach(function (per) {
+    var pp = String(per.pp_start || '').trim();
+    var res = { pp_start: pp, status: '', rows: [], keep: 0 };
+    out.push(res);
+    var hist = pp ? readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS).filter(function (r) { return r.pp_start === pp; }) : [];
+    if (!hist.length) { res.status = 'refused: not a closed period'; return; }
+    if (String(hist[0].format || '') === 'approved') { res.status = 'refused: approved in Crew, not imported from a report'; return; }
+    if (goalsFor_(pp)) { res.status = 'skipped: goals already on file'; return; }
+    var plan = printedGoalsPlan_(per, hist);
+    res.rows = plan.rows; res.keep = plan.keep; res.goals = plan.goals;
+    if (!plan.keep) { res.status = 'nothing to keep'; return; }
+    if (!confirm) { res.status = 'would write'; return; }
+    var did = withPayLock_(function () {
+      if (goalsFor_(pp)) return false;                   // a retried copy of this same request
+      return freezeGoals_(pp, plan.goals, 'tooling', GOALS_SOURCE_PRINTED);
+    });
+    res.status = did ? 'written' : 'skipped: goals already on file';
+    if (did) wrote++;
+  });
+  var s = { ok: true, dry_run: !confirm, periods: out, written: wrote };
+  if (!confirm) s.note = 'nothing written — re-send with confirm=yes';
+  return s;
 }
 
 function hrImport_(p, body) {

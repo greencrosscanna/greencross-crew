@@ -2766,8 +2766,13 @@
   }
   /* Where a closed period's Target came from, said on hover only when it was NOT frozen by the
      approval itself — a goal read from GX Core afterwards is today's reading of that fortnight. */
+  /* The older reports' Targets were set on a different basis than today's goals, so a % Goal before
+     and after the August 2026 changeover is not comparable. Same words in the engine's email. */
+  var INC_PRINTED_GOALS_NOTE = 'Targets are as printed on that period’s report, set on a different ' +
+                               'basis than today’s goals. Display only — no pay figure uses them.';
   function incGoalTip() {
     var d = inc.data;
+    if (d && d.source === 'imported' && d.goals_source === 'printed_report') return INC_PRINTED_GOALS_NOTE;
     if (!d || d.source !== 'imported' || d.goals_source !== 'backfill') return '';
     return 'Store goal read from GX Core on ' + String(d.goals_frozen_at || '').slice(0, 10) +
            ', after this period closed. Display only — it changes no pay figure.';
@@ -2976,6 +2981,9 @@
            '<strong>Payroll</strong> is the company’s share — it excludes SPIFF, which vendors ' +
            'fund — and it is the only figure the Capstone export carries. Hover a payroll figure to ' +
            'see what makes it up.</p>');
+    if (isImported && d.goals_source === 'printed_report') {
+      h.push('<p class="crew-inc-note">' + esc(INC_PRINTED_GOALS_NOTE) + '</p>');
+    }
     /* A WHOLE STORE MISSING FROM THE FIGURES, said out loud on the screen the approver reads.
        This is the one failure with no positive evidence anywhere: every person shown has plausible
        numbers, no total looks short because the absent people never contributed to one, and the
