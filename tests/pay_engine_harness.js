@@ -78,14 +78,17 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
                  so a stub would mean these suites assert on mail that the real code never builds —
                  and the scrub it applies is the thing being kept honest. Optional, so CODE_GS can
                  still point at an engine from before the wrapper existed. */
-              'scrubSecrets_', 'sendMail_'];
+              'scrubSecrets_', 'sendMail_',
+              /* The store goals kept beside a closed period (2026-10-12). Optional, so CODE_GS can
+                 point at the engine from before them and the goals test can be seen to fail there. */
+              'goalsOfPerf_', 'goalsFor_', 'freezeGoals_', 'attachGoals_'];
 const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 'WF_TAB', 'WF_HEADERS',
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT',
                        'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP',
-                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_',
+                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_', 'GOALS_TAB', 'GOALS_HEADERS',
                        'SECRET_PARAM_NAMES_', 'SECRET_PARAM_RE_'];
-const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$|^scrubSecrets_$|^sendMail_$/;
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$|^scrubSecrets_$|^sendMail_$|Goals_$|^goals/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
@@ -163,7 +166,9 @@ function engine() {
   const Utilities = { getUuid: () => 'tok-' + (++uuid) + '-x', formatDate: () => '' };
   const MailApp = { sendEmail(o) { E.mails.push({ to: o.to, subject: o.subject, html: o.htmlBody, lockHeld: lock.held }); } };
 
-  const live = pp => ({ ok: true, payPeriod: { start: pp, end: '2026-08-30', current: false },
+  /* E.live, when a test sets it, replaces the default two-budtender period — the goals test needs
+     managers and an admin. Unset is what every older test assumes. */
+  const live = pp => E.live ? E.live(pp) : ({ ok: true, payPeriod: { start: pp, end: '2026-08-30', current: false },
     budtenders: [{ employee_id: 'e1', name: 'One', bonus: 40, discount: 0.01 },
                  { employee_id: 'e2', name: 'Two', bonus: 25, discount: 0.01 }],
     managers: [], admin: null, spiff: { ok: true }, unmatched: [] });
@@ -220,6 +225,9 @@ function engine() {
     'unapprove: incentiveUnapprove_, save: saveIncentiveInput_, inputsFor: inputsFor_, ' +
     'attBatch: typeof saveAttendanceBatch_ === "function" ? saveAttendanceBatch_ : null, ' +
     'wfSet: wfSet_, wfGet: wfGet_, historySheet: historySheet_, ' +
+    'goalsFor: typeof goalsFor_ === "function" ? goalsFor_ : null, ' +
+    'attachGoals: typeof attachGoals_ === "function" ? attachGoals_ : null, ' +
+    'goalsOfPerf: typeof goalsOfPerf_ === "function" ? goalsOfPerf_ : null, ' +
     'withPayLock: typeof withPayLock_ === "function" ? withPayLock_ : null };';
   /* An in-memory script cache that can be EMPTIED, because CacheService may evict at any time and
      the request-id guard must still hold when it has. */

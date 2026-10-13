@@ -481,6 +481,8 @@ function route_(e) {
       case 'incentive_history': return json_(incentiveHistory_(p), p.callback);
       // Attach history to a person after a merge or rename. Writes employee_id ONLY — never a figure.
       case 'incentive_relink':  return json_(incentiveRelink_(p), p.callback);
+      /* Store goals for a period approved before approval kept them. Writes the goals tab ONLY. */
+      case 'incentive_goals_backfill': return json_(incentiveGoalsBackfill_(p), p.callback);
 
       // The dashboard itself: an imported period, or the live one from Leaderboard's slice.
       case 'incentive':      return json_(getIncentive_(p), p.callback);
@@ -4504,10 +4506,14 @@ function incentiveHistory_(p) {
   }
   /* null for the 27 imported periods — nobody recorded their thresholds, and inventing them would
      be a fabrication dressed as history. The screen marks no targets when it is absent. */
-  return { ok: true, pp_start: want, pp_end: rows[0].pp_end, format: rows[0].format,
+  var out = { ok: true, pp_start: want, pp_end: rows[0].pp_end, format: rows[0].format,
            imported_at: rows[0].imported_at, source: 'imported',
            thresholds: schemeFor_(want),
            admin: group('admin')[0] || null, managers: group('manager'), budtenders: group('budtender') };
+  /* The store goals, from their own tab — display only, and a failed read costs the two columns
+     rather than the period. See the header on GOALS_TAB. */
+  try { attachGoals_(out, goalsFor_(want)); } catch (eGoals) {}
+  return out;
 }
 
 /* ══ Incentive, live side ════════════════════════════════════════════════════════════════════════
@@ -6697,6 +6703,10 @@ function incentiveApprove_(p) {
     sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 2).setNumberFormat('@');   // dates stay TEXT
     freezeScheme_(pp, T, by);      // the rules these figures were produced by, kept with them
     wfSet_(pp, { status: 'approved', decided_by: by, decided_at: now, token: '', token_expires: '' });
+    /* The store goals these figures were scored against, kept beside them — AFTER wfSet_ and unable
+       to fail the approval: it is what the closed screen prints under Target, never a pay figure,
+       and incentive_goals_backfill can repair a miss. See the header on GOALS_TAB. */
+    try { freezeGoals_(pp, goalsOfPerf_(live), by, 'approval'); } catch (eGoals) {}
     return { ok: true, pp_start: pp, written: rows.length, approved_by: by, approved_at: now,
              payroll_total: Math.round(total * 100) / 100 };
   };
@@ -7433,7 +7443,7 @@ function incentivePracticeReset_(p) {
   var key = practiceKeyFor_(src);
 
   var ss = crewSheet_().getParent();
-  var names = [HISTORY_TAB, INPUTS_TAB, WF_TAB, VOID_TAB, SCHEME_TAB].map(function (t) {
+  var names = [HISTORY_TAB, INPUTS_TAB, WF_TAB, VOID_TAB, SCHEME_TAB, GOALS_TAB].map(function (t) {
     return incTab_(t, key);
   });
   /* BELT AND BRACES, and cheap: every name must carry the suffix. incTab_ already guarantees it —
@@ -10117,6 +10127,147 @@ function freezeScheme_(pp, thresholds, by) {
     pp, JSON.stringify(thresholds), new Date().toISOString(), String(by || '')
   ]]);
   sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@');
+}
+
+/* ══ The store goals a period was scored against ═════════════════════════════════════════════════
+ *
+ * A manager's sales bonus is tiered on sales / target, and the admin's on the company total against
+ * the company target — and approval froze the sales and the bonus but NOT the target. So every
+ * closed period printed a dash under Target and % Goal for all six managers and the admin, on the
+ * screen and on the printout (Mike, 2026-10-12, asking for a per-store report with exactly those
+ * two columns).
+ *
+ * ITS OWN TAB, NOT A COLUMN ON crew_incentive_history, and that is the safety property rather than
+ * a preference. History rows are read BY POSITION by the approval email, the payout PDF, the void
+ * log (VOID_HEADERS is HISTORY_HEADERS + two) and incentiveUnapprove_; widening them to carry a
+ * display figure would put every one of those a column away from a pay figure. Nothing here reads
+ * or writes that tab, so nothing here can move a dollar. Same shape as the frozen scheme above:
+ * one object per period.
+ *
+ *   goals_json   { admin: <number|null>, stores: { <store_id>: <number> } }
+ *   source       'approval'  frozen by the approval itself, from the rows it scored
+ *                'backfill'  read from GX Core AFTER the period closed (incentive_goals_backfill),
+ *                            for the periods approved before this existed. The screen says so.
+ *
+ * Keyed on store_id — the same slug approval writes into the history row's store_id column — so
+ * the join needs no name matching and two managers at one store both show the store's goal.
+ *
+ * The 27 periods imported from the payout PDFs have no goals and are never backfilled: nobody
+ * recorded what the targets were, and GX Core's answer for 2025 has not been checked against a
+ * single paid figure. They keep their dash.
+ */
+var GOALS_TAB = 'crew_incentive_goals';
+var GOALS_HEADERS = ['pp_start', 'goals_json', 'frozen_at', 'frozen_by', 'source'];
+
+/* The goals carried by a performance payload, in the stored shape. A target that is missing, zero
+   or not a number is LEFT OUT rather than stored as 0 — the screen reads an absent goal as "not
+   recorded" and a 0 as a goal of nothing, and only the first is true. */
+function goalsOfPerf_(live) {
+  var out = { admin: null, stores: {} };
+  ((live && live.managers) || []).forEach(function (m) {
+    var slug = String((m && m.storeSlug) || ''), t = Number(m && m.target);
+    if (slug && isFinite(t) && t > 0) out.stores[slug] = t;
+  });
+  var a = Number(live && live.admin && live.admin.target);
+  if (isFinite(a) && a > 0) out.admin = a;
+  return out;
+}
+
+/* null when nothing is on file for the period — the caller must tell that apart from an empty set. */
+function goalsFor_(pp) {
+  var rows = readTab_(incTab_(GOALS_TAB, pp), GOALS_HEADERS), hit = null;
+  /* The LAST row for the period wins: a re-approval after a reopen appends, it does not edit. */
+  for (var i = 0; i < rows.length; i++) if (rows[i].pp_start === pp) hit = rows[i];
+  if (!hit) return null;
+  var g = null;
+  try { g = JSON.parse(hit.goals_json || 'null'); } catch (e) { g = null; }
+  if (!g || typeof g !== 'object') return null;
+  return { admin: (g.admin == null ? null : Number(g.admin)), stores: g.stores || {},
+           source: String(hit.source || ''), frozen_at: String(hit.frozen_at || '') };
+}
+
+function freezeGoals_(pp, goals, by, source) {
+  if (!pp || !goals) return false;
+  if (goals.admin == null && !Object.keys(goals.stores || {}).length) return false;   // nothing to keep
+  var sh = sheetOf_(incTab_(GOALS_TAB, pp), GOALS_HEADERS);
+  sh.getRange(sh.getLastRow() + 1, 1, 1, GOALS_HEADERS.length).setValues([[
+    pp, JSON.stringify({ admin: goals.admin == null ? null : goals.admin, stores: goals.stores || {} }),
+    new Date().toISOString(), String(by || ''), String(source || '')
+  ]]);
+  sh.getRange(2, 1, Math.max(1, sh.getLastRow() - 1), 1).setNumberFormat('@');   // dates stay TEXT
+  return true;
+}
+
+/* Attach the goals to a closed-period payload. ADDS `target` to the manager and admin rows and
+   NOTHING ELSE — no figure the record holds is read, rounded or replaced here, and the percent is
+   left to the screen to divide. A row whose store has no goal on file keeps no `target` at all. */
+function attachGoals_(payload, goals) {
+  if (!payload || !goals) return payload;
+  (payload.managers || []).forEach(function (m) {
+    var t = Number((goals.stores || {})[String(m.store_id || '')]);
+    if (isFinite(t) && t > 0) m.target = t;
+  });
+  if (payload.admin && goals.admin != null && isFinite(goals.admin) && goals.admin > 0) {
+    payload.admin.target = goals.admin;
+  }
+  payload.goals_source = goals.source || '';
+  payload.goals_frozen_at = goals.frozen_at || '';
+  return payload;
+}
+
+/**
+ * ?action=incentive_goals_backfill&pp_start=YYYY-MM-DD[&confirm=yes]   (deploy-secret)
+ *
+ * For a period Crew approved BEFORE approval started keeping the goals: read them from GX Core's
+ * incentive_perf for that fortnight and store them, marked `backfill`. Dry run unless confirm=yes.
+ *
+ * WRITES ONE ROW TO crew_incentive_goals AND TOUCHES NOTHING ELSE — not history, not inputs, not
+ * the workflow. It refuses a period that is not a frozen record, one that came from a payout PDF,
+ * and one that already has goals on file.
+ *
+ * The dry run prints each store's goal beside the FROZEN sales so the percentages can be read
+ * before anything is kept. GX Core's goals are today's reading of that fortnight, which is why the
+ * row says `backfill` and the screen says so on hover.
+ */
+function incentiveGoalsBackfill_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var pp = String(p.pp_start || '').trim();
+  if (!pp) return { ok: false, error: 'pp_start required' };
+  var rows = readTab_(incTab_(HISTORY_TAB, pp), HISTORY_HEADERS).filter(function (r) { return r.pp_start === pp; });
+  if (!rows.length) return { ok: false, error: pp + ' is not a closed period — there is no frozen record to attach goals to.' };
+  if (String(rows[0].format || '') !== 'approved') {
+    return { ok: false, error: pp + ' was imported from a payout PDF, not approved in Crew. Nobody recorded '
+           + 'its targets and this route does not invent them.' };
+  }
+  var have = goalsFor_(pp);
+  if (have) return { ok: false, error: pp + ' already has goals on file (' + (have.source || 'unknown source') + ', '
+                   + have.frozen_at + ') — nothing written.', goals: have };
+
+  var live = fetchLivePerfFromCore_(isPracticePeriod_(pp) ? practiceSource_(pp) : pp);
+  if (!live || live.ok === false) return { ok: false, error: (live && live.error) || 'GX Core did not answer' };
+  var goals = goalsOfPerf_(live);
+  var preview = rows.filter(function (r) { return r.section === 'manager' || r.section === 'admin'; })
+    .map(function (r) {
+      var t = r.section === 'admin' ? goals.admin : goals.stores[String(r.store_id || '')];
+      var s = r.sales === '' ? null : Number(r.sales);
+      return { section: r.section, store_id: r.store_id || '', frozen_sales: s,
+               target: t == null ? null : t,
+               pct_of_goal: (t > 0 && s != null) ? Math.round(s / t * 1000) / 10 : null };
+    });
+  var missing = preview.filter(function (x) { return x.target == null; });
+  if (String(p.confirm || '') !== 'yes') {
+    return { ok: true, dry_run: true, pp_start: pp, goals: goals, rows: preview, missing: missing.length,
+             note: 'nothing written — re-send with confirm=yes' };
+  }
+  if (missing.length) {
+    return { ok: false, error: 'GX Core has no goal for ' + missing.length + ' of the ' + preview.length
+           + ' rows in ' + pp + ' — nothing written. A partly filled period reads as complete.', rows: preview };
+  }
+  var wrote = withPayLock_(function () {
+    if (goalsFor_(pp)) return false;                 // a retried copy of this same request
+    return freezeGoals_(pp, goals, 'tooling', 'backfill');
+  });
+  return { ok: true, pp_start: pp, written: wrote ? 1 : 0, goals: goals, rows: preview };
 }
 
 function hrImport_(p, body) {
