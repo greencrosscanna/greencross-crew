@@ -513,9 +513,15 @@ screen reads them back (`attachGoals_`) and divides for display (`incFrozenPct`)
   approval email, the payout PDF, the void log and the reopen.
 - **The percent on a closed period is a label, never an input** — no tier is looked up from it and
   `mgrCalc` still returns the frozen bonus and payroll.
-- **A missing goal is a dash, not a zero.** The 27 PDF-imported periods have none and are never
-  backfilled; `incentive_goals_backfill` (deploy-secret, dry run by default) refuses them, and
-  writes only the goals tab, marked `backfill`, which the screen says on hover.
+- **A missing goal is a dash, not a zero.** `incentive_goals_backfill` (deploy-secret, dry run by
+  default) refuses the 27 PDF-imported periods and writes only the goals tab, marked `backfill`,
+  which the screen says on hover. **Those 27 get their Target from the report itself:**
+  `incentive_goals_printed` keeps what each PDF PRINTED (manager rows, and the admin row from
+  2025-10-13), source `printed_report`, only where the printed sales equal the stored sales and the
+  admin's printed percent agrees. A failing row is not written; a row with no printed target keeps its
+  dash. **That basis is not today's goals** (a six-month sales average, replaced August 2026), so the
+  screen and the store email say so and % Goal is not comparable across the changeover. Never from
+  GX Core. Pinned by `tests/printed_period_goals_test.js`; `scripts/printed-goals.js` is the dry run.
 - The freeze runs after `wfSet_` and cannot fail an approval.
 
 Pinned by `tests/closed_period_goals_test.js`.

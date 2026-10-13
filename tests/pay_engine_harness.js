@@ -82,6 +82,7 @@ const REAL = ['incentiveApprove_', 'incentiveSend_', 'incentiveReturn_', 'incent
               /* The store goals kept beside a closed period (2026-10-12). Optional, so CODE_GS can
                  point at the engine from before them and the goals test can be seen to fail there. */
               'goalsOfPerf_', 'goalsFor_', 'freezeGoals_', 'attachGoals_',
+              'printedGoalsPlan_', 'incentiveGoalsPrinted_',
               /* Request timing (2026-10-13). The pay routes call reqVariant_/reqMark_, so the REAL
                  ones are lifted: with no request open they are no-ops, which is what every older
                  test exercises, and tests/request_timing_test.js opens one through E.req. Optional,
@@ -92,11 +93,11 @@ const VARS = ['HISTORY_TAB', 'HISTORY_HEADERS', 'INPUTS_TAB', 'INPUTS_HEADERS', 
               'VOID_TAB', 'SCHEME_TAB', 'SCHEME_HEADERS'];
 const OPTIONAL_VARS = ['PAYREQ_TAB', 'PAYREQ_HEADERS', 'PAYREQ_KEEP_MS', 'PAYREQ_PRUNE_AT',
                        'BACKUP_AFTER_MS', 'APPROVER_AWAY_PROP', 'ESCALATED_PROP',
-                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_', 'GOALS_TAB', 'GOALS_HEADERS',
+                       'ATT_BATCH_MAX', 'AUTH_PARAM_NAMES_', 'GOALS_TAB', 'GOALS_HEADERS', 'GOALS_SOURCE_PRINTED',
                        'SECRET_PARAM_NAMES_', 'SECRET_PARAM_RE_',
                        '_reqT_', 'REQT_PREFIX', 'REQT_TTL_S', 'REQT_MAX_NAMES', 'REQT_MAX_STAGES',
                        'REQT_MAX_BODY', 'REQT_EDGES', 'REQT_NAME_RE', 'REQT_STAGE_RE'];
-const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$|^scrubSecrets_$|^sendMail_$|Goals_$|^goals|^req[A-Z]/;
+const OPTIONAL = /Locked_|upsert|^payReq|Approved_$|ackup|pprover[A-Z]|scalat|^canDecide_$|^approvalCover_$|AttBatch_$|AttendanceBatch_$|^authParamValue_$|^scrubSecrets_$|^sendMail_$|Goals_$|^goals|^printedGoalsPlan_$|^incentiveGoalsPrinted_$|^req[A-Z]/;
 function varSrcOpt(name) { try { return varSrc(name); } catch (e) { return ''; } }
 
 const HIST = 'crew_incentive_history', WF = 'crew_incentive_workflow',
@@ -197,7 +198,7 @@ function engine() {
       deleteProperty: function (k) { delete E.props[k]; } }; } };
     function approverIds_() { return ['sky']; }
     function noApproverError_() { return 'no approver'; }
-    function deploySecretOk_() { return false; }
+    function deploySecretOk_() { return E.secretOk === true; }
     function perfForWrite_(pp) { return LIVE(pp); }
     function incentiveBlockers_() { return []; }
     function applySpiffEarnings_() {}
@@ -236,6 +237,8 @@ function engine() {
     'goalsFor: typeof goalsFor_ === "function" ? goalsFor_ : null, ' +
     'attachGoals: typeof attachGoals_ === "function" ? attachGoals_ : null, ' +
     'goalsOfPerf: typeof goalsOfPerf_ === "function" ? goalsOfPerf_ : null, ' +
+    'printedPlan: typeof printedGoalsPlan_ === "function" ? printedGoalsPlan_ : null, ' +
+    'printedGoals: typeof incentiveGoalsPrinted_ === "function" ? incentiveGoalsPrinted_ : null, ' +
     /* Open and close a web request around a handler call, as route_ does. */
     'req: typeof reqBegin_ === "function" ? { begin: reqBegin_, replied: reqReplied_, end: reqEnd_ } : null, ' +
     'withPayLock: typeof withPayLock_ === "function" ? withPayLock_ : null };';
