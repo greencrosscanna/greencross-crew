@@ -94,11 +94,16 @@ console.log('\nEngine: the screen reads GX Core\'s snapshot, within Sky\'s fresh
     }
   }
   const LIMIT = (GS.match(/var SNAPSHOT_OPEN_MAX_MIN = (\d+);/) || [])[1];
-  ok('the running-period limit is 20 minutes (15-minute warmer plus a rebuild)', LIMIT === '20');
+  ok('the running-period limit is 20 minutes (Sky\'s number; the warmer is every 5)', LIMIT === '20');
   let answer, asked = 0;
   const core = { incentivePerf: () => { asked++; return answer; } };
-  const P = new Function('GXCore', 'SNAPSHOT_OPEN_MAX_MIN', fnSrc(GS, 'perfFromSnapshot_') + '; return perfFromSnapshot_;')
-    (core, 20);
+  /* perfFromSnapshot_ with the helpers it calls, lifted as shipped. Nothing here arms the screen's
+     five-minute copy, so this is the freshness rule alone — the copy has its own suite,
+     tests/perf_screen_cache_test.js. reqMark_ is the real one: outside a request it does nothing. */
+  const LIFTED = 'var _reqT_ = null; var _perfScreenArmed_ = false;\n' +
+    ['reqMark_', 'perfScreenArmedTake_', 'perfSnapshotNum_', 'perfSnapshotRefusal_', 'perfFromSnapshot_'].map((n) => fnSrc(GS, n)).join('\n');
+  const lift = (gx) => new Function('GXCore', 'SNAPSHOT_OPEN_MAX_MIN', LIFTED + '; return perfFromSnapshot_;')(gx, 20);
+  const P = lift(core);
   const snap = (o) => Object.assign({ snapshot: true, ok: true, pp_start: '2026-09-14', payPeriod: { start: '2026-09-14', current: true },
                                       age_minutes: 5, stale: true }, o);
   answer = { ok: true, pp_start: '2026-09-14', payPeriod: { start: '2026-09-14', current: true },
@@ -122,10 +127,9 @@ console.log('\nEngine: the screen reads GX Core\'s snapshot, within Sky\'s fresh
   ok('missing snapshot → falls back and says why', P('').use === false && /missing/.test(P('').why));
   answer = snap({ pp_start: '', payPeriod: {} });
   ok('a snapshot naming no period → falls back', P('').use === false);
-  const noDoor = new Function('GXCore', 'SNAPSHOT_OPEN_MAX_MIN', fnSrc(GS, 'perfFromSnapshot_') + '; return perfFromSnapshot_;')({}, 20);
+  const noDoor = lift({});
   ok('a GXCore pin without the door → falls back', noDoor('').use === false);
-  const thrower = new Function('GXCore', 'SNAPSHOT_OPEN_MAX_MIN', fnSrc(GS, 'perfFromSnapshot_') + '; return perfFromSnapshot_;')
-    ({ incentivePerf: () => { throw new Error('boom'); } }, 20);
+  const thrower = lift({ incentivePerf: () => { throw new Error('boom'); } });
   ok('a door that throws → falls back', thrower('').use === false && /boom/.test(thrower('').why));
 
   /* Sliced to the next function rather than brace-counted: the body compares a character to '{'. */
