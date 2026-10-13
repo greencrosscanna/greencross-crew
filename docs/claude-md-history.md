@@ -1024,6 +1024,72 @@ seconds it is. Skipping the format on read-only requests looks safe (every write
 fresh) but it guards the leading-zero employee numbers and is shared by every route, so it is a
 proposal for Sky, not part of this change.
 
+#### The screen keeps GX Core's performance answer for five minutes (2026-10-13, v1.418)
+
+**Why.** With the stages above trimmed, `perf_fetch` was the largest one left: 921, 1041, 1138,
+1303, 1342, 1534, 1914, 1983, 2014, 2031 and 2502 ms on eleven live loads, every one of them
+`perf_source=snapshot`. Nothing was being recomputed. The time is the door itself:
+`GXCore.incentivePerf` runs inside Crew, opens GX Core's workbook (the first open in the request)
+and reads the whole `incentive_snapshots` tab. GX Core's warmer refreshes that snapshot every 5
+minutes, 06:00 to 20:00 Pacific, and fills GX Core's script cache with it, but a script cache is per
+script and a library call from Crew never sees it. When Crew's own cache used to answer this call it
+took 40 to 155 ms. Sky approved a short Crew-side cache.
+
+**What it is.** `perfFromSnapshot_` keeps the door's accepted answer and the moment it arrived, for
+`PERF_SCREEN_CACHE_S` (300 seconds), under `crew:perf_screen:v1:<pp_start>`. On a read back the age
+is the door's `age_minutes` plus the minutes it has sat in Crew, rounded up, and
+`perfSnapshotRefusal_` is run again on that figure: 20 minutes for the running period, GX Core's
+own `max_age_minutes` for an ended one. Worst case on screen is the warmer's 7 plus these 5. The
+lifetime is checked in the code as well as handed to CacheService, so an entry the cache returns
+late is still refused.
+
+**Keyed on the pay period and nothing else**, because `{ pp_start }` is the door's only argument.
+There is no store filter (the one-store view is the browser filtering the same payload), no engine
+setting (`cfg.incentiveEngine` is no longer read), and the practice flag does not change the
+question: a practice period asks for the real fortnight it mirrors and shares that entry. Who is
+signed in does not change the answer either.
+
+**The invalidation question, and what was and was not verified.** The claim to check was "no Crew
+write changes these figures". From Crew's side: inputs, attendance, SPIFF, payroll overrides, the
+scheme, the floater flag and the registry stamp are all applied AFTER the fetch, fresh on every
+load, and none of them is in the kept answer, so they need no bust and get none (pinned: an
+attendance tick shows on the next load, from the copy). What Crew writes INTO GX Core is the
+employee registry and the two comp settings (`incentiveThresholds`, `discountRules`). Whether GX
+Core's computation reads either could not be checked from this change, which was confined to the
+Crew worktree and did not open the hub. So both void the copy (`bustPerfScreenCache_`, from
+`gxSetKvViaWeb_` and riding `bustRosterCache_`), which makes the first load after such a write
+behave exactly as it did before the cache existed. That is conservative, not proven necessary; if
+core-admin confirms GX Core never reads them for this answer, the busts are harmless.
+
+**What the cache cannot make fresher.** A bust only makes Crew ask the door again; the door still
+answers with GX Core's snapshot, which is as old as the warmer left it. That was true before this
+change and is unchanged by it.
+
+**Why the store email does not share it.** `getIncentive_` is called by the router and by
+`storeEmailBuild_`. Only the router's call arms the copy. The email is a copy of people's pay that
+leaves the app, nobody is waiting on it, and it is scheduled for 05:00, an hour before the warmer
+starts, so there was nothing to gain and a small amount of age to add.
+
+**Two comments were wrong and one of them could not be rewritten where it stands.** The note inside
+`perfFromSnapshot_` said the door computes in-process; at GXCore v351 it returns the snapshot, and
+the note now says so. The block above `SNAPSHOT_OPEN_MAX_MIN` says the warmer runs every 15 minutes
+(it is 5). That block sits in the stretch of text that `tests/incentive_read_speedup_test.js` and
+`tests/period_list_speed_test.js` compare against the commits they were built on (their `fnText`
+of `inputsFor_` runs to the next function), so rewording it there fails both. The correction is
+written directly below it, dated, and the old wording is left. Rewriting it in place means re-basing
+those two suites, which is a decision for whoever owns them.
+
+**Three existing suites changed.** `incentive_load_timeout_test.js` lifts `perfFromSnapshot_` and
+now lifts the helpers it calls. `attr_text_pin_test.js` compares the request-timing read-back with
+an older engine and now takes the two new stage names out of it, by name. This file's own suite
+is `tests/perf_screen_cache_test.js`.
+
+**NOT MEASURED.** Every figure in the suite is a simulated clock. No live timing exists for this
+change. Two things to read off the first live loads: `perf_cache` should say `miss` then `hit`
+(a `skip` on every load means the real answer is over `PERF_SCREEN_MAX_BODY`, which was not
+measured either, and the cache is then doing nothing); and `perf_door` against `perf_cache_hit` in
+`./gxcrewstats.sh`.
+
 ### Which period the tab opens on, and in what order (2026-09-14)
 
 **With no period asked for, the tab opens on the LAST completed fortnight until it is approved, then

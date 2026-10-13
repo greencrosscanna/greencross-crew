@@ -346,7 +346,18 @@ console.log('\nNothing but writeAttrs_ writes to the attributes tab');
 console.log('\nBefore this change and after it (the engine at ' + BASELINE + ' against the shipped one)');
 if (!SRC_OLD) skip('read routes, write routes and a whole close, before against after', 'git cannot show ' + BASELINE + ' here (a shallow clone)');
 else {
-  const strip = (d) => { if (d && typeof d === 'object') delete d.timings; return JSON.stringify(d); };
+  /* Two stage NAMES were added after the baseline (2026-10-13, the screen's five-minute copy of GX
+     Core's performance answer): `perf_door` and `perf_cache_hit`. They appear in the request-timing
+     read-back and nowhere else, so they are taken out of it before the comparison — by name, so a
+     third new stage, or a changed figure under any existing one, still fails here. */
+  const ADDED_STAGES = ['perf_door', 'perf_cache_hit'];
+  const strip = (d) => {
+    if (d && typeof d === 'object') {
+      delete d.timings;
+      if (Array.isArray(d.actions)) d.actions.forEach((a) => { if (a && Array.isArray(a.stages)) a.stages = a.stages.filter((s) => ADDED_STAGES.indexOf(s.stage) < 0); });
+    }
+    return JSON.stringify(d);
+  };
   [['a normal workbook', {}], ['with an approved practice period', { practiceApproved: true }]].forEach(([book, opts]) => {
     const O = mk(SRC_OLD, opts), N = mk(SRC_NEW, opts);
     const bad = [];

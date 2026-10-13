@@ -158,6 +158,11 @@ breakdown for `incentive_approve.dry` / `.confirm`, `incentive_send.send` / `.pr
   by hand. It is reached by the stored workbook id, **never through `crewSheet_()`**.
 - **Typical and p90 are bucket edges** (`REQT_EDGES`), capped at the true max; count, average and
   max are exact. Counts are approximate under concurrency.
+- **On the `incentive` route, `perf_fetch` is split.** A load answered from the screen's five-minute
+  copy records `perf_cache_hit`; a load that asked GX Core's door records `perf_door`; `perf_fetch`
+  is what is left (the mapping, and keeping the answer). On approve, send and a door that refused,
+  `perf_fetch` is still the whole HTTP read. The payload's own `timings.perf_fetch` is always the
+  whole fetch.
 - **A test that lifts a function containing `reqMark_` must lift the real `reqMark_` too** (with
   `var _reqT_ = null;`) rather than stub it — outside a request it is a no-op, and that is the
   behavior to keep.
@@ -469,9 +474,31 @@ the tray, never from a doc.**
   (`CORE_EMP_CACHE_KEY`). Every Crew write busts it; a rename made in the Command Center can take
   ten minutes to reach `full_name` on a closed period (and so the Capstone export). No figure comes
   from that list.
-- **Only the screen gets either.** The deploy-secret `incentive_history` route, approve, send, reopen
-  and the PDF backfill read their own rows and the registry live. Do not pass `{ snapshot: true }`,
-  the hand-over or `coreEmployeesCached_()` into a write path.
+- **The live screen keeps GX Core's performance answer for five minutes** (`PERF_SCREEN_CACHE_S`,
+  in Crew's own script cache, one entry per pay period asked for). It keeps the door's answer
+  as it arrived and nothing Crew derives from it; the mapping, stamp, fold, scheme, SPIFF, inputs
+  and overrides run fresh on every load.
+  - **The age is never reset.** A kept answer is as old as the door said plus the time it has sat
+    in Crew, rounded up, and `perfSnapshotRefusal_` — the one freshness rule — is run again on that
+    figure. `perf_age_minutes` on the payload is that same figure. Do not write a second rule.
+  - **Never kept:** a refusal, an error, a stale answer, one with no age, one for another period, an
+    in-process answer, an ended period with no `max_age_minutes`, anything over
+    `PERF_SCREEN_MAX_BODY`, and a load that names no period.
+  - **Two locks, and a write path must hold neither.** `perfFromSnapshot_` is reached only with
+    `{ snapshot: true }`, and the copy is read only while `_perfScreenArmed_` is exactly `true` —
+    which `getIncentive_` sets for the router's call alone, and which is cleared by the one look at
+    it, after the fetch, and at the top of every request. Do not arm it anywhere else.
+  - **The store email is not armed.** It leaves the app; it asks GX Core every time.
+  - **A Crew write that could change what GX Core computes voids every entry**
+    (`bustPerfScreenCache_`): the two comp settings in `gxSetKvViaWeb_`, and every roster write
+    through `bustRosterCache_`. A new writer of either kind must go through one of those two.
+  - `perf_cache` on the payload says `hit` / `miss` / `skip`; `perf_source` is still `snapshot`.
+
+  Pinned by `tests/perf_screen_cache_test.js`; `scripts/prove-perf-screen-cache-red.js` is its
+  mutation proof (`CODE_GS`).
+- **Only the screen gets any of these.** The deploy-secret `incentive_history` route, approve, send,
+  reopen and the PDF backfill read their own rows and the registry live. Do not pass
+  `{ snapshot: true }`, the hand-over or `coreEmployeesCached_()` into a write path.
 - **The period list, the to-date totals and "is this period approved" are NOT cached, on purpose.**
   They are re-derived from the history tab on every load. A cache there could show an approved
   period as open after a write whose bust failed, and after any hand edit of the sheet — and busting

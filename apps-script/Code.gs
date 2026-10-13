@@ -286,6 +286,7 @@ function doPost(e) { return route_(e); }
 
 function route_(e) {
   _crewSheetMemo_ = null;   // per request — see crewSheet_
+  _perfScreenArmed_ = false; // per request — only getIncentive_ arms it; see perfFromSnapshot_
   var p = (e && e.parameter) || {};
   var action = p.action || 'health';
   reqBegin_(action);        // request timing — see the REQUEST TIMING block below route_
@@ -3362,6 +3363,9 @@ function bustRosterCache_() {
   try { c = CacheService.getScriptCache(); } catch (e) { return; }
   try { c.remove(ROSTER_CACHE_KEY); } catch (e) {}
   try { c.remove(CORE_EMP_CACHE_KEY); } catch (e) {}
+  /* The incentive screen's five-minute copy of GX Core's performance answer goes too: a roster
+     write can change what GX Core computes next, and the next load should ask rather than assume. */
+  try { bustPerfScreenCache_(); } catch (e) {}
 }
 
 /* Returns null on ANY failure — a miss, a parse error, a cache outage — so the caller falls through
@@ -5588,28 +5592,191 @@ function inputsFor_(ppStart) {
    screen quietly showing an hour-old fortnight is not. */
 var SNAPSHOT_OPEN_MAX_MIN = 20;
 
+function perfScreenArmedTake_() {
+  /* May THIS call use the screen's short copy of the door's answer? Read once and cleared, so the
+     answer is good for exactly one call to perfFromSnapshot_. See the block below.
+     (No comment sits ABOVE this function, deliberately: two suites compare the text from
+     `function inputsFor_` up to this line against an earlier commit — see the note below.) */
+  var armed = (_perfScreenArmed_ === true);
+  _perfScreenArmed_ = false;
+  return armed;
+}
+
+/* CORRECTED 2026-10-13 — THE WARMER IS EVERY 5 MINUTES, NOT 15. The block above
+   SNAPSHOT_OPEN_MAX_MIN says "every 15 minutes" twice. GX Core's warmer now rebuilds the running and
+   just-ended periods every 5 minutes, 06:00-20:00 Pacific, and calls a snapshot fresh for 7. The
+   20-minute limit is unchanged and is still Sky's number; it simply carries more slack than that
+   block says. THE OLD WORDING IS LEFT IN PLACE ON PURPOSE: tests/incentive_read_speedup_test.js and
+   tests/period_list_speed_test.js compare the text from `function inputsFor_` to the next function
+   against the commit each was built on, and that stretch runs through that block. Rewording it
+   there means re-basing both suites, which is a decision for whoever owns them, not a side effect
+   of this change.
+
+   ─── THE SCREEN KEEPS THE DOOR'S ANSWER FOR FIVE MINUTES (2026-10-13) ───────────────────────────
+
+   WHY. `perf_fetch` was the largest stage left on the incentive screen: 0.9-2.5s on every one of
+   eleven live loads, all `perf_source=snapshot`. Nothing was being recomputed. The time is the door
+   itself — GX Core's library, running inside Crew, opening GX Core's workbook and reading its whole
+   `incentive_snapshots` tab. GX Core's warmer fills GX Core's script cache, and a script cache is
+   per script, so a library call made from Crew never sees it. Crew has to keep its own.
+
+   WHAT IS KEPT. The door's answer exactly as it arrived, and the moment it arrived. Nothing Crew
+   derives from it: the mapping, the registry stamp, the floater fold, the scheme, SPIFF, the inputs
+   and the payroll overrides all still run fresh on every load, on top of it.
+
+   THE AGE IS NEVER RESET. A copy read back is as old as the door said it was PLUS the time it has
+   sat here, rounded UP to the minute, and the freshness rule is run again on that figure — the same
+   rule, in perfSnapshotRefusal_, that judged it when it arrived. A copy that no longer passes is
+   not used and the door is asked. The screen's "sales as of N min ago" shows that same figure.
+
+   WHAT IS NEVER KEPT. A refusal, an error, a door that threw, a stale answer, an answer with no
+   age, an answer for a different period than was asked for, an in-process answer (it carries no
+   age, so its age could not be re-judged), an ended period with no `max_age_minutes` (same reason),
+   and anything too large for one cache entry. Each of those asks the door next time, as before.
+
+   KEYED ON THE PERIOD ASKED FOR, and nothing else, because that is the door's only argument. A
+   practice period asks for the real fortnight it mirrors, so the two share one entry — they are
+   the same question. A load that names no period is not kept at all: "the current period" is a
+   different question after midnight on the last day.
+
+   WHO MAY READ IT: getIncentive_ called by the ROUTER, and nobody else. Two locks, not one.
+     1. perfFromSnapshot_ is reached only when a caller passes { snapshot: true }, and only the
+        screen does. Approve and send call perfForWrite_ bare and never get here.
+     2. `_perfScreenArmed_` — set true by getIncentive_ on the line before its fetch, read once and
+        cleared here, cleared again after the fetch and at the top of every request. A future edit
+        that hands { snapshot: true } to a write path would reach the door, and STILL not this copy.
+   The scheduled store email calls getIncentive_ too, and is deliberately NOT armed: it is a copy of
+   people's pay that leaves the app, nobody is waiting on it, and it asks the door every time.
+
+   THE BUST. bustPerfScreenCache_ runs on every Crew write that could change what GX Core computes
+   next: the two comp settings (gxSetKvViaWeb_) and every roster/identity write (it rides
+   bustRosterCache_). After one of those the next load asks the door, exactly as it did before this
+   existed. It is a timestamp, not a delete, because the entries are per period and a bust cannot
+   know which exist. A bust the cache refuses is lost; the copy then lives out its five minutes.
+
+   A CACHE THAT IS DOWN COSTS SPEED AND NOTHING ELSE. Every read and write here is swallowed.
+   Pinned by tests/perf_screen_cache_test.js; scripts/prove-perf-screen-cache-red.js is its proof. */
+var PERF_SCREEN_CACHE_S = 300;                 // 5 min. Worst case on screen: the door's 7 + these 5.
+var PERF_SCREEN_CACHE_PREFIX = 'crew:perf_screen:v1:';
+var PERF_SCREEN_BUST_KEY = 'crew:perf_screen:busted_at';
+var PERF_SCREEN_BUST_S = 21600;                // far longer than any entry it has to outlive
+var PERF_SCREEN_MAX_BODY = 95000;              // CacheService refuses a value past 100KB
+var _perfScreenArmed_ = false;
+
+/* '' for anything that is not a plain calendar day — which means "do not keep this one". */
+function perfScreenKey_(ppStart) {
+  var pp = String(ppStart || '');
+  return /^\d{4}-\d{2}-\d{2}$/.test(pp) ? PERF_SCREEN_CACHE_PREFIX + pp : '';
+}
+
+/* A number, or null. '' and null are "not stated", never zero. */
+function perfSnapshotNum_(v) {
+  if (v === null || v === undefined || v === '') return null;
+  var n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+/* THE FRESHNESS RULE, ONCE. '' means usable; anything else is why not. `kept` is true when the
+   answer has been sitting in Crew's cache: an ended period is then also held to GX Core's own
+   `max_age_minutes`, because `stale` was GX Core's judgment at the moment it answered and the
+   answer has aged since. */
+function perfSnapshotRefusal_(d, age, kept) {
+  var open = !!(d.payPeriod && d.payPeriod.current);
+  if (open) return age > SNAPSHOT_OPEN_MAX_MIN ? 'running period, limit ' + SNAPSHOT_OPEN_MAX_MIN : '';
+  if (d.stale !== false) return 'ended period, GX Core calls it stale';
+  if (kept) {
+    var max = perfSnapshotNum_(d.max_age_minutes);
+    if (max === null || age > max) return 'ended period, past GX Core\'s own limit';
+  }
+  return '';
+}
+
+/* The kept answer and its age NOW, or null. Null on a miss, on anything unreadable, and on a copy
+   that is expired, busted, for another period, or no longer fresh enough — the caller asks the door. */
+function perfScreenCacheGet_(key, ppStart) {
+  try {
+    var got = CacheService.getScriptCache().getAll([PERF_SCREEN_BUST_KEY, key]) || {};
+    var raw = got[key];
+    if (!raw) return null;
+    var env = JSON.parse(raw);
+    var at = perfSnapshotNum_(env && env.at), now = Date.now();
+    /* The lifetime is checked HERE as well as given to the cache: a cache that hands back an entry
+       past its time must not make it usable. */
+    if (at === null || now < at || now - at > PERF_SCREEN_CACHE_S * 1000) return null;
+    var busted = perfSnapshotNum_(got[PERF_SCREEN_BUST_KEY]);
+    if (busted !== null && busted >= at) return null;
+    var d = env.d;
+    if (!d || d.ok === false || d.snapshot !== true) return null;
+    if (String((d.payPeriod && d.payPeriod.start) || d.pp_start || '') !== String(ppStart || '')) return null;
+    var age0 = perfSnapshotNum_(d.age_minutes);
+    if (age0 === null || age0 < 0) return null;
+    var age = age0 + Math.ceil((now - at) / 60000);
+    if (perfSnapshotRefusal_(d, age, true)) return null;
+    return { d: d, age: age };
+  } catch (e) { return null; }
+}
+
+/* Keep an answer the freshness rule has just accepted. True when it was stored. */
+function perfScreenCachePut_(key, ppStart, d, age) {
+  try {
+    if (!d || d.ok === false || d.snapshot !== true) return false;
+    if (age === null || !isFinite(age) || perfSnapshotRefusal_(d, age, true)) return false;
+    if (String((d.payPeriod && d.payPeriod.start) || d.pp_start || '') !== String(ppStart || '')) return false;
+    var body = JSON.stringify({ at: Date.now(), d: d });
+    // Past the cache's ceiling, skip rather than truncate: half an answer is worse than none.
+    if (body.length >= PERF_SCREEN_MAX_BODY) return false;
+    CacheService.getScriptCache().put(key, body, PERF_SCREEN_CACHE_S);
+    return true;
+  } catch (e) { return false; }
+}
+
+/* Every kept answer older than this moment is void. Never throws. */
+function bustPerfScreenCache_() {
+  try { CacheService.getScriptCache().put(PERF_SCREEN_BUST_KEY, String(Date.now()), PERF_SCREEN_BUST_S); }
+  catch (e) { /* a cache that is down has nothing to serve either */ }
+}
+
 function perfFromSnapshot_(ppStart) {
+  /* The screen's five-minute copy, when this call is the screen's — see the block above.
+     TWO MARKS FOR THE REQUEST-TIMING TOOL, and between them they say which happened: a load
+     answered from the copy records `perf_cache_hit`, a load that asked the door records
+     `perf_door` (the look in the cache that missed is inside it). `perf_fetch`, marked by
+     perfForWrite_ straight after, is then only what is left — the mapping, and keeping the answer —
+     on these loads, and still the whole HTTP read on approve, send and a door that refused. */
+  var armed = perfScreenArmedTake_();
+  var key = armed ? perfScreenKey_(ppStart) : '';
+  if (key) {
+    var hit = perfScreenCacheGet_(key, ppStart);
+    if (hit) {
+      reqMark_('perf_cache_hit');
+      hit.d.crew_perf_cache = 'hit';
+      return { use: true, d: hit.d, age: hit.age, kept: true };
+    }
+  }
   if (typeof GXCore.incentivePerf !== 'function') return { use: false, why: 'this GXCore pin has no incentivePerf' };
   var d = null;
   try { d = GXCore.incentivePerf({ pp_start: ppStart || '' }); }
   catch (e) { return { use: false, why: 'incentivePerf threw: ' + String((e && e.message) || e) }; }
+  reqMark_('perf_door');
   if (!d || d.ok === false) return { use: false, why: String((d && (d.snapshot || d.error)) || 'no answer') };
   if (!d.pp_start && !(d.payPeriod && d.payPeriod.start)) return { use: false, why: 'snapshot names no period' };
-  /* COMPUTED IN-PROCESS, NOT READ FROM THE SNAPSHOT — measured 2026-09-15 on pin v325. The door
-     decides by looking for Dutchie keys in script properties, and a library reads its OWN script
-     properties, so from Crew it runs gxIncentivePerfCached_: the same computation and the same cache
-     policy the HTTP route answers from (open period 3 min, ended 30 min, closed 6 h), minus the HTTP
-     hop and GX Core's queue. That answer carries `cache_policy` and none of the snapshot's age fields,
-     and it is exactly as fresh as the route — so it is used as-is. The age rules below apply only if
-     the door ever does hand back its snapshot (`snapshot: true`). */
+  /* AN ANSWER COMPUTED IN-PROCESS, WHICH THE LIVE DOOR NO LONGER GIVES. Measured 2026-09-15 on pin
+     v325: the door ran gxIncentivePerfCached_ inside Crew — the same computation and cache policy
+     the HTTP route answers from — and returned `cache_policy` with none of the snapshot's age
+     fields. Such an answer is exactly as fresh as the route, so it is used as-is.
+     CORRECTED 2026-10-13: at GXCore v351 the door hands back its SNAPSHOT (`snapshot: true`, with
+     `age_minutes`), on eleven live loads out of eleven, so the age rules below are what runs. This
+     branch stays for a pin that still answers the old way, and such an answer is never kept. */
   if (d.snapshot !== true && d.cache_policy) return { use: true, d: d, age: null, inProcess: true };
   var age = (d.age_minutes === null || d.age_minutes === undefined || d.age_minutes === '')
           ? null : Number(d.age_minutes);
   if (age === null || !isFinite(age)) return { use: false, why: 'snapshot age unknown' };
-  var open = !!(d.payPeriod && d.payPeriod.current);
-  if (open ? age > SNAPSHOT_OPEN_MAX_MIN : d.stale !== false) {
-    return { use: false, why: 'snapshot is ' + age + ' min old (' + (open ? 'running period, limit ' +
-             SNAPSHOT_OPEN_MAX_MIN : 'ended period, GX Core calls it stale') + ')' };
+  var refusal = perfSnapshotRefusal_(d, age, false);
+  if (refusal) return { use: false, why: 'snapshot is ' + age + ' min old (' + refusal + ')' };
+  if (armed) {
+    /* Kept BEFORE the marker goes on, so what is stored is the door's answer and nothing of Crew's. */
+    var kept = key ? perfScreenCachePut_(key, ppStart, d, age) : false;
+    d.crew_perf_cache = kept ? 'miss' : 'skip';
   }
   return { use: true, d: d, age: age };
 }
@@ -5667,7 +5834,7 @@ function mapCorePerf_(d, extra) {
       target:    (r.target == null ? null : Number(r.target))
     };
   };
-  return {
+  var out = {
     ok: true,
     source: 'gxcore',
     /* payPeriod.current gates editability across the whole incentive view — omitting it reads as
@@ -5696,6 +5863,13 @@ function mapCorePerf_(d, extra) {
     perf_computed_at: (extra && extra.perf_computed_at) || '',
     snapshot_skip: (extra && extra.snapshot_skip) || ''
   };
+  /* Whether the SCREEN's five-minute copy answered: 'hit' (it did), 'miss' (the door was asked and
+     its answer kept), 'skip' (the door was asked and its answer could not be kept). Present only
+     on a load that was allowed to use the copy — absent on every write path, on the store email and
+     on any answer that is not the snapshot. `perf_source` is unchanged by it: a hit is still the
+     snapshot, only older, and `perf_age_minutes` says by how much. */
+  if (d && typeof d.crew_perf_cache === 'string' && out.perf_source === 'snapshot') out.perf_cache = d.crew_perf_cache;
+  return out;
 }
 
 /* A failed read RETURNS AN ERROR rather than an empty period: a dashboard that renders "no bonuses"
@@ -6802,7 +6976,15 @@ function getIncentive_(p, preAuth) {
      floater fold. See `perfForWrite_`. The screen is not a write path, but it is the thing the
      approver LOOKS at, so it must be shaped by the same code that shapes what gets frozen. */
   reqMark_('practice_check');  // the practice tab read above, when the period is a practice one
-  var live = perfForWrite_(want, timings, { snapshot: true });
+  /* ARMED FOR THE ROUTER'S CALL ONLY, for this one fetch: the screen may be answered from its own
+     five-minute copy of GX Core's snapshot (see perfFromSnapshot_). The scheduled store email comes
+     through here with `preAuth` and is not armed, so it asks GX Core every time. Cleared straight
+     after — however the fetch ends — and at the top of every request, so nothing later in this
+     instance inherits it. */
+  _perfScreenArmed_ = (preAuth === undefined);
+  try {
+    var live = perfForWrite_(want, timings, { snapshot: true });
+  } finally { _perfScreenArmed_ = false; }
   tLast = Date.now();
   if (live.ok === false) return live;
   live.source = 'live';
@@ -11110,6 +11292,9 @@ function gxSetKvViaWeb_(key, json, notes) {
     var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
     var d = JSON.parse(res.getContentText());
     if (!d || d.ok === false) return { ok: false, error: (d && d.error) || 'GX Core refused the write' };
+    /* A comp setting just changed in GX Core. The incentive screen must not go on answering from a
+       copy of the performance figures it took before that. */
+    bustPerfScreenCache_();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: 'could not write to GX Core: ' + String((e && e.message) || e) };
