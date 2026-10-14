@@ -21,20 +21,14 @@ paid, or nearly paid, the wrong amount without erroring.
 - **GX Core owns canonical employee IDENTITY** — `nameKey`, name, store, role, active, hireDate.
 - **GX Crew owns the rich attributes** and **writes the identity slice + celebrations + perks up**.
 - **Reads from GX Core:** identity and the sales cache (`GXCore.getSalesDaily`).
-- **SPIFF payouts do NOT reach Crew. There is no `spiff_payouts` tab** — not in `GX_TABS`, nothing
-  writes or reads it. Do not build on the assumption that it exists.
+- **SPIFF earnings reach Crew** from SPIFF's published progress (see "What the APPROVAL path
+  computes"). **There is no `spiff_payouts` tab** — it is not in `GX_TABS`; do not build on one.
 
-## Extract-first sequencing (important)
-The bonus math needs **per-employee, per-transaction** data with discretionary-discount
-classification, which is **not** in the GX Core daily cache (per-store daily only). **First** promote
-the per-employee metrics and the discretionary-discount definition to a shared home, **then** cut
-Crew over. Do **not** move the UI before the math has a shared home. Coordinate with `core-admin`.
-
-**Payroll safety:** completed pay periods are **frozen once** ("these numbers paid people") — carry
-that caching discipline over exactly, and never cut over live payroll numbers without a
-**penny-match** against Crew's own current incentive output for a full pay period. *(Corrected
-2026-10-09, Sky's call: this named Leaderboard's incentive output, whose engine was retired 2026-09-14.
-Crew's is the reference now.)*
+## Payroll safety
+The per-employee, per-transaction slice (with discretionary-discount classification) comes from GX
+Core's `incentive_perf`; the bonus math is Crew's. Completed pay periods are **frozen once** ("these
+numbers paid people"), and live payroll numbers are never cut over without a **penny-match** against
+Crew's own current incentive output for a full pay period.
 
 ## The roster is a two-pane workspace
 Roster is Crew's only tab (the Review and EoM tabs are gone). Left: people grouped by store. Right:
@@ -71,8 +65,9 @@ one person's record, or the **overview** (stat tiles, open-questions queue, Empl
 ## Layout
 - **Frontend:** `index.html` + `crew.js?v=N`. That **`?v=N`** is the single source of truth
   `deploy.sh` reads for the version — bump it on every ship.
-- **Engine deploy:** `clasp push` then `clasp update-deployment <id>` — **redeploy the existing id**,
-  never `create-deployment`, which mints a new `/exec` URL and orphans `cfg.crewEngineUrl`.
+- **Engine deploy:** commit, then `./gxengine.sh --deploy` — it redeploys the existing id and records
+  the sha to `core_pins`. Never `create-deployment`, which mints a new `/exec` URL and orphans
+  `cfg.crewEngineUrl`.
   `clasp create` clones the remote manifest over the local one and wipes the GXCore binding; restore
   `appsscript.json` from git before the first push. (`clasp open` is `open-script` in v3.) First
   setup only: `clasp create --type webapp --rootDir apps-script`.
@@ -105,9 +100,9 @@ one person's record, or the **overview** (stat tiles, open-questions queue, Empl
     in the Command Center, so a report must not carry an employee's name out. `searchActive` says a
     filter was on.
 - **Local loop:** `python3 serve.py` → <http://localhost:8755>. The backend is **live**; `gx-dev.js`
-  blocks writes until armed; `gx-preflight.sh` is a **pre-push hook** and runs
-  `tests/identity_test.js`. Those cover identity and date invariants only — **nothing there covers
-  pay**; for pay the check that counts is the **penny-match**.
+  blocks writes until armed; `gx-preflight.sh` is a **pre-push hook** and runs every
+  `tests/*_test.js` against HEAD. Green tests are not a payroll sign-off — before cutting over live
+  payroll numbers the check that counts is the **penny-match**.
 - **Shared dev files** (`deploy.sh`, `.claude/` hook + settings) come from gx-theme via
   `./gx-sync.sh`, filled from `.gx_app`. This CLAUDE.md is intentionally **not** synced.
 
@@ -132,9 +127,6 @@ one person's record, or the **overview** (stat tiles, open-questions queue, Empl
 - **Read the `timings` on the payload before believing any speed figure**, in any doc. There is no
   slow calculation left; the variance is the `/exec` hop and `perf_fetch`.
 - Tests: `roster_boot_fold_test.js`, `roster_boot_client_fold_test.js`, `attr_index_cache_test.js`.
-- **Nothing ships to GX Core, gx-theme, or Crew's live engine without Sky's word first in this
-  chat.** (made explicit 2026-10-09; previously implied by "Boot is one Crew-engine call now, not
-  three", which cited it as "the standing rule")
 
 ## Request timing — which route was slow, and where approve/send spent it
 Every request through `route_` is timed, and `?action=request_stats&secret=…[&hours=24]`
@@ -251,14 +243,14 @@ merges**. A **small fix** that is correct the moment it lands ships direct to `m
 bump `?v=N` on the `crew.js` tag, `./gxengine.sh --deploy` for the engine, then `./deploy.sh`, then
 `dev_ship` the job if there is one.
 
+- **Nothing ships to GX Core, gx-theme, or Crew's live engine without Sky's word first in this chat.**
 - **Do not restore the old "pre-launch, push to `main`" rule for `crew` on the argument that a
   change is small or that Mike will not notice.** The approval, the Capstone export and the frozen
   history are what a person is paid on.
 - **If a rule here depends on a condition, write what is true NOW and re-date it** — never leave an
   "until X" that no test, route or script will evaluate. Same for versions and values: do not write
   a number in this file that nothing can contradict.
-- Still per-app: `spiff` is pre-launch and works direct on `main`. GX Core library cuts stay
-  PR-gated regardless.
+- GX Core library cuts stay PR-gated regardless.
 
 ## System of record — Crew, not the spreadsheet (decided 2026-08-18)
 `GreenCross_Staff.xlsx` built the initial roster and is now **history**. **GX Crew, backed by the GX
@@ -287,8 +279,7 @@ needs an explicit `mode=overwrite`. A superseded source must not be able to cont
   - Pinned by `tests/attr_text_pin_test.js`, whose fake sheet coerces the way Sheets does;
     `scripts/prove-attr-text-pin-red.js` is its mutation proof (`CODE_GS`).
 - **Never reach the HR workbook through a path that can create one:** `crewSheet_()` *creates an
-  empty spreadsheet* when it cannot open the real one (see Backups). (made explicit 2026-10-09;
-  previously implied by "Backups — the whole spreadsheet, to a shared drive")
+  empty spreadsheet* when it cannot open the real one (see Backups).
 
 ## METRC is the source of truth — production API access approved 2026-10-12
 The `metrc_*` connector reads Metrc's **v2** API. **Whether it is connected is a question for
@@ -690,8 +681,7 @@ routes through `tests/pay_engine_harness.js`.
 - **`''` and `0` are different claims.** The oldest report has no payroll column; those rows export
   empty, because 0.00 tells payroll to pay nothing.
 - **Never give a helper a name that already exists in `Code.gs`** — a second definition silently
-  wins (`ppDaysBetween_` exists because `daysBetween_` was taken). (made explicit 2026-10-09;
-  previously implied by "What independently checks these figures")
+  wins (`ppDaysBetween_` exists because `daysBetween_` was taken).
 
 ### The settings tray — thresholds AND discount rules in GX Core
 - **Thresholds live in GX Core kv as `incentiveThresholds`. Deliberately not a `cfg.` key** — that
@@ -723,9 +713,6 @@ routes through `tests/pay_engine_harness.js`.
   format is rejected with "hard-reload".
 - A Core write does not bust Leaderboard's caches; a rule change takes up to its ~6-minute TTL to
   show on the board. No `discountrules_save` call to Leaderboard survives here; keep it so.
-- **Written 2026-08-30 and not re-verified since performance moved to GX Core — check before
-  relying on it either way:** "Until Leaderboard reads `discountRules` from Core, saving a rule in
-  Crew changes no number anywhere."
 - **Tier lists are ORDER-SENSITIVE** — matched high-to-low, first hit wins — so `thresholdProblems_`
   refuses an ascending list by name. Ascending pays everyone the lowest tier they clear.
 - **Manager store-discount cut-offs are derived** (`goal × ⅔` and `goal`) and render as text, not
@@ -837,8 +824,7 @@ Pinned by `tests/floater_fold_test.js`.
   the email.
 - **A void is not a sale** (`isVoid` on a `Retail` row); GX Core's `gxIsRetail_` tests both.
   Leaderboard's frozen snapshots of earlier periods carry the voids permanently — do not "reconcile"
-  to them. (made explicit 2026-10-09; previously implied by "What independently checks these
-  figures")
+  to them.
 
 Pinned by `tests/independent_checks_test.js`.
 
