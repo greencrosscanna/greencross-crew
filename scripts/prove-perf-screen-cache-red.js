@@ -99,7 +99,7 @@ const MUTATIONS = [
   ['a no-period load shares the dated entry\'s key space (keyed on the day alone)',
    (s) => inFn(s, 'perfScreenKey_', "tail = today ? 'current@' + today : '';", "tail = today;")],
   ['the day is taken from toISOString — UTC, tomorrow from 5 PM Pacific',
-   (s) => inFn(s, 'perfScreenToday_', "String(Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'))", "new Date().toISOString().slice(0, 10)")],
+   (s) => inFn(s, 'perfScreenToday_', "String(Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'))", "new Date().toISOString().slice(0, 10)")],  // @utc-ok deliberate mutation: plants the UTC bug to prove the test catches it
   ['a date that cannot be had fails the screen',
    (s) => inFn(s, 'perfScreenToday_', "  } catch (e) { return ''; }", "  } catch (e) { throw e; }")],
   ['a day in any shape is used as it comes',
