@@ -5632,12 +5632,28 @@ function perfScreenArmedTake_() {
    WHAT IS NEVER KEPT. A refusal, an error, a door that threw, a stale answer, an answer with no
    age, an answer for a different period than was asked for, an in-process answer (it carries no
    age, so its age could not be re-judged), an ended period with no `max_age_minutes` (same reason),
-   and anything too large for one cache entry. Each of those asks the door next time, as before.
+   an answer to "the current period" that is not a running period containing today, and anything
+   too large for one cache entry. Each of those asks the door next time, as before.
 
    KEYED ON THE PERIOD ASKED FOR, and nothing else, because that is the door's only argument. A
    practice period asks for the real fortnight it mirrors, so the two share one entry — they are
-   the same question. A load that names no period is not kept at all: "the current period" is a
-   different question after midnight on the last day.
+   the same question.
+
+   A LOAD THAT NAMES NO PERIOD IS KEPT TOO, UNDER TODAY'S DATE (v1.420). That is the first open
+   of the tab once the last fortnight is approved — the commonest load there is — and the first cut
+   of this left it out, because "the current period" is a different question after midnight on the
+   last day. Measured live on v1.419: `perf_cache=skip` on every such load, 987-1928ms each. So:
+     - THE DOOR IS STILL ASKED WITH NO PERIOD, exactly as before. Crew does not work out which
+       fortnight is running and ask for it by date; that would be a different question, answered
+       from Crew's calendar instead of GX Core's.
+     - THE KEY IS `current@` + TODAY'S LOS ANGELES DAY (perfScreenToday_), so after midnight it is
+       a different key and the door is asked. A dated load and a no-period load never share an
+       entry, even when they turn out to name the same fortnight.
+     - ONLY A RUNNING PERIOD THAT CONTAINS TODAY is kept or served there (perfScreenPeriodOk_):
+       `payPeriod.current` exactly true, a plain-date start not after today, and an end — when the
+       answer states one — not before today. Anything else asks the door, every time.
+
+   A DAY IS LOS ANGELES, NEVER toISOString() — that returns tomorrow from 17:00 Pacific.
 
    WHO MAY READ IT: getIncentive_ called by the ROUTER, and nobody else. Two locks, not one.
      1. perfFromSnapshot_ is reached only when a caller passes { snapshot: true }, and only the
@@ -5663,10 +5679,37 @@ var PERF_SCREEN_BUST_S = 21600;                // far longer than any entry it h
 var PERF_SCREEN_MAX_BODY = 95000;              // CacheService refuses a value past 100KB
 var _perfScreenArmed_ = false;
 
-/* '' for anything that is not a plain calendar day — which means "do not keep this one". */
+/* Today as a Los Angeles calendar day, as text — or '' if it cannot be had, which keeps nothing. */
+function perfScreenToday_() {
+  try {
+    var day = String(Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'));
+    return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : '';
+  } catch (e) { return ''; }
+}
+
+/* The cache key for one question to the door. A plain calendar day is that pay period's entry; no
+   period at all is "the current one, as asked today"; anything else is '' — "do not keep this". */
 function perfScreenKey_(ppStart) {
-  var pp = String(ppStart || '');
-  return /^\d{4}-\d{2}-\d{2}$/.test(pp) ? PERF_SCREEN_CACHE_PREFIX + pp : '';
+  var pp = String(ppStart == null ? '' : ppStart), tail = '';
+  if (pp === '') { var today = perfScreenToday_(); tail = today ? 'current@' + today : ''; }
+  else if (/^\d{4}-\d{2}-\d{2}$/.test(pp)) tail = pp;
+  return tail ? PERF_SCREEN_CACHE_PREFIX + tail : '';
+}
+
+/* IS THIS ANSWER THE ANSWER TO THAT QUESTION? Asked on the way in and on the way out.
+   A named period: the answer must be for that period. No period named: the answer must be for a
+   period that is running and contains `today` — see "A LOAD THAT NAMES NO PERIOD" above. */
+function perfScreenPeriodOk_(d, ppStart, today) {
+  var pp = String(ppStart == null ? '' : ppStart);
+  if (pp !== '') return String((d.payPeriod && d.payPeriod.start) || d.pp_start || '') === pp;
+  var per = d.payPeriod, day = /^\d{4}-\d{2}-\d{2}$/;
+  if (!per || per.current !== true) return false;
+  var start = String(per.start == null ? '' : per.start);
+  if (!day.test(start) || !day.test(String(today || '')) || start > today) return false;
+  if (per.end !== null && per.end !== undefined && per.end !== '') {
+    if (!day.test(String(per.end)) || today > String(per.end)) return false;
+  }
+  return true;
 }
 
 /* A number, or null. '' and null are "not stated", never zero. */
@@ -5707,7 +5750,7 @@ function perfScreenCacheGet_(key, ppStart) {
     if (busted !== null && busted >= at) return null;
     var d = env.d;
     if (!d || d.ok === false || d.snapshot !== true) return null;
-    if (String((d.payPeriod && d.payPeriod.start) || d.pp_start || '') !== String(ppStart || '')) return null;
+    if (!perfScreenPeriodOk_(d, ppStart, perfScreenToday_())) return null;
     var age0 = perfSnapshotNum_(d.age_minutes);
     if (age0 === null || age0 < 0) return null;
     var age = age0 + Math.ceil((now - at) / 60000);
@@ -5721,7 +5764,7 @@ function perfScreenCachePut_(key, ppStart, d, age) {
   try {
     if (!d || d.ok === false || d.snapshot !== true) return false;
     if (age === null || !isFinite(age) || perfSnapshotRefusal_(d, age, true)) return false;
-    if (String((d.payPeriod && d.payPeriod.start) || d.pp_start || '') !== String(ppStart || '')) return false;
+    if (!perfScreenPeriodOk_(d, ppStart, perfScreenToday_())) return false;
     var body = JSON.stringify({ at: Date.now(), d: d });
     // Past the cache's ceiling, skip rather than truncate: half an answer is worse than none.
     if (body.length >= PERF_SCREEN_MAX_BODY) return false;

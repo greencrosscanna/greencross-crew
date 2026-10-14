@@ -1090,6 +1090,40 @@ change. Two things to read off the first live loads: `perf_cache` should say `mi
 measured either, and the cache is then doing nothing); and `perf_door` against `perf_cache_hit` in
 `./gxcrewstats.sh`.
 
+*Corrected after it shipped (as v1.419): the heading above says v1.418, which another change took.*
+
+##### The first open of the tab got nothing from it (v1.420)
+
+**Measured live on v1.419, read-only viewer.** With a pay period named: load 1 `perf_cache=miss`
+(`perf_fetch` 1083 ms), loads 2 and 3 `hit` (21 and 87 ms). With NO period named: `skip` every
+time, 987 to 1928 ms. That second case is the first open of the tab. `crew.js` sends `pp_start`
+only when it has one, and once the previous fortnight is approved `defaultIncentivePeriod_` returns
+`''`, so the door is asked for "the current period" and the first cut kept nothing for that
+question. The reason given at the time was sound (after midnight on a period's last day the same
+question has a different answer); leaving the commonest load out was the wrong way to honor it.
+
+**What changed.** A no-period load is kept under `current@<today's Los Angeles day>`. After
+midnight the key is different, so the door is asked. On the way in and on the way out the answer
+must be a running period that contains today (`perfScreenPeriodOk_`): `payPeriod.current` exactly
+`true`, a plain-date start not after today, and an end not before today when the answer states
+one. Everything else is as it was: the two locks, the bust, the five minutes checked in code, the
+age that is never reset, the freshness rule run again, the size ceiling.
+
+**What was deliberately not done.** Crew does not work out which fortnight is running and ask the
+door for it by date. That would make one entry serve both loads, and it would also replace GX
+Core's answer to "which period is current" with Crew's calendar's. So a no-period load and a dated
+load of the same fortnight keep separate entries, each asks the door once, and within five minutes
+the two can show snapshots a few minutes apart, each labeled with its own true age.
+
+**The start check goes one step past what was asked for.** The request was current, a plain-date
+start, and today not after the end. `start <= today` was added because it costs nothing and an
+answer naming a period that has not begun is not an answer to "the current one".
+
+**NOT MEASURED.** Simulated clock only. The live check is one open of the tab with nothing
+selected, twice inside five minutes: `miss` then `hit`. A `skip` there now means the door's answer
+did not look like a running period containing today (its `payPeriod.current`, `start` or `end` is
+not the shape assumed), which could not be checked from Crew's side.
+
 ### Which period the tab opens on, and in what order (2026-09-14)
 
 **With no period asked for, the tab opens on the LAST completed fortnight until it is approved, then
