@@ -378,4 +378,57 @@ function closeScenario(W) {
            writeReads: JSON.stringify(counts.filter((c) => c.action !== 'incentive')) };
 }
 
-module.exports = { NOW, SECRET, T, EMPLOYEES, STORES, PERIODS, CLOSED, PRACTICE, corePerf, historyRows, world, closeScenario };
+/* ── Source text, comments removed ─────────────────────────────────────────────────────────────
+ *
+ * For the suites that prove "the write paths' source is unchanged" against the commit they were
+ * built on. They compare a function's TEXT, from `function name(` to the next function, and that
+ * stretch also holds the comments between functions — so a comment-only correction (the warmer
+ * wording above SNAPSHOT_OPEN_MAX_MIN) failed them while changing nothing that runs. (The two suites are
+ * incentive_read_speedup_test.js and period_list_speed_test.js.)
+ *
+ * This keeps every character of CODE and drops only comments: string and template literals and
+ * regex literals are copied whole (a `//` in a URL or a `/*` in a pattern is not a comment), block
+ * and line comments are removed, trailing spaces are trimmed and empty lines dropped. Spaces INSIDE
+ * a line are kept exactly, so a changed string, operator or value still shows. Each suite asserts
+ * that it does this on samples, and its mutation proof shows a real code change in the same
+ * stretch still fails the comparison. */
+function codeOnly(text) {
+  const n = text.length;
+  let out = '', i = 0, prev = '';
+  const regexCanStart = () => prev === '' || /[(,=:[!&|?{};+\-*%<>~^]/.test(prev) || /(^|[^\w$])(return|typeof|case|in|of)$/.test(out.replace(/\s+$/, ''));
+  while (i < n) {
+    const c = text[i], d = text[i + 1];
+    if (c === '/' && d === '*') { const j = text.indexOf('*/', i + 2); i = j < 0 ? n : j + 2; out += ' '; continue; }
+    if (c === '/' && d === '/') { while (i < n && text[i] !== '\n') i++; continue; }
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < n && text[j] !== c) { if (text[j] === '\\') j++; j++; }
+      out += text.slice(i, j + 1); i = j + 1; prev = c; continue;
+    }
+    if (c === '/' && regexCanStart()) {
+      let j = i + 1, inClass = false;
+      while (j < n && text[j] !== '\n') {
+        const ch = text[j];
+        if (ch === '\\') { j += 2; continue; }
+        if (ch === '[') inClass = true; else if (ch === ']') inClass = false; else if (ch === '/' && !inClass) break;
+        j++;
+      }
+      j++;
+      while (j < n && /[a-z]/i.test(text[j])) j++;
+      out += text.slice(i, j); i = j; prev = '/'; continue;
+    }
+    out += c; if (!/\s/.test(c)) prev = c; i++;
+  }
+  return out.split('\n').map((l) => l.replace(/\s+$/, '')).filter((l) => l !== '').join('\n');
+}
+
+/* One function's code, as the write-path comparisons read it: from `function name(` to the next
+   top-level function, comments removed. null when the function is not there. */
+function fnCode(src, name) {
+  const i = src.indexOf('\nfunction ' + name + '(');
+  if (i < 0) return null;
+  const j = src.indexOf('\nfunction ', i + 10);
+  return codeOnly(src.slice(i, j < 0 ? src.length : j));
+}
+
+module.exports = { NOW, SECRET, T, EMPLOYEES, STORES, PERIODS, CLOSED, PRACTICE, corePerf, historyRows, world, closeScenario, codeOnly, fnCode };

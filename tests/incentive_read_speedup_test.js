@@ -52,7 +52,7 @@ process.on('uncaughtException', (e) => {
   process.exit(1);
 });
 
-const { NOW, SECRET, T, EMPLOYEES, STORES, PERIODS, CLOSED, PRACTICE, corePerf, historyRows, world } = require('./whole_engine_harness.js');
+const { NOW, SECRET, T, EMPLOYEES, STORES, PERIODS, CLOSED, PRACTICE, corePerf, historyRows, world, fnCode } = require('./whole_engine_harness.js');
 
 const HIST = 'crew_incentive_history';
 /* Every screen the change could reach, as { label, params, opts }. */
@@ -218,9 +218,34 @@ if (!SRC_OLD) {
   ok('every sheet they wrote is byte-identical', o.book === n.book);
   ok('every email they sent is byte-identical (' + JSON.parse(n.mails).length + ' sent)', o.mails === n.mails && JSON.parse(n.mails).length >= 1);
   ok('they made the same live reads of GX Core and SPIFF, in the same order', o.fetches === n.fetches && /incentive_perf/.test(n.fetches) && /action=progress/.test(n.fetches));
-  const moved = WRITE_FNS.filter((f) => fnText(SRC_OLD, f) !== fnText(SRC_NEW, f));
-  ok('the source of all ' + WRITE_FNS.length + ' write-path functions is unchanged' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
-     moved.length === 0 && WRITE_FNS.every((f) => fnText(SRC_NEW, f)));
+  /* CODE, NOT COMMENTS (re-based without moving the baseline). This compares each function's code,
+     from `function name(` to the next function, with comments removed (fnCode in the harness). It
+     used to compare the raw text, so a comment-only correction in the stretch after inputsFor_ —
+     the warmer wording above SNAPSHOT_OPEN_MAX_MIN — failed it while changing nothing that runs.
+     The BASELINE commit is deliberately NOT moved forward: comparing against a later commit would
+     only say "nothing changed since then", and lose what this line exists to say — that the read
+     speedup left the write paths' code alone, measured from before it. The samples below prove the
+     comparison still sees code (strings, regexes, values) and ignores only comments;
+     scripts/prove-incentive-read-red.js shows a real code change in that stretch still fails it. */
+  const moved = WRITE_FNS.filter((f) => fnCode(SRC_OLD, f) !== fnCode(SRC_NEW, f));
+  ok('the CODE of all ' + WRITE_FNS.length + ' write-path functions is unchanged (comments aside)' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
+     moved.length === 0 && WRITE_FNS.every((f) => fnCode(SRC_NEW, f)));
+}
+{
+  /* The comparator itself: blind to comments, never to code. */
+  const f = (body) => fnCode('\nfunction f_(s) {' + body + '}\nfunction g_() {}', 'f_');
+  ok('the code comparison ignores a comment edit, and sees a code edit, a string edit and a regex edit',
+     f(' /* every 15 minutes */ var x = 20;\n') === f(' /* every 5\n   minutes */ var x = 20; // note\n') &&
+     f(' var x = 20; ') !== f(' var x = 21; ') &&
+     f(" var u = 'https://a/*b'; ") !== f(" var u = 'https://a/*c'; ") &&
+     f(' return /["\']\\/\\*/.test(s) && 1; ') !== f(' return /["\']\\/\\*/.test(s) && 2; ') &&
+     f(' var t = a / b / c; ') !== f(' var t = a / b / d; '));
+  const stretch = SRC_NEW.indexOf('\nfunction inputsFor_(');
+  const commentEdit = SRC_NEW.slice(0, stretch) + SRC_NEW.slice(stretch).replace('by its warmer', 'by its WARMER, reworded');
+  const codeEdit = SRC_NEW.replace('var SNAPSHOT_OPEN_MAX_MIN = 20;', 'var SNAPSHOT_OPEN_MAX_MIN = 21;');
+  ok('on the real file: rewording the comment after inputsFor_ leaves its code the same; changing the limit beside it does not',
+     commentEdit !== SRC_NEW && fnCode(commentEdit, 'inputsFor_') === fnCode(SRC_NEW, 'inputsFor_') &&
+     codeEdit !== SRC_NEW && fnCode(codeEdit, 'inputsFor_') !== fnCode(SRC_NEW, 'inputsFor_'));
 }
 
 /* ── 4. A write, then the screen ────────────────────────────────────────────────────────────── */

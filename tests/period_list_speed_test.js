@@ -37,7 +37,7 @@ const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { SECRET, PERIODS, CLOSED, PRACTICE, world, closeScenario } = require('./whole_engine_harness.js');
+const { SECRET, PERIODS, CLOSED, PRACTICE, world, closeScenario, fnCode } = require('./whole_engine_harness.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC_NEW = fs.readFileSync(process.env.CODE_GS || path.join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
@@ -316,9 +316,34 @@ else {
   ok('the same locks, writes and flushes, in the same order (' + n.events.length + ' events)',
      JSON.stringify(o.events) === JSON.stringify(n.events) && n.events.filter((e) => e === 'lock').length >= 3 && n.events.indexOf('write:' + HIST) > 0);
   ok('each WRITE request read every sheet, the registry and every setting exactly as often as before', o.writeReads === n.writeReads && n.writeReads.length > 200);
-  const moved = WRITE_FNS.filter((f) => fnText(SRC_OLD, f) !== fnText(SRC_NEW, f));
-  ok('the source of all ' + WRITE_FNS.length + ' functions the write paths run is unchanged' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
-     moved.length === 0 && WRITE_FNS.every((f) => fnText(SRC_NEW, f)));
+  /* CODE, NOT COMMENTS (re-based without moving the baseline). This compares each function's code,
+     from `function name(` to the next function, with comments removed (fnCode in the harness). It
+     used to compare the raw text, so a comment-only correction in the stretch after inputsFor_ —
+     the warmer wording above SNAPSHOT_OPEN_MAX_MIN — failed it while changing nothing that runs.
+     The BASELINE commit is deliberately NOT moved forward: comparing against a later commit would
+     only say "nothing changed since then", and lose what this line exists to say — that the
+     period-list speedup changed only what it meant to, measured from before it. The samples below
+     prove the comparison still sees code (strings, regexes, values) and ignores only comments;
+     scripts/prove-period-list-red.js shows a real code change in that stretch still fails it. */
+  const moved = WRITE_FNS.filter((f) => fnCode(SRC_OLD, f) !== fnCode(SRC_NEW, f));
+  ok('the CODE of all ' + WRITE_FNS.length + ' functions the write paths run is unchanged (comments aside)' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
+     moved.length === 0 && WRITE_FNS.every((f) => fnCode(SRC_NEW, f)));
+}
+{
+  /* The comparator itself: blind to comments, never to code. */
+  const f = (body) => fnCode('\nfunction f_(s) {' + body + '}\nfunction g_() {}', 'f_');
+  ok('the code comparison ignores a comment edit, and sees a code edit, a string edit and a regex edit',
+     f(' /* every 15 minutes */ var x = 20;\n') === f(' /* every 5\n   minutes */ var x = 20; // note\n') &&
+     f(' var x = 20; ') !== f(' var x = 21; ') &&
+     f(" var u = 'https://a/*b'; ") !== f(" var u = 'https://a/*c'; ") &&
+     f(' return /["\']\\/\\*/.test(s) && 1; ') !== f(' return /["\']\\/\\*/.test(s) && 2; ') &&
+     f(' var t = a / b / c; ') !== f(' var t = a / b / d; '));
+  const stretch = SRC_NEW.indexOf('\nfunction inputsFor_(');
+  const commentEdit = SRC_NEW.slice(0, stretch) + SRC_NEW.slice(stretch).replace('by its warmer', 'by its WARMER, reworded');
+  const codeEdit = SRC_NEW.replace('var SNAPSHOT_OPEN_MAX_MIN = 20;', 'var SNAPSHOT_OPEN_MAX_MIN = 21;');
+  ok('on the real file: rewording the comment after inputsFor_ leaves its code the same; changing the limit beside it does not',
+     commentEdit !== SRC_NEW && fnCode(commentEdit, 'inputsFor_') === fnCode(SRC_NEW, 'inputsFor_') &&
+     codeEdit !== SRC_NEW && fnCode(codeEdit, 'inputsFor_') !== fnCode(SRC_NEW, 'inputsFor_'));
 }
 {
   const body = (name) => fnText(SRC_NEW, name) || '';

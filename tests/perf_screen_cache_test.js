@@ -34,7 +34,7 @@ const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { NOW, SECRET, T, PRACTICE, corePerf, world } = require('./whole_engine_harness.js');
+const { NOW, SECRET, T, PRACTICE, corePerf, world, fnCode } = require('./whole_engine_harness.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC_NEW = fs.readFileSync(process.env.CODE_GS || path.join(ROOT, 'apps-script', 'Code.gs'), 'utf8');
@@ -474,9 +474,11 @@ function fnText(src, name) {
     ok('the same fetches by each request, in the same order', o.fetches === n.fetches && /incentive_perf/.test(n.fetches) && /action=progress/.test(n.fetches));
     ok('the same locks, writes and flushes by each request, in the same order', o.events === n.events && (n.events.match(/"lock"/g) || []).length >= 3 && /write:crew_incentive_history/.test(n.events));
     ok('each request read every sheet, the registry and every setting exactly as often', o.reads === n.reads && n.reads.length > 400);
-    const moved = WRITE_FNS.filter((f) => fnText(SRC_OLD, f) !== fnText(SRC_NEW, f));
-    ok('the source of all ' + WRITE_FNS.length + ' functions the write paths run is unchanged' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
-       moved.length === 0 && WRITE_FNS.every((f) => fnText(SRC_NEW, f)));
+    /* Code, not comments — the same comparator the read-speedup and period-list suites use, for the
+       same reason (a comment fix in the stretch after inputsFor_ is not a change to a write path). */
+    const moved = WRITE_FNS.filter((f) => fnCode(SRC_OLD, f) !== fnCode(SRC_NEW, f));
+    ok('the CODE of all ' + WRITE_FNS.length + ' functions the write paths run is unchanged (comments aside)' + (moved.length ? ' — CHANGED: ' + moved.join(', ') : ''),
+       moved.length === 0 && WRITE_FNS.every((f) => fnCode(SRC_NEW, f)));
   }
 }
 

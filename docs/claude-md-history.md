@@ -1079,6 +1079,13 @@ of `inputsFor_` runs to the next function), so rewording it there fails both. Th
 written directly below it, dated, and the old wording is left. Rewriting it in place means re-basing
 those two suites, which is a decision for whoever owns them.
 
+*Corrected afterward (Sky approved it): the block is now reworded in place (every 5 minutes, 06:00 to
+20:00 Pacific, fresh for 7; the 20-minute limit unchanged) and the note below it is cut to one line.
+The two suites, and `tests/perf_screen_cache_test.js`, now compare each function's CODE with comments
+removed (`fnCode` in `tests/whole_engine_harness.js`) against the same baseline commits as before, so
+a comment fix no longer fails them and a code change in that stretch still does. Both proof scripts
+gained a mutation for each and two comment-only controls that must stay green.*
+
 **Three existing suites changed.** `incentive_load_timeout_test.js` lifts `perfFromSnapshot_` and
 now lifts the helpers it calls. `attr_text_pin_test.js` compares the request-timing read-back with
 an older engine and now takes the two new stage names out of it, by name. This file's own suite

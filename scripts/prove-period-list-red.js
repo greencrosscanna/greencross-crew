@@ -97,6 +97,12 @@ const MUTATIONS = [
    (s) => inFn(s, 'incentiveSend_', "      var cur = wfGet_(pp);", "      var cur = wfPrev;")],
   ['the backup may decide only once the window is open',
    (s) => inFn(s, 'canDecide_', "  return { ok: true, as: 'backup', why: w.active ? w.why : '' };", "  return { ok: w.active, as: 'backup', why: w.active ? w.why : '' };")],
+  /* The code comparison (comments no longer count; code still must). Neither of these changes a
+     reply, a sheet or an email in this suite's scenarios, so ONLY the code comparison can catch them. */
+  ['the limit right after inputsFor_ changes — code in the stretch whose comments were reworded',
+   (s) => s.replace("var SNAPSHOT_OPEN_MAX_MIN = 20;", "var SNAPSHOT_OPEN_MAX_MIN = 21;")],
+  ['a statement that changes nothing appears in approve',
+   (s) => inFn(s, 'incentiveApprove_', "  var live = perfForWrite_(pp);", "  var live = perfForWrite_(pp); var __unused = 1;")],
 ];
 
 let problems = 0;
@@ -121,7 +127,26 @@ MUTATIONS.forEach(([label, mutate], i) => {
   else { console.log('  ✗ ' + label + ' → STILL GREEN. The test is not holding this.'); problems++; }
 });
 
+/* CONTROLS — edits that must leave the suite GREEN. The code comparison ignores comments; if it
+   ever stopped doing so, a comment fix would block a ship again, which is what it was re-based for. */
+const CONTROLS = [
+  ['the warmer comment after inputsFor_ is reworded',
+   (s) => s.replace('every 5 minutes from 06:00', 'every 9 minutes from 06:00')],
+  ['every comment inside approve is reworded',
+   (s) => inFn(s, 'incentiveApprove_', '/* ', '/* REWORDED ')],
+];
+CONTROLS.forEach(([label, mutate], i) => {
+  const out = mutate(SRC);
+  if (out === SRC) { console.log('  !! control: ' + label + ' — matched nothing'); problems++; return; }
+  const file = path.join(dir, 'control' + i + '.gs');
+  fs.writeFileSync(file, out);
+  const r = spawnSync('node', [path.join(ROOT, 'tests', 'period_list_speed_test.js')],
+                      { env: Object.assign({}, process.env, { CODE_GS: file }), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  if (r.status === 0) console.log('  ✓ control: ' + label + ' → still green, as it must be');
+  else { console.log('  ✗ control: ' + label + ' → went RED on a comment-only edit'); problems++; }
+});
+
 fs.rmSync(dir, { recursive: true, force: true });
-console.log(problems ? '\n' + problems + ' of ' + MUTATIONS.length + ' mutation(s) not held.\n'
-                     : '\nAll ' + MUTATIONS.length + ' guards are individually held by the test.\n');
+console.log(problems ? '\n' + problems + ' problem(s) among ' + MUTATIONS.length + ' mutations and ' + CONTROLS.length + ' controls.\n'
+                     : '\nAll ' + MUTATIONS.length + ' guards are individually held by the test, and all ' + CONTROLS.length + ' comment-only controls stay green.\n');
 process.exit(problems ? 1 : 0);

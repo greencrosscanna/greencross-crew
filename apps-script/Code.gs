@@ -5576,15 +5576,19 @@ function inputsFor_(ppStart) {
    as undefined reads downstream as a zero, and a zero here is somebody's bonus. */
 /* THE SCREEN MAY READ GX Core's SNAPSHOT (Sky, 2026-09-15). `GXCore.incentivePerf` is GX Core's
    in-process door: the same payload the route returns, pre-computed by its warmer (the running and
-   just-ended periods, every 15 minutes), read in well under a second instead of 2-19s over HTTP.
+   just-ended periods, every 5 minutes from 06:00 to 20:00 Pacific), read in well under a second
+   instead of 2-19s over HTTP.
    Only the SCREEN passes { snapshot: true }. Approval and the send preview never do — they freeze and
    email figures, and GX Core's own note on that door says both must compute live from ONE source.
 
    HOW OLD IS ACCEPTABLE:
-   - the RUNNING period: up to SNAPSHOT_OPEN_MAX_MIN. Sky's call — "up to 15 min old is fine" for a
-     fortnight nobody can approve yet. The warmer fires every 15 minutes and a rebuild takes ~16s,
-     so the bound carries 5 minutes of slack; a tighter one would fall back to HTTP just before
-     every refresh.
+   - the RUNNING period: up to SNAPSHOT_OPEN_MAX_MIN, which is Sky's number — "up to 15 min old is
+     fine" for a fortnight nobody can approve yet, set at 20 for slack. GX Core's warmer rebuilds
+     every 5 minutes, 06:00-20:00 Pacific, and calls a snapshot fresh for 7, so in those hours an
+     answer is normally well inside the limit. The limit is not tightened to match the warmer: a
+     rebuild that runs late or fails should cost a slower screen (the HTTP route), not a refusal
+     the moment one refresh is missed. Outside those hours the snapshot ages past 20 and the screen
+     takes the HTTP route.
    - an ENDED period: only what GX Core itself calls fresh (`stale === false`) — its own cache
      policy, the same one the HTTP route answers from. No looser than before.
    Anything else — no door on this pin, a refusal, missing/incomplete/corrupt, too old — falls through
@@ -5594,23 +5598,14 @@ var SNAPSHOT_OPEN_MAX_MIN = 20;
 
 function perfScreenArmedTake_() {
   /* May THIS call use the screen's short copy of the door's answer? Read once and cleared, so the
-     answer is good for exactly one call to perfFromSnapshot_. See the block below.
-     (No comment sits ABOVE this function, deliberately: two suites compare the text from
-     `function inputsFor_` up to this line against an earlier commit — see the note below.) */
+     answer is good for exactly one call to perfFromSnapshot_. See the block below. */
   var armed = (_perfScreenArmed_ === true);
   _perfScreenArmed_ = false;
   return armed;
 }
 
-/* CORRECTED 2026-10-13 — THE WARMER IS EVERY 5 MINUTES, NOT 15. The block above
-   SNAPSHOT_OPEN_MAX_MIN says "every 15 minutes" twice. GX Core's warmer now rebuilds the running and
-   just-ended periods every 5 minutes, 06:00-20:00 Pacific, and calls a snapshot fresh for 7. The
-   20-minute limit is unchanged and is still Sky's number; it simply carries more slack than that
-   block says. THE OLD WORDING IS LEFT IN PLACE ON PURPOSE: tests/incentive_read_speedup_test.js and
-   tests/period_list_speed_test.js compare the text from `function inputsFor_` to the next function
-   against the commit each was built on, and that stretch runs through that block. Rewording it
-   there means re-basing both suites, which is a decision for whoever owns them, not a side effect
-   of this change.
+/* (Corrected in place: the block above SNAPSHOT_OPEN_MAX_MIN said the warmer ran every 15 minutes;
+   it is 5. The two suites that compare that stretch now compare code only, so comments can be fixed.)
 
    ─── THE SCREEN KEEPS THE DOOR'S ANSWER FOR FIVE MINUTES (2026-10-13) ───────────────────────────
 
