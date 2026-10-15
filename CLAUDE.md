@@ -1035,7 +1035,8 @@ SPIFF's statuses: **draft** · **active** · **closed** (*paid out*).
   reports both and does not code around them.
 
 ## Access
-Owner + Mike to start (HR / managers later). GX Crew handles compensation + PII, so it is a
+Sky, Mike, and Shawn (backup approver, `editor` grant); HR / managers later. GX Crew handles
+compensation + PII, so it is a
 **separate deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
 
 ## Sync with the brain — run `/gxbrain` (or say "brain sync")
