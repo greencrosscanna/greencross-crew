@@ -318,6 +318,14 @@ says which are missing.
     to a script property that `metrc_health` reads back as `last_nightly_permit_sync`.
   - The route is a **preview unless `confirm=yes`**; a write needs the deploy secret or an
     edit-grade session.
+- **"Retired, still has access" comes from METRC, not from `permit_status`.** A valid OLCC permit
+  is the person's own and outlives their job here; it says nothing about OUR licenses. The 5am run
+  (on a complete read only) writes which retired people are still listed to Crew's own
+  `crew_metrc_access` tab, replaced wholesale, and the time + a count to
+  `CREW_METRC_ACCESS_CHECKED` — never names in a property (ids are name slugs). The review queue
+  and Monday email read that through `metrcAccessSnapshot_`; with no check in 3 days they fall
+  back to `permit_status` and say so. `metrcRetiredListed_` is the one matcher for this and for
+  `metrc_access`.
 - METRC is the authority for `permit_number` (the export's **License Number**), `permit_granted`,
   `permit_expires`, `permit_status`, and the **legal first + last name spelling**. Only
   `permit_expires` is synced automatically.
