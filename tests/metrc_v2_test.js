@@ -50,7 +50,7 @@ function reset(props) {
   T.fetches = []; T.respond = null; T.attrs = {}; T.writes = []; T.busts = 0;
   T.writeThrowsFor = null; T.afterFirstRead = null; T.reads = 0;
   T.identity = []; T.auth = { ok: true, user: 'tester', role: 'editor' };
-  T.joined = { rows: [] }; T.logs = [];
+  T.joined = { rows: [] }; T.logs = []; T.tabs = {}; T.sheetThrows = false;
 }
 const CONNECTED = { METRC_VENDOR_KEY: 'vendor-key', METRC_USER_KEY: 'user-key', METRC_LICENSES: 'LIC-A,LIC-B' };
 
@@ -94,9 +94,24 @@ writeAttrs_ = function (rec) {
 bustRosterCache_ = function () { __T.busts++; };
 rosterJoin_ = function () { return __T.joined; };
 dutchieNewHireScan_ = function () { return __T.scan; };
+sheetOf_ = function (tab, headers) {
+  if (__T.sheetThrows) throw new Error('sheet unavailable');
+  var t = __T.tabs[tab] = __T.tabs[tab] || [headers.slice()];
+  return {
+    getLastRow: function () { return t.length; },
+    getRange: function (r, c, nr, nc) { return {
+      clearContent: function () { for (var i = r - 1; i < r - 1 + nr; i++) t[i] = headers.map(function () { return ''; }); },
+      setValues: function (vals) { vals.forEach(function (v, i) { t[r - 1 + i] = v.slice(); }); } }; } };
+};
+readTab_ = function (tab, headers) {
+  var t = __T.tabs[tab] || [];
+  return t.slice(1).map(function (row) { var o = {}; headers.forEach(function (h, i) {
+    o[h] = String(row[i] == null ? '' : row[i]).trim(); }); return o; });
+};
 return { metrcGet_, metrcGetAll_, metrcAllEmployees_, metrcHealth_,
          metrcAccessAudit_, metrcPermitPlan_, metrcPermitSyncRun_, metrcPermitSync_, metrcPermitKey_,
-         metrcDay_, nightlyMetrcPermitSync_, nightlyDutchieScan };`;
+         metrcDay_, nightlyMetrcPermitSync_, nightlyDutchieScan,
+         metrcRetiredListed_, recordMetrcRetiredAccess_, metrcAccessSnapshot_, reviewItems_ };`;
 const names = Object.keys(stubs);
 const C = new Function(...names, SRC + TAIL)(...names.map(n => stubs[n]));
 
@@ -499,6 +514,71 @@ console.log('\nThe 5am run');
   ok('the sync runs after the scan and cannot replace its return value',
      NIGHT.indexOf('dutchieNewHireScan_()') < NIGHT.indexOf('nightlyMetrcPermitSync_()') && /return out;/.test(NIGHT));
   ok('no new trigger was invented for it', !/newTrigger\('nightlyMetrc/.test(SRC) && !/newTrigger\('metrc/i.test(SRC));
+}
+
+/* Mike, 2026-10-19: the Monday email listed former staff as "still has access" off the permit
+   status in the old import — their OLCC permit, which stays valid after they leave — when METRC
+   listed none of them on our licenses. The queue now reads the nightly METRC check. */
+console.log('\nFormer staff: the review queue reads the nightly METRC check');
+{
+  const retiredRows = () => ({ rows: [
+    { employee_id: 'avery_stone', name: 'Avery Stone', retired: true, permit_number: 'AB12CD', permit_status: 'Active' },
+    { employee_id: 'gone_person', name: 'Gone Person', retired: true, permit_number: 'ZZ99ZZ', permit_status: 'Active' },
+    { employee_id: 'casey_lane', name: 'Casey Lane', retired: false, permit_number: 'JK56LM' } ] });
+  const accessItems = () => C.reviewItems_(T.joined).filter(i => i.kind === 'retired_with_access');
+
+  reset(CONNECTED);
+  serve({ 'LIC-A': [emp('Avery Stone', 'AB12CD', '2029-05-19')], 'LIC-B': [emp('Casey Lane', 'JK56LM', '2028-03-04')] });
+  T.identity = [{ employee_id: 'casey_lane', full_name: 'Casey Lane', status: 'active' }];
+  T.attrs = { casey_lane: { employee_id: 'casey_lane', permit_number: 'JK56LM', permit_expires: '2028-03-04' } };
+  T.joined = retiredRows();
+  C.nightlyDutchieScan();
+  const note = JSON.parse(T.props.CREW_LAST_METRC_SYNC);
+  eq('the 5am run records how many former staff are still listed, as a count', note.retired_still_listed, 1);
+  eq('…and who, in Crew\'s own tab', T.tabs.crew_metrc_access.slice(1).map(r => r[0]), ['avery_stone']);
+  ok('no name reaches either script property',
+     !/Avery|Stone|avery_stone|Gone|gone_person/.test(T.props.CREW_LAST_METRC_SYNC + T.props.CREW_METRC_ACCESS_CHECKED));
+
+  const items = accessItems();
+  eq('only the one METRC still lists is flagged — a valid permit on file is not access',
+     items.map(i => [i.employee_id, i.field]), [['avery_stone', 'metrc_license']]);
+  ok('the flag says METRC and when it was checked', /METRC still lists them on 1 of our license/.test(items[0].detail));
+
+  /* The next night METRC shows them gone: the tab is replaced, not appended to. */
+  serve({ 'LIC-A': [emp('Blake Rivers', 'EF34GH', '2027-01-02')], 'LIC-B': [emp('Casey Lane', 'JK56LM', '2028-03-04')] });
+  C.nightlyDutchieScan();
+  eq('removed in METRC: nobody is flagged the next morning', accessItems().length, 0);
+
+  /* A partial read records nothing — the earlier record stands until it ages out. */
+  serve({ 'LIC-A': [emp('Avery Stone', 'AB12CD', '2029-05-19')] });        // LIC-B fails
+  const before = T.props.CREW_METRC_ACCESS_CHECKED;
+  C.nightlyDutchieScan();
+  ok('a partial read does not overwrite the record', T.props.CREW_METRC_ACCESS_CHECKED === before && accessItems().length === 0);
+
+  /* Stale or missing: fall back to the permit status, and say so. */
+  T.props.CREW_METRC_ACCESS_CHECKED = JSON.stringify({ at: '2020-01-01T00:00:00.000Z', listed: 0 });
+  const stale = accessItems();
+  eq('a check older than 3 days falls back to the permit status on file', stale.map(i => [i.employee_id, i.field]).sort(),
+     [['avery_stone', 'permit_status'], ['gone_person', 'permit_status']]);
+  ok('…and says METRC has not been checked', stale.every(i => /METRC has not been checked/.test(i.detail)));
+
+  reset(CONNECTED);
+  T.joined = retiredRows();
+  eq('never checked: same fallback', accessItems().length, 2);
+
+  /* A sheet failure while recording never fails the night, and leaves no fresh timestamp. */
+  reset(CONNECTED);
+  serve({ 'LIC-A': [emp('Avery Stone', 'AB12CD', '2029-05-19')], 'LIC-B': [] });
+  T.identity = [{ employee_id: 'casey_lane', full_name: 'Casey Lane', status: 'active' }];
+  T.joined = retiredRows(); T.sheetThrows = true;
+  let threw = false; try { C.nightlyDutchieScan(); } catch (e) { threw = true; }
+  ok('a tab that cannot be written never fails the 5am trigger', !threw);
+  ok('…and leaves no fresh timestamp behind', !T.props.CREW_METRC_ACCESS_CHECKED &&
+     !!JSON.parse(T.props.CREW_LAST_METRC_SYNC).retired_access_error);
+
+  /* The audit route and the nightly record use the same matcher. */
+  ok('the audit and the record share one matcher', /metrcRetiredListed_\(/.test(fnSrc('metrcAccessAudit_')) &&
+     /metrcRetiredListed_\(/.test(fnSrc('recordMetrcRetiredAccess_')));
 }
 
 console.log(fail ? `\n${fail} FAILED` : '\nmetrc v2: all passed');

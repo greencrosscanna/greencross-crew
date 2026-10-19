@@ -2163,6 +2163,89 @@ function metrcAllEmployees_() {
 }
 
 /**
+ * PURE: which retired roster rows are still LISTED on one of our METRC licenses.
+ *
+ * TWO OUTCOMES, NOT THREE. v2 has no per-person active flag (see metrcAllEmployees_), so a
+ * retired person is either still listed on one of our licenses — which is live access — or
+ * absent from all of them. Absent IS the removed state. Matched on permit number first, the name
+ * only where Crew holds no number. `people` is metrcAllEmployees_().people.
+ */
+function metrcRetiredListed_(rows, people) {
+  var metrcPeople = Object.keys(people || {}).map(function (k) { return people[k]; });
+  var out = [];
+  (rows || []).forEach(function (r) {
+    if (!r.retired) return;
+    var hit = null;
+    var pk = metrcPermitKey_(r.permit_number);
+    if (pk) hit = people[pk] || null;
+    for (var i = 0; !hit && i < metrcPeople.length; i++) {
+      if (samePerson_(r.name, metrcPeople[i].name)) hit = metrcPeople[i];
+    }
+    if (hit) out.push({ employee_id: r.employee_id, name: r.name, licenses: hit.licenses.length });
+  });
+  return out;
+}
+
+/*
+ * WHAT THE REVIEW QUEUE (AND SO THE MONDAY EMAIL) SAYS ABOUT FORMER STAFF AND METRC.
+ *
+ * Mike, 2026-10-19: the email listed former staff as still having METRC access when METRC showed
+ * none. The flag was reading `permit_status` from the old staff import — whether the person's
+ * OLCC worker permit is valid, which is THEIR state permit and stays valid after they leave us.
+ * It never said anything about access to OUR licenses. The live check (Michael Reynolds among
+ * them) found all 31 retired staff absent from every license.
+ *
+ * So the 5am run, which already reads every license for the permit-date sync, records which
+ * retired people are still listed, and the queue reads that. It is stored in Crew's own HR
+ * workbook (a tab, replaced wholesale) because employee ids are name slugs — a script property is
+ * not a place for staff names. The property holds only the time and a count.
+ *
+ * Only a COMPLETE read is recorded (metrcPermitSyncRun_ hands the people over only after every
+ * license answered and somebody was listed). If the record is older than METRC_ACCESS_FRESH_MS —
+ * METRC disconnected, or failing night after night — the queue falls back to the permit-status
+ * check and says that is what it is doing, rather than going quiet.
+ */
+var METRC_ACCESS_TAB = 'crew_metrc_access';
+var METRC_ACCESS_HEADERS = ['employee_id', 'licenses', 'checked_at'];
+var METRC_ACCESS_CHECKED_PROP = 'CREW_METRC_ACCESS_CHECKED';
+var METRC_ACCESS_FRESH_MS = 3 * 24 * 3600 * 1000;
+
+/* Write the snapshot. Tab first, then the timestamp, so a failed tab write leaves the old time and
+   the record ages out rather than looking fresh over a half-written tab. Returns the count. */
+function recordMetrcRetiredAccess_(people) {
+  var hits = metrcRetiredListed_(rosterJoin_().rows, people);
+  var at = new Date().toISOString();
+  var sh = sheetOf_(METRC_ACCESS_TAB, METRC_ACCESS_HEADERS);
+  var last = sh.getLastRow();
+  if (last > 1) sh.getRange(2, 1, last - 1, METRC_ACCESS_HEADERS.length).clearContent();
+  if (hits.length) {
+    sh.getRange(2, 1, hits.length, METRC_ACCESS_HEADERS.length)
+      .setValues(hits.map(function (h) { return [h.employee_id, h.licenses, at]; }));
+  }
+  PropertiesService.getScriptProperties()
+    .setProperty(METRC_ACCESS_CHECKED_PROP, JSON.stringify({ at: at, listed: hits.length }));
+  return hits.length;
+}
+
+/* The snapshot, or null when there is none fresh enough to trust. Never throws. */
+function metrcAccessSnapshot_() {
+  try {
+    var raw = PropertiesService.getScriptProperties().getProperty(METRC_ACCESS_CHECKED_PROP);
+    if (!raw) return null;
+    var meta = JSON.parse(raw);
+    var t = Date.parse(meta && meta.at);
+    if (!isFinite(t) || Date.now() - t > METRC_ACCESS_FRESH_MS) return null;
+    var listed = Object.create(null);
+    readTab_(METRC_ACCESS_TAB, METRC_ACCESS_HEADERS).forEach(function (r) {
+      if (r.employee_id) listed[r.employee_id] = Number(r.licenses) || 1;
+    });
+    return { at: meta.at, listed: listed };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * The question the review queue could not answer without a human: are the people we have marked
  * retired actually deactivated in METRC? Names only — no permit numbers leave this.
  */
@@ -2178,33 +2261,19 @@ function metrcAccessAudit_(p) {
              'alarming. Point METRC_BASE at production once credentials are issued.' };
   }
   var m = metrcAllEmployees_();
-  var metrcPeople = Object.keys(m.people).map(function (k) { return m.people[k]; });
   var joined = rosterJoin_();
-
-  /* TWO OUTCOMES, NOT THREE. v2 has no per-person active flag (see metrcAllEmployees_), so a
-     retired person is either still LISTED on one of our licenses — which is live access — or
-     absent from all of them. The old third bucket, "found in Metrc but marked inactive", cannot
-     occur and its count (`properly_deactivated`) is no longer returned: absent IS the removed
-     state. Matched on permit number first, the name only where Crew holds no number. */
-  var stillListed = [], absent = 0;
-  joined.rows.forEach(function (r) {
-    if (!r.retired) return;
-    var hit = null;
-    var pk = metrcPermitKey_(r.permit_number);
-    if (pk) hit = m.people[pk] || null;
-    for (var i = 0; !hit && i < metrcPeople.length; i++) {
-      if (samePerson_(r.name, metrcPeople[i].name)) hit = metrcPeople[i];
-    }
-    if (hit) stillListed.push({ name: r.name, licenses: hit.licenses.length });
-    else absent++;
+  var retiredCount = joined.rows.filter(function (r) { return r.retired; }).length;
+  var stillListed = metrcRetiredListed_(joined.rows, m.people).map(function (h) {
+    return { name: h.name, licenses: h.licenses };
   });
+  var absent = retiredCount - stillListed.length;
 
   /* A license that failed to read makes "absent" unprovable — the person may be on the one list
      that did not arrive. Say so rather than report a clean result off a partial read. */
   var partial = m.errors.length > 0;
   return {
-    ok: true, metrc_rows_seen: m.rows_seen, metrc_people: metrcPeople.length,
-    retired_in_crew: joined.rows.filter(function (r) { return r.retired; }).length,
+    ok: true, metrc_rows_seen: m.rows_seen, metrc_people: Object.keys(m.people).length,
+    retired_in_crew: retiredCount,
     still_active_in_metrc: stillListed,
     retired_and_absent_from_metrc: absent,
     partial_read: partial,
@@ -2315,8 +2384,10 @@ function metrcPermitPlan_(identity, attrs, people) {
 }
 
 /* The run. `write` false is a preview. Returns names — callers decide who may see them; the
-   nightly wrapper below keeps counts only. */
-function metrcPermitSyncRun_(write, by) {
+   nightly wrapper below keeps counts only. `keep`, when passed, receives `people` — only after a
+   COMPLETE, non-empty read — so the nightly run can record retired access without reading every
+   license a second time. */
+function metrcPermitSyncRun_(write, by, keep) {
   var c = metrcCreds_();
   if (/sandbox/i.test(c.base)) {
     return { ok: false, skipped: 'sandbox', error: 'METRC_BASE points at the sandbox, which holds ' +
@@ -2339,6 +2410,7 @@ function metrcPermitSyncRun_(write, by) {
   if (!Object.keys(m.people).length) {
     return { ok: false, error: 'METRC returned nobody on any license — nothing changed.' };
   }
+  if (keep) keep.people = m.people;
 
   var identity;
   try { identity = GXCore.getEmployees() || []; }
@@ -2435,8 +2507,13 @@ function metrcPermitSync_(p) {
 function nightlyMetrcPermitSync_() {
   var note;
   try {
-    var r = metrcPermitSyncRun_(true, 'metrc-sync (nightly)') || {};
+    var keep = {};
+    var r = metrcPermitSyncRun_(true, 'metrc-sync (nightly)', keep) || {};
     note = { ok: !!r.ok };
+    if (keep.people) {
+      try { note.retired_still_listed = recordMetrcRetiredAccess_(keep.people); }
+      catch (eA) { note.retired_access_error = String((eA && eA.message) || eA); }
+    }
     if (r.skipped) note.skipped = r.skipped;
     if (r.error) note.error = r.error;
     if (r.license_errors) note.license_errors = r.license_errors.length;
@@ -2576,12 +2653,25 @@ function reviewItems_(joined) {
   }
 
   // ── 2. Permits — the compliance half.
+  /* Former staff: the nightly METRC check decides (see metrcAccessSnapshot_). Read lazily — only
+     a retired row needs it. undefined = not read yet, null = no fresh check to trust. */
+  var metrcSnap;
   rows.forEach(function (r) {
     if (r.retired) {
-      if (r.permit_number && r.permit_status &&
+      if (metrcSnap === undefined) metrcSnap = metrcAccessSnapshot_();
+      if (metrcSnap) {
+        var n = metrcSnap.listed[r.employee_id];
+        if (n) {
+          add('retired_with_access', r, 'metrc_license', 'listed on ' + n + ' METRC license' + (n === 1 ? '' : 's'),
+              'revoke', 'METRC', 'Retired on the roster, but METRC still lists them on ' + n + ' of our license' +
+              (n === 1 ? '' : 's') + ' (checked ' + String(metrcSnap.at).slice(0, 10) + '). Remove them in METRC.', 'high');
+        }
+      } else if (r.permit_number && r.permit_status &&
           ['active', 'valid'].indexOf(String(r.permit_status).toLowerCase()) >= 0) {
         add('retired_with_access', r, 'permit_status', 'retired staff, permit still ' + r.permit_status,
-            'revoke', 'METRC', 'Retired on the roster but still holds an active METRC permit/access.', 'high');
+            'revoke', 'METRC', 'Retired on the roster with a permit marked ' + r.permit_status + ' on file. ' +
+            'METRC has not been checked in the last 3 days, so this may be out of date — ' +
+            'check whether they are still on one of our licenses.', 'high');
       }
       return;
     }
