@@ -593,7 +593,7 @@
      rowFlags_ in Code.gs — add a flag there and it needs a line here or it shows raw. */
   var FLAG_LABEL = { name: 'name', employee_number: 'employee number', hire_date: 'hire date',
     store: 'store', role: 'role', no_account: 'GX account', wage: 'wage', birthday: 'birthday',
-    permit: 'OLCC permit', permit_expired: 'expired permit', permit_status: 'permit status' };
+    permit: 'OLCC permit', permit_expired: 'expired permit', permit_status: 'not on our METRC licenses' };
 
   /* RED means damage or a compliance failure — an expired permit, no permit at all, a manager
      who cannot be contacted, a blanked name. GOLD means a record that is merely incomplete.
@@ -673,7 +673,10 @@
     missing_field:       'Missing data',
     name_spelling:       'Name spelling differs',
     role:                'Role differs',
-    new_hire:            'In Dutchie, not on the roster'
+    new_hire:            'In Dutchie, not on the roster',
+    metrc_unknown:       'On our METRC license, not on the roster',
+    metrc_permit:        'Permit number found in METRC',
+    metrc_unchecked:     'METRC not checked'
   };
 
   /* Tabs live in the shared header (#navTabs), not in the page body, so Crew matches every other app.
@@ -830,6 +833,7 @@
          : kind === 'name_spelling' ? 'Apply METRC spelling'
          : kind === 'role'          ? 'Apply Leaderboard role'
          : kind === 'new_hire'      ? 'Add to the roster'
+         : kind === 'metrc_permit'  ? 'Record this permit'
          : 'Mark handled';
   }
 
@@ -849,7 +853,7 @@
             : '✓ Recorded as not a problem');
       /* Accepting a name, a role or a merge CHANGES the roster, so the rows in hand are stale.
          Refetch quietly rather than patching a guess into them. */
-      if (choice === 'accept' && ['duplicate', 'name_spelling', 'role', 'new_hire'].indexOf(it.kind) >= 0) {
+      if (choice === 'accept' && ['duplicate', 'name_spelling', 'role', 'new_hire', 'metrc_permit'].indexOf(it.kind) >= 0) {
         if (it.kind === 'duplicate' && String(state.selected) === String(it.merge_from)) {
           state.selected = it.employee_id;      // the record they were reading no longer exists
         }
@@ -2103,15 +2107,18 @@
       ((expired || unreadable || !row.permit_number) ? ' is-bad' : ''));
 
     var top = el('div', 'crew-permit-top');
+    /* The pill is METRC's answer (row.metrc_listed, from the nightly copy): on one of our licenses
+       or not. null = METRC has not been checked, which is said rather than guessed. */
     var statusCls = unreadable ? 'is-bad-t'
-      : !row.permit_status ? 'is-warn'
-      : ['active', 'valid'].indexOf(String(row.permit_status).toLowerCase()) >= 0
-        ? (pd != null && pd <= 90 ? 'is-warn' : 'is-ok') : 'is-bad-t';
+      : row.metrc_listed === false ? 'is-bad-t'
+      : row.metrc_listed !== true ? 'is-warn'
+      : (pd != null && pd <= 90 ? 'is-warn' : 'is-ok');
 
     if (row.permit_number || !state.canEdit) {
       top.appendChild(el('span', 'crew-permit-no', esc(row.permit_number || 'No permit number on file')));
       top.appendChild(el('span', 'crew-permit-pill ' + statusCls,
-        esc(row.permit_status ? String(row.permit_status).toUpperCase() : 'UNKNOWN')));
+        esc(row.metrc_listed === true ? 'LISTED IN METRC'
+          : row.metrc_listed === false ? 'NOT ON OUR LICENSES' : 'NOT CHECKED')));
       /* THREE states, not two. The engine returns permit_days_left = null when it could not read
          the stored expiry, and the old arithmetic here ran anyway — printing the literal
          "null days left" next to a date, which is how this was noticed. A date it cannot count
@@ -5875,7 +5882,6 @@
       state.identity   = r.identity_source || null;
       state.retiredTotal = r.retired_total || 0;
       state.fetchedRetired = wantRetired;
-      state.hrSheetUrl = r.hr_sheet_url || '';
       /* The live answer has landed, so nothing on screen is a saved copy any more. */
       state.savedCopyAt = null;
       rosterSaveCopy_(r);

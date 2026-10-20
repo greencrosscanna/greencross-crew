@@ -182,12 +182,6 @@ const WRITES = [
   { name: 'roster_merge (two records into one)',
     run: (W) => W.get({ action: 'roster_merge', token: 'T-sky', keep: 'bea_bud', merge: 'old_bud', confirm: 'yes' }),
     good: (r) => r.ok === true && r.mode === 'merged', keep: [['bea_bud', 'employee_number', '07'], ['bea_bud', 'permit_number', '0012345'], ['bea_bud', 'birthday', '05-19']], minWrites: 1, needsRow: 'bea_bud' },
-  { name: 'hr_import (a sheet of people, one of them new)',
-    run: (W) => W.post({ action: 'hr_import', secret: SECRET, confirm: 'yes', mode: 'overwrite' },
-                       { employees: [{ full_name: 'Sky Owner', employee_number: '00', birthday: '1/5' },
-                                     { full_name: 'Nora Newhire', employee_number: '007', birthday: '3/4', permit_number: '0001', home_store: 'bend' }] }),
-    good: (r) => r.ok === true && r.mode === 'commit' && r.attributes_written === 2,
-    keep: [['sky_owner', 'employee_number', '00'], ['sky_owner', 'birthday', '01-05'], ['nora_newhire', 'employee_number', '007'], ['nora_newhire', 'permit_number', '0001'], ['nora_newhire', 'birthday', '03-04']], minWrites: 2 },
   { name: 'metrc_permit_sync (an expiry date, on a row with a leading-zero permit)', setup: METRC,
     run: (W) => W.get({ action: 'metrc_permit_sync', secret: SECRET, confirm: 'yes' }),
     good: (r) => r.ok === true && r.written >= 1, keep: [['bea_bud', 'permit_number', '0012345'], ['bea_bud', 'employee_number', '07'], ['bea_bud', 'birthday', '05-19']], minWrites: 1, needsRow: 'bea_bud' },
@@ -322,8 +316,10 @@ console.log('\nNothing but writeAttrs_ writes to the attributes tab');
   ok('the tab\'s name is used in one place: where it is opened or created',
      names.filter((n) => /\bATTR_TAB\b/.test(body(n))).join() === 'crewSheetPrepare_');
   const callers = names.filter((n) => /\bwriteAttrs_\b/.test(body(n).replace(/^\nfunction [^\n]*/, '')));
-  ok('writeAttrs_ has the six callers it had: ' + callers.sort().join(', '),
-     callers.sort().join(',') === 'assignNumbers_,hrImport_,mergeEmployees_,metrcPermitSyncRun_,saveRosterAttrs_,setNumber_');
+  /* hrImport_ left with the staff spreadsheet (2026-10-19); resolveReview_ arrived with it, for
+     accepting a permit number METRC lists. */
+  ok('writeAttrs_ has the six callers it has: ' + callers.sort().join(', '),
+     callers.sort().join(',') === 'assignNumbers_,mergeEmployees_,metrcPermitSyncRun_,resolveReview_,saveRosterAttrs_,setNumber_');
   const w = body('writeAttrs_');
   ok('writeAttrs_ asks for the tab FOR WRITE, and before its first write',
      /crewSheetPrepare_\(true\)/.test(w) && w.indexOf('crewSheetPrepare_(true)') < w.search(WRITE_CALL) && (w.match(/crewSheetPrepare_\(/g) || []).length === 1);
@@ -351,9 +347,20 @@ else {
      read-back and nowhere else, so they are taken out of it before the comparison — by name, so a
      third new stage, or a changed figure under any existing one, still fails here. */
   const ADDED_STAGES = ['perf_door', 'perf_cache_hit'];
+  /* 2026-10-19, METRC read directly: every roster row gained `metrc_listed` (null here — the fixture
+     has no METRC), and a confirmed metrc_permit_sync also records the METRC copy, which adds
+     `snapshot_people` to its reply and the `crew_metrc_people` tab to the workbook. Removed by name,
+     so any other difference still fails. The roster's always-empty `hr_sheet_url` left with the
+     staff spreadsheet. */
+  const ADDED_TABS = ['crew_metrc_people'];
+  const bookOf = (W) => { const o = JSON.parse(W.book()); ADDED_TABS.forEach((t) => delete o[t]); return JSON.stringify(o); };
   const strip = (d) => {
     if (d && typeof d === 'object') {
       delete d.timings;
+      delete d.snapshot_people;
+      if (d.hr_sheet_url === '') delete d.hr_sheet_url;
+      if (Array.isArray(d.rows)) d.rows.forEach((r) => { if (r && r.metrc_listed === null) delete r.metrc_listed; });
+      if (d.roster && Array.isArray(d.roster.rows)) d.roster.rows.forEach((r) => { if (r && r.metrc_listed === null) delete r.metrc_listed; });
       if (Array.isArray(d.actions)) d.actions.forEach((a) => { if (a && Array.isArray(a.stages)) a.stages = a.stages.filter((s) => ADDED_STAGES.indexOf(s.stage) < 0); });
     }
     return JSON.stringify(d);
@@ -370,7 +377,7 @@ else {
     const O = mk(SRC_OLD), N = mk(SRC_NEW);
     if (w.setup) { w.setup(O); w.setup(N); }
     const a = strip(w.run(O)), b = strip(w.run(N));
-    ok(w.name + ': the same reply, and the same workbook afterwards', a === b && O.book() === N.book() && JSON.stringify(O.employees) === JSON.stringify(N.employees));
+    ok(w.name + ': the same reply, and the same workbook afterwards', a === b && bookOf(O) === bookOf(N) && JSON.stringify(O.employees) === JSON.stringify(N.employees));
   });
   const O = mk(SRC_OLD), N = mk(SRC_NEW);
   [O, N].forEach((W) => { W.get({ action: 'incentive', token: 'T-sky' }); W.get({ action: 'roster', token: 'T-sky' }); });

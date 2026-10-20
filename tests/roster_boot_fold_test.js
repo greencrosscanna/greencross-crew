@@ -65,6 +65,8 @@ function buildEngine(opts) {
     grab('eomMonthKey_') + '\n' +
     grab('eomSameMonth_') + '\n' +
     grab('getRoster_') + '\n' +
+    // METRC is not connected in this fixture — the queue's METRC section has nothing to say.
+    'function metrcSnapshot_() { return { state: "off" }; }\n' +
     'function rosterJoin_() { rosterCalls.n++; ' +
     (opts.rosterThrows ? 'throw new Error("rosterJoin_ boom");' : 'return ROSTER;') + ' }\n' +
     'return { getRoster_, reviewItems_, eomHistoryPayload_, eomCurrentHolderId_ };';

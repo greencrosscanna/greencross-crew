@@ -177,16 +177,12 @@ function wageExempt_(payType, legacyNotOnPayroll) {
  * false one. Somebody has to say it, per person, once. */
 
 /*
- * The HR workbook is NO LONGER THE SOURCE OF TRUTH (Sky, 2026-08-18). GX Crew — backed by the
- * GX Core registry — is. The spreadsheet is kept only as the historical record it came from.
- *
- * This is not just a label change. An import from a superseded source must be structurally
- * incapable of overturning curated data: re-sending the sheet is exactly how four role
- * corrections were silently reverted minutes after being made. hrImport_ therefore defaults to
- * FILL mode — it writes a field only where the current value is EMPTY. Overwriting now takes an
- * explicit mode=overwrite, which nothing routine should ever pass.
+ * THE STAFF SPREADSHEET IS OBSOLETE (Sky, 2026-10-19). GX Crew, backed by the GX Core registry, has
+ * been the record since 2026-08-18, and METRC is now read directly for permits and legal names. The
+ * `hr_import` route that loaded the sheet (and the METRC exports) is gone and must not come back:
+ * an import from a superseded source is how four role corrections were once silently reverted.
+ * Roster changes are made in the app, one person at a time.
  */
-var HR_SHEET_URL = '';   // no longer surfaced in the UI; Crew is the record
 
 /** Allowed shirt sizes. Kept server-side so the UI can't write junk into payroll-adjacent data. */
 var SHIRT_SIZES = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'];
@@ -298,7 +294,6 @@ function route_(e) {
     switch (action) {
       // Bulk HR import. POST only — the payload is the whole roster and cannot fit in a query
       // string, and this writes both the shared registry and Crew's attributes.
-      case 'hr_import': return json_(hrImport_(p, body), p.callback);
 
       // One-time-ish migration of Leaderboard's nickname + avatar maps into Core display fields.
       case 'migrate_leaderboard': return json_(migrateLeaderboard_(p, body), p.callback);
@@ -372,6 +367,7 @@ function route_(e) {
          for Metrc's evaluation, which is finished, and they held the only POSTs in the connector.
          Every route left here reads. Do not add one that sends Metrc anything but a GET. */
       case 'metrc_access': return json_(metrcAccessAudit_(p), p.callback);
+      case 'metrc_licenses': return json_(metrcLicenses_(p), p.callback);
       // Permit expiration dates, Metrc -> Crew's own sheet. A preview unless confirm=yes.
       case 'metrc_permit_sync': return json_(metrcPermitSync_(p), p.callback);
 
@@ -2195,54 +2191,206 @@ function metrcRetiredListed_(rows, people) {
  * It never said anything about access to OUR licenses. The live check (Michael Reynolds among
  * them) found all 31 retired staff absent from every license.
  *
- * So the 5am run, which already reads every license for the permit-date sync, records which
- * retired people are still listed, and the queue reads that. It is stored in Crew's own HR
- * workbook (a tab, replaced wholesale) because employee ids are name slugs — a script property is
- * not a place for staff names. The property holds only the time and a count.
+ * THE SNAPSHOT (2026-10-19, Sky: "the Sheet should be obsolete"). Every complete METRC read — the
+ * 5am run, or metrc_permit_sync with confirm=yes — copies EVERYONE listed on our licenses into
+ * Crew's own HR workbook (`crew_metrc_people`, replaced wholesale). Everything Crew says about
+ * METRC on screen, in the queue and in the Monday email is then derived from that copy and the
+ * LIVE roster, at read time, so it cannot drift from either:
+ *   • a former employee still listed                  → retired_with_access
+ *   • somebody listed who is not on our roster at all → metrc_unknown
+ *   • an active person with no permit number, whom exactly one listed person answers to
+ *                                                     → metrc_permit (accept writes the number)
+ *   • a legal-name spelling METRC disagrees with      → name_spelling (METRC wins on spelling)
+ *   • the roster's permit status                      → "Listed" / "Not on our licenses"
+ * The old `permit_status` column (from the spreadsheet import) is no longer read by anything.
  *
- * Only a COMPLETE read is recorded (metrcPermitSyncRun_ hands the people over only after every
- * license answered and somebody was listed). If the record is older than METRC_ACCESS_FRESH_MS —
- * METRC disconnected, or failing night after night — the queue falls back to the permit-status
- * check and says that is what it is doing, rather than going quiet.
+ * A script property holds only the time and a count — ids are name slugs and the tab holds names,
+ * and a property is not a place for either. Only a COMPLETE, non-empty read is recorded. If the
+ * copy is older than METRC_SNAPSHOT_FRESH_MS while METRC is connected, the queue raises ONE item
+ * saying the checks are paused, rather than going quiet or falling back to stale data.
  */
-var METRC_ACCESS_TAB = 'crew_metrc_access';
-var METRC_ACCESS_HEADERS = ['employee_id', 'licenses', 'checked_at'];
-var METRC_ACCESS_CHECKED_PROP = 'CREW_METRC_ACCESS_CHECKED';
-var METRC_ACCESS_FRESH_MS = 3 * 24 * 3600 * 1000;
+var METRC_SNAPSHOT_TAB = 'crew_metrc_people';
+var METRC_SNAPSHOT_HEADERS = ['key', 'permit', 'name', 'licenses', 'start', 'end'];
+var METRC_SNAPSHOT_PROP = 'CREW_METRC_SNAPSHOT_AT';
+var METRC_SNAPSHOT_FRESH_MS = 3 * 24 * 3600 * 1000;
 
-/* Write the snapshot. Tab first, then the timestamp, so a failed tab write leaves the old time and
-   the record ages out rather than looking fresh over a half-written tab. Returns the count. */
-function recordMetrcRetiredAccess_(people) {
-  var hits = metrcRetiredListed_(rosterJoin_().rows, people);
-  var at = new Date().toISOString();
-  var sh = sheetOf_(METRC_ACCESS_TAB, METRC_ACCESS_HEADERS);
-  var last = sh.getLastRow();
-  if (last > 1) sh.getRange(2, 1, last - 1, METRC_ACCESS_HEADERS.length).clearContent();
-  if (hits.length) {
-    sh.getRange(2, 1, hits.length, METRC_ACCESS_HEADERS.length)
-      .setValues(hits.map(function (h) { return [h.employee_id, h.licenses, at]; }));
+/* Which store each of our METRC licenses belongs to. Exports never named a store and the registry
+   has no license column, so this is a literal table — a store that moves license should make it
+   WRONG AND VISIBLE (?action=metrc_licenses shows who is on each), not silently different. A
+   license missing here is labeled by its number. */
+var METRC_LICENSE_STORE = { '050-16892': 'portland-rd' };
+
+/* Write the copy. Tab first, then the timestamp, so a failed tab write leaves the old time and the
+   copy ages out rather than looking fresh over a half-written tab. A copy identical to the one on
+   file is not rewritten (most nights), and only a changed one busts the roster cache. Returns how
+   many were copied. */
+function recordMetrcSnapshot_(people) {
+  var keys = Object.keys(people || {}).sort();
+  if (!keys.length) throw new Error('refusing to record an empty METRC read');
+  var rows = keys.map(function (k) {
+    var p = people[k];
+    return [k, p.permit || '', p.name || '', (p.licenses || []).join(' '), p.start || '', p.end || ''];
+  });
+  var asText = function (rs) { return JSON.stringify(rs.map(function (r) { return r.map(String); })); };
+  var held = readTab_(METRC_SNAPSHOT_TAB, METRC_SNAPSHOT_HEADERS)
+    .filter(function (r) { return r.key; })
+    .map(function (r) { return METRC_SNAPSHOT_HEADERS.map(function (h) { return r[h]; }); });
+  if (asText(held) !== asText(rows)) {
+    var sh = sheetOf_(METRC_SNAPSHOT_TAB, METRC_SNAPSHOT_HEADERS);
+    var last = sh.getLastRow();
+    if (last > 1) sh.getRange(2, 1, last - 1, METRC_SNAPSHOT_HEADERS.length).clearContent();
+    var rng = sh.getRange(2, 1, rows.length, METRC_SNAPSHOT_HEADERS.length);
+    rng.setNumberFormat('@');                  // permit numbers and days are TEXT
+    rng.setValues(rows);
+    bustRosterCache_();
   }
   PropertiesService.getScriptProperties()
-    .setProperty(METRC_ACCESS_CHECKED_PROP, JSON.stringify({ at: at, listed: hits.length }));
-  return hits.length;
+    .setProperty(METRC_SNAPSHOT_PROP, JSON.stringify({ at: new Date().toISOString(), people: keys.length }));
+  return keys.length;
 }
 
-/* The snapshot, or null when there is none fresh enough to trust. Never throws. */
-function metrcAccessSnapshot_() {
+/* { state: 'fresh', at, people } | { state: 'stale', at } | { state: 'off' }. Never throws.
+   'off' means METRC is not connected (no keys), which is not news; 'stale' while connected is. */
+function metrcSnapshot_() {
   try {
-    var raw = PropertiesService.getScriptProperties().getProperty(METRC_ACCESS_CHECKED_PROP);
-    if (!raw) return null;
-    var meta = JSON.parse(raw);
+    var c = metrcCreds_();
+    if (!c.vendor || !c.user || !c.licenses.length) return { state: 'off' };
+    var raw = PropertiesService.getScriptProperties().getProperty(METRC_SNAPSHOT_PROP);
+    var meta = raw ? JSON.parse(raw) : null;
     var t = Date.parse(meta && meta.at);
-    if (!isFinite(t) || Date.now() - t > METRC_ACCESS_FRESH_MS) return null;
-    var listed = Object.create(null);
-    readTab_(METRC_ACCESS_TAB, METRC_ACCESS_HEADERS).forEach(function (r) {
-      if (r.employee_id) listed[r.employee_id] = Number(r.licenses) || 1;
+    if (!isFinite(t) || Date.now() - t > METRC_SNAPSHOT_FRESH_MS) {
+      return { state: 'stale', at: isFinite(t) ? meta.at : '' };
+    }
+    var people = Object.create(null);
+    readTab_(METRC_SNAPSHOT_TAB, METRC_SNAPSHOT_HEADERS).forEach(function (r) {
+      if (!r.key || !r.name) return;
+      people[r.key] = { permit: r.permit, name: r.name,
+                        licenses: r.licenses ? r.licenses.split(/\s+/) : [],
+                        start: r.start, end: r.end };
     });
-    return { at: meta.at, listed: listed };
+    if (!Object.keys(people).length) return { state: 'stale', at: meta.at };
+    return { state: 'fresh', at: meta.at, people: people };
   } catch (e) {
-    return null;
+    return { state: 'stale', at: '' };
   }
+}
+
+/**
+ * ?action=metrc_licenses (deploy-secret, read-only) — which store each license looks like, from the
+ * METRC copy. Per license: how many are listed, and the home stores of ACTIVE roster people listed
+ * on that license ONLY (people on several — the company-wide six — say nothing about which store a
+ * license is). Counts only; no name or permit number leaves this. It is the evidence for
+ * METRC_LICENSE_STORE, never a substitute for it.
+ */
+function metrcLicenses_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var snap = metrcSnapshot_();
+  if (snap.state !== 'fresh') return { ok: false, error: 'no fresh METRC copy (' + snap.state + ') — run metrc_permit_sync with confirm=yes first' };
+  var byPermit = Object.create(null);
+  rosterJoin_().rows.forEach(function (r) {
+    var pk = metrcPermitKey_(r.permit_number);
+    if (pk && !r.retired) byPermit[pk] = r;
+  });
+  var out = {};
+  metrcCreds_().licenses.forEach(function (l) {
+    out[l] = { mapped_to: METRC_LICENSE_STORE[l] || null, listed: 0, only_here_by_store: {} };
+  });
+  Object.keys(snap.people).forEach(function (k) {
+    var m = snap.people[k];
+    m.licenses.forEach(function (l) { if (out[l]) out[l].listed++; });
+    if (m.licenses.length !== 1 || !out[m.licenses[0]]) return;
+    var r = byPermit[metrcPermitKey_(m.permit)];
+    var s = r ? (r.store || '(no store)') : '(not on the active roster)';
+    var o = out[m.licenses[0]].only_here_by_store;
+    o[s] = (o[s] || 0) + 1;
+  });
+  return { ok: true, checked_at: snap.at, licenses: out };
+}
+
+/* Store labels for a set of licenses, for a person a human has to go and find. */
+function metrcLicenseLabel_(licenses) {
+  return (licenses || []).map(function (l) {
+    var s = METRC_LICENSE_STORE[l];
+    return s ? l + ' (' + s + ')' : l;
+  }).join(', ');
+}
+
+/**
+ * PURE: everything the snapshot says about the roster. `rows` is rosterJoin_().rows, `people` the
+ * snapshot's people. Returns
+ *   listed       { employee_id: true|false } for every row holding a permit number, or matched
+ *                by name — true = on at least one of our licenses
+ *   retired      metrcRetiredListed_'s answer
+ *   unknown      listed people no roster row (active or retired) answers to, by permit or name
+ *   permit       { employee_id: metrcPerson } — an ACTIVE row with no number, exactly one free
+ *                listed person answering to the name, and nobody else on the roster answering
+ *                to that person
+ *   spelling     [{ row, metrc, proposed }] — active rows matched on permit whose legal name
+ *                METRC spells differently
+ */
+function metrcRosterView_(rows, people) {
+  rows = rows || []; people = people || {};
+  var list = Object.keys(people).map(function (k) { return { key: k, p: people[k] }; });
+  var held = Object.create(null);
+  rows.forEach(function (r) { var pk = metrcPermitKey_(r.permit_number); if (pk) held[pk] = true; });
+
+  var out = { listed: {}, retired: metrcRetiredListed_(rows, people), unknown: [], permit: {}, spelling: [] };
+
+  rows.forEach(function (r) {
+    var pk = metrcPermitKey_(r.permit_number);
+    if (pk) out.listed[r.employee_id] = !!people[pk];
+  });
+
+  // Permit proposals: active, no number, one free listed person by name, and unshared.
+  var tent = [];
+  rows.forEach(function (r) {
+    if (r.retired || metrcPermitKey_(r.permit_number)) return;
+    var c = list.filter(function (x) {
+      return !held[x.key] && metrcPermitKey_(x.p.permit) && samePerson_(r.name, x.p.name);
+    });
+    if (c.length === 1) tent.push({ r: r, x: c[0] });
+  });
+  tent.forEach(function (t) {
+    var rivals = rows.filter(function (o) { return o !== t.r && samePerson_(o.name, t.x.p.name); });
+    if (rivals.length) return;
+    out.permit[t.r.employee_id] = t.x.p;
+    out.listed[t.r.employee_id] = true;
+  });
+
+  // Nobody on the roster answers to them — not by permit, not by name.
+  list.forEach(function (x) {
+    if (held[x.key]) return;
+    for (var i = 0; i < rows.length; i++) if (samePerson_(rows[i].name, x.p.name)) return;
+    out.unknown.push(x.p);
+  });
+
+  // Legal spelling. METRC wins on spelling, never on capitalization, and a middle name METRC
+  // carries that the roster does not is not a disagreement.
+  rows.forEach(function (r) {
+    if (r.retired) return;
+    var pk = metrcPermitKey_(r.permit_number);
+    var m = pk && people[pk];
+    if (!m) return;
+    var proposed = metrcSpelling_(m.name, r.name);
+    if (proposed && normSpace_(proposed).toLowerCase() !== normSpace_(r.name).toLowerCase()) {
+      out.spelling.push({ row: r, metrc: m, proposed: proposed });
+    }
+  });
+  return out;
+}
+
+/* METRC's spelling in the roster's shape: middle names dropped when the roster carries none, and
+   an ALL-CAPS or all-lowercase name title-cased (METRC wins on spelling, not capitalization). */
+function metrcSpelling_(metrcName, crewName) {
+  var m = normSpace_(metrcName).split(' ').filter(Boolean);
+  var c = normSpace_(crewName).split(' ').filter(Boolean);
+  if (!m.length) return '';
+  if (c.length === 2 && m.length > 2) m = [m[0], m[m.length - 1]];
+  var s = m.join(' ');
+  if (s === s.toUpperCase() || s === s.toLowerCase()) {
+    s = s.toLowerCase().replace(/(^|[\s\-'])([a-z])/g, function (_, a, b) { return a + b.toUpperCase(); });
+  }
+  return s;
 }
 
 /**
@@ -2498,7 +2646,15 @@ function metrcPermitSync_(p) {
     if (write && !canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
     by = 'metrc-sync (' + String(auth.user || '') + ')';
   }
-  return metrcPermitSyncRun_(write, by);
+  /* A confirmed run refreshes the METRC copy too, so the queue can be brought up to date by hand
+     instead of waiting for 5am. A preview writes nothing, the copy included. */
+  var keep = write ? {} : null;
+  var out = metrcPermitSyncRun_(write, by, keep);
+  if (keep && keep.people) {
+    try { out.snapshot_people = recordMetrcSnapshot_(keep.people); }
+    catch (e) { out.snapshot_error = String((e && e.message) || e); }
+  }
+  return out;
 }
 
 /* The 5am run, called from nightlyDutchieScan. IT NEVER THROWS and it returns and records COUNTS
@@ -2511,8 +2667,8 @@ function nightlyMetrcPermitSync_() {
     var r = metrcPermitSyncRun_(true, 'metrc-sync (nightly)', keep) || {};
     note = { ok: !!r.ok };
     if (keep.people) {
-      try { note.retired_still_listed = recordMetrcRetiredAccess_(keep.people); }
-      catch (eA) { note.retired_access_error = String((eA && eA.message) || eA); }
+      try { note.snapshot_people = recordMetrcSnapshot_(keep.people); }
+      catch (eA) { note.snapshot_error = String((eA && eA.message) || eA); }
     }
     if (r.skipped) note.skipped = r.skipped;
     if (r.error) note.error = r.error;
@@ -2652,32 +2808,55 @@ function reviewItems_(joined) {
     }
   }
 
-  // ── 2. Permits — the compliance half.
-  /* Former staff: the nightly METRC check decides (see metrcAccessSnapshot_). Read lazily — only
-     a retired row needs it. undefined = not read yet, null = no fresh check to trust. */
-  var metrcSnap;
+  // ── 2. METRC — everything it says, from the nightly copy (see recordMetrcSnapshot_).
+  var snap = metrcSnapshot_();
+  var mv = snap.state === 'fresh' ? metrcRosterView_(rows, snap.people) : null;
+  if (mv) {
+    var checked = ' (METRC, checked ' + String(snap.at).slice(0, 10) + ')';
+    mv.retired.forEach(function (h) {
+      var n = h.licenses;
+      add('retired_with_access', byId[h.employee_id] || h, 'metrc_license',
+          'listed on ' + n + ' METRC license' + (n === 1 ? '' : 's'), 'revoke', 'METRC',
+          'Retired on the roster, but METRC still lists them on ' + n + ' of our license' +
+          (n === 1 ? '' : 's') + checked + '. Remove them in METRC.', 'high');
+    });
+    mv.unknown.forEach(function (m) {
+      var k = metrcPermitKey_(m.permit) || nameToKey_(m.name);
+      add('metrc_unknown', { employee_id: 'metrc:' + k, name: m.name }, 'metrc_license',
+          'listed on ' + metrcLicenseLabel_(m.licenses), 'remove or add to the roster', 'METRC',
+          'Listed on our METRC license ' + metrcLicenseLabel_(m.licenses) + checked + ', but nobody on ' +
+          'the roster, current or former, has that permit or that name. If they do not work here, ' +
+          'remove them in METRC; if they do, add them to the roster.', 'high');
+    });
+    mv.spelling.forEach(function (s) {
+      add('name_spelling', s.row, 'full_name', s.row.name, s.proposed, 'METRC',
+          'METRC spells this legal name "' + s.proposed + '"' + checked + '. METRC is the authority ' +
+          'on legal spelling; payroll and METRC match on this name.', 'warn');
+    });
+  } else if (snap.state === 'stale') {
+    add('metrc_unchecked', { employee_id: 'metrc', name: 'METRC' }, 'checked_at', snap.at || 'never',
+        'check METRC', 'METRC',
+        'METRC has not been read successfully ' + (snap.at ? 'since ' + String(snap.at).slice(0, 10) : 'yet') +
+        ', so former staff still on our licenses, people on our licenses who are not on the roster, ' +
+        'and permit numbers are NOT being checked. ?action=metrc_health says why.', 'high');
+  }
+
+  // ── 2b. Permits — the compliance half.
   rows.forEach(function (r) {
-    if (r.retired) {
-      if (metrcSnap === undefined) metrcSnap = metrcAccessSnapshot_();
-      if (metrcSnap) {
-        var n = metrcSnap.listed[r.employee_id];
-        if (n) {
-          add('retired_with_access', r, 'metrc_license', 'listed on ' + n + ' METRC license' + (n === 1 ? '' : 's'),
-              'revoke', 'METRC', 'Retired on the roster, but METRC still lists them on ' + n + ' of our license' +
-              (n === 1 ? '' : 's') + ' (checked ' + String(metrcSnap.at).slice(0, 10) + '). Remove them in METRC.', 'high');
-        }
-      } else if (r.permit_number && r.permit_status &&
-          ['active', 'valid'].indexOf(String(r.permit_status).toLowerCase()) >= 0) {
-        add('retired_with_access', r, 'permit_status', 'retired staff, permit still ' + r.permit_status,
-            'revoke', 'METRC', 'Retired on the roster with a permit marked ' + r.permit_status + ' on file. ' +
-            'METRC has not been checked in the last 3 days, so this may be out of date — ' +
-            'check whether they are still on one of our licenses.', 'high');
-      }
-      return;
-    }
+    if (r.retired) return;
     if (!r.permit_number) {
+      var found = mv && mv.permit[r.employee_id];
+      if (found) {
+        add('metrc_permit', r, 'permit_number', '', found.permit, 'METRC',
+            'No permit number on file. METRC lists exactly one "' + found.name + '" on our license ' +
+            metrcLicenseLabel_(found.licenses) + ', permit ' + found.permit +
+            (found.end ? ', expiring ' + found.end : '') + '. Accepting records that number' +
+            (found.end ? ' and date' : '') + '.', 'high');
+        return;
+      }
       add('missing_permit', r, 'permit_number', '', 'needs a permit on file', 'METRC',
-          'Active staff with no OLCC worker permit recorded.', 'high');
+          'Active staff with no OLCC worker permit recorded' +
+          (mv ? ', and nobody on our METRC licenses answers to this name.' : '.'), 'high');
     } else if (r.permit_days_left != null && r.permit_days_left < 0) {
       add('permit_expired', r, 'permit_expires', r.permit_expires, 'renew', 'METRC',
           'Permit expired ' + (-r.permit_days_left) + ' days ago.', 'high');
@@ -2742,6 +2921,7 @@ function reviewItems_(joined) {
     var row  = live || { employee_id: rep.employee_id, name: rep.name, retired: false };
     var key  = decisionKey_(rep.kind, rep.employee_id, rep.field, rep.proposed_value);
     if (decided[key]) return;
+    for (var q = 0; q < items.length; q++) if (items[q].id === key) return;   // METRC raised it already
     var current = liveValueFor_(live, rep.field);
     if (reportedItemSatisfied_(current, rep.proposed_value)) return;
     items.push({
@@ -3091,6 +3271,38 @@ function resolveReview_(p) {
         dutchie_employee_id: pend.dutchie_employee_id || '', status: 'active'
       });
       applied = 'added ' + pend.full_name + ' to the roster';
+    } else if (item.kind === 'metrc_permit') {
+      /* The permit number METRC lists for this person, into Crew's own attribute row. Read the
+         live row and merge onto it (writeAttrs_ replaces the whole row); refuse if somebody filled
+         a number in the meantime rather than overwrite it. The expiry goes in only where empty —
+         the nightly sync owns it from here. */
+      var snapNow = metrcSnapshot_();
+      var who = snapNow.state === 'fresh' ? metrcRosterView_(rosterJoin_().rows, snapNow.people).permit[item.employee_id] : null;
+      if (!who || who.permit !== item.proposed_value) {
+        return { ok: false, error: 'METRC no longer lists exactly one match for this person — nothing written.' };
+      }
+      var cur = readAttrs_()[item.employee_id] || {};
+      if (String(cur.permit_number || '').trim()) {
+        return { ok: false, error: 'a permit number is already on file — nothing written.' };
+      }
+      var recP = {};
+      Object.keys(cur).forEach(function (k) { recP[k] = cur[k]; });
+      if (!cur.employee_id) {
+        var idRow = null;
+        (GXCore.getEmployees() || []).forEach(function (e) {
+          if (String(e.employee_id || '').trim() === item.employee_id) idRow = e;
+        });
+        if (!idRow) return { ok: false, error: 'unknown employee_id: ' + item.employee_id };
+        recP.name_key = nameToKey_(idRow.full_name);
+        recP.full_name = String(idRow.full_name || '');
+      }
+      recP.employee_id = item.employee_id;
+      recP.permit_number = who.permit;
+      if (!normDate_(cur.permit_expires) && who.end) recP.permit_expires = who.end;
+      recP.updated_at = new Date().toISOString();
+      recP.updated_by = 'metrc (' + String(auth.user || '') + ')';
+      writeAttrs_(recP);
+      applied = 'permit ' + who.permit + ' recorded from METRC';
     } else {
       // Compliance items (renew a permit, revoke access, fill a gap) are actioned OUTSIDE this
       // app. Accepting records that it was handled; it does not pretend to have done it.
@@ -3395,8 +3607,8 @@ function rowFlags_(r) {
   if (!r.birthday)                 f.push('birthday');
   if (!r.permit_number)            f.push('permit');
   else if (r.permit_days_left != null && r.permit_days_left < 0) f.push('permit_expired');
-  if (r.permit_status && ['active', 'valid'].indexOf(String(r.permit_status).toLowerCase()) < 0)
-    f.push('permit_status');
+  // A permit number METRC does not list on any of our licenses (null = not checked: no flag).
+  if (r.metrc_listed === false) f.push('permit_status');
   return f;
 }
 
@@ -3541,17 +3753,28 @@ function rosterJoin_() {
          and no warning attached, and the queue reported all clear. normDate_ has tolerated a
          real Date since it was written; it just was not being called here. */
       permit_expires: normDate_(a.permit_expires),
-      permit_status: a.permit_status || '',
+      permit_status: '',                  // METRC's answer, filled in below
       permit_days_left: normDate_(a.permit_expires)
         ? daysBetween_(today, dateFromIso_(normDate_(a.permit_expires))) : null,
-      permit_active: a.permit_status
-        ? (['active', 'valid'].indexOf(String(a.permit_status).toLowerCase()) >= 0 ? 'Yes' : 'No')
-        : '',
+      permit_active: '',                  // likewise
       updated_at: a.updated_at || '', updated_by: a.updated_by || ''
     };
-  }).map(function (r) { r.flags = rowFlags_(r); r.needs_setup = needsSetup_(r, today); return r; })
-    .filter(function (r) { return !r.merged; })
-    .sort(function (x, y) { return x.name.localeCompare(y.name); });
+  }).filter(function (r) { return !r.merged; });
+
+  /* PERMIT STATUS IS METRC'S ANSWER, from the nightly copy: listed on at least one of our licenses,
+     or not. The `permit_status` attribute column came from the old spreadsheet import, was never
+     refreshed, and is no longer read. Three states: true / false / null (no fresh METRC copy, or
+     no permit to look up) — and null renders as nothing rather than as a guess. */
+  var permitSnap = metrcSnapshot_();
+  var permitView = permitSnap.state === 'fresh' ? metrcRosterView_(rows, permitSnap.people) : null;
+  rows.forEach(function (r) {
+    var l = permitView && (r.employee_id in permitView.listed) ? permitView.listed[r.employee_id] : null;
+    r.metrc_listed = l;
+    r.permit_status = l === true ? 'Listed' : l === false ? 'Not on our licenses' : '';
+    r.permit_active = l === true ? 'Yes' : l === false ? 'No' : '';
+    r.flags = rowFlags_(r); r.needs_setup = needsSetup_(r, today);
+  });
+  rows.sort(function (x, y) { return x.name.localeCompare(y.name); });
 
   /* employee_id -> full_name for EVERY identity row, including retired and merged — unlike `rows`
      above, which drops merged tombstones. getEomHistory_ needs this to label a reign held by
@@ -3581,7 +3804,7 @@ function getRoster_(p) {
 
   var out = {
     ok: true, user: auth.user, role: auth.role, can_edit: canEdit_(auth),
-    shirt_sizes: SHIRT_SIZES, role_titles: ROLE_TITLES, hr_sheet_url: HR_SHEET_URL,
+    shirt_sizes: SHIRT_SIZES, role_titles: ROLE_TITLES,
     include_retired: includeRetired, retired_total: retiredCount, cached: joined.cached,
     rows: joined.rows.filter(function (r) { return includeRetired || !r.retired; }),
     identity_source: {
@@ -3934,8 +4157,8 @@ function saveRosterAttrs_(p) {
     permit_number:    p.permit_number  == null ? (existing.permit_number  || '') : String(p.permit_number).trim(),
     permit_granted:   existing.permit_granted || '',
     permit_expires:   p.permit_expires == null ? (existing.permit_expires || '') : (normDate_(String(p.permit_expires).trim()) || ''),
-    permit_status:    p.permit_expires != null && String(p.permit_expires).trim() && !existing.permit_status
-                        ? 'Active' : (existing.permit_status || ''),
+    // Carried, never set: status is METRC's answer now (rosterJoin_), not a stored column.
+    permit_status:    existing.permit_status || '',
     celebrations_opt_out: p.celebrations_opt_out == null
                         ? (existing.celebrations_opt_out || '')
                         : (isTruthyFlag_(p.celebrations_opt_out) ? 'yes' : ''),
@@ -4366,10 +4589,12 @@ var KIND_LABEL_ = { duplicate: 'Possible duplicate', retired_with_access: 'Retir
   missing_permit: 'No OLCC permit on file', permit_expired: 'Permit expired',
   permit_expiring: 'Permit expiring', missing_field: 'Missing data',
   name_spelling: 'Name spelling differs', role: 'Role differs',
-  new_hire: 'In Dutchie, not on the roster' };
+  new_hire: 'In Dutchie, not on the roster',
+  metrc_unknown: 'On our METRC license, not on the roster',
+  metrc_permit: 'Permit number found in METRC', metrc_unchecked: 'METRC not checked' };
 var FLAG_LABEL_ = { name: 'name', employee_number: 'employee number', hire_date: 'hire date',
   store: 'store', role: 'role', no_account: 'GX account', wage: 'wage', birthday: 'birthday',
-  permit: 'OLCC permit', permit_expired: 'expired permit', permit_status: 'permit status' };
+  permit: 'OLCC permit', permit_expired: 'expired permit', permit_status: 'not on our METRC licenses' };
 
 /** Nickname + surname, the way every surface writes a person. Mirrors displayName() in crew.js. */
 function displayNameOf_(r) {
@@ -5050,24 +5275,14 @@ function installNightlyScanUnsafe_(p) {
              'from the Apps Script editor instead.' };
 }
 
-// ─── HR import (staff sheet + METRC permits → Core identity + Crew attributes) ───
+// ─── Name matching (Dutchie / METRC / the roster) ───────────────────────────────
 /*
- * One reconciled payload in, two destinations out:
- *   • GX Core identity — full_name, home_store, role_title, status, hire_date
- *   • Crew attributes  — employee_number, wage, shirt_size, birthday, permit_*
- *
- * Two things this must get right, both learned the hard way:
- *
- * 1. gxWrite_ REPLACES the whole row. It rebuilds every column from the record, so any field
- *    absent from the payload is written as ''. A naive partial upsert silently wipes
- *    dutchie_employee_id and user_id — the very columns that let SPIFF and Leaderboard join.
- *    So we read the existing row and merge onto it, and never overwrite a populated value
- *    with an empty one.
- *
- * 2. Names drift between sources. The registry was seeded from Dutchie ("Skyler Poteet"); the
- *    HR sheet says "Poteet, Skylar". Keying purely on nameKey would append a SECOND row for the
- *    same person. So we match against the existing registry first — exact key, then fuzzy — and
- *    reuse whatever employee_id is already there.
+ * Names drift between sources. The registry was seeded from Dutchie ("Skyler Poteet"); METRC or
+ * the old HR sheet says "Poteet, Skylar". Keying purely on nameKey would append a SECOND row for
+ * the same person, so every matcher here (the nightly Dutchie scan, the METRC checks) tries the
+ * existing registry first — exact key, then a merge alias, then samePerson_ — and reuses whatever
+ * employee_id is already there. The spreadsheet import that this section was written for is gone
+ * (2026-10-19); the matching it established is what the rest still uses.
  */
 
 /** Nicknames seen across Dutchie / METRC / the HR sheet. Explicit and reviewable, not guessed. */
@@ -11777,111 +11992,6 @@ function incentiveGoalsPrinted_(p, body) {
   var s = { ok: true, dry_run: !confirm, periods: out, written: wrote };
   if (!confirm) s.note = 'nothing written — re-send with confirm=yes';
   return s;
-}
-
-function hrImport_(p, body) {
-  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
-  var list = (body && body.employees) || [];
-  if (!list.length) return { ok: false, error: 'no employees in payload' };
-  var dry = String(p.confirm || '') !== 'yes';
-  var overwrite = String(p.mode || '') === 'overwrite';
-
-  var existing = [];
-  try { existing = GXCore.getEmployees() || []; }
-  catch (e) { return { ok: false, error: 'could not read GX Core identity: ' + String((e && e.message) || e) }; }
-
-  var attrs = readAttrs_();
-  var aliases = readAliases_();
-  var idRows = [], attrRows = [], renamed = [], created = [], viaAlias = [], skippedRoles = [];
-
-  list.forEach(function (r) {
-    var full = String(r.full_name || '').trim();
-    if (!full) return;
-    var key = nameToKey_(full);
-
-    var prior = null;
-    // A previous merge wins over everything: if this name was merged away, it resolves to the
-    // person it was merged into, and the duplicate is never recreated.
-    var aliasTarget = aliases[key];
-    if (aliasTarget) {
-      for (var z = 0; z < existing.length; z++) {
-        if (String(existing[z].employee_id || '').trim() === aliasTarget) { prior = existing[z]; break; }
-      }
-      if (prior) viaAlias.push(full + '  →  ' + prior.full_name);
-    }
-    if (!prior) {
-      for (var i = 0; i < existing.length; i++) {
-        if (String(existing[i].employee_id || '').trim() === key) { prior = existing[i]; break; }
-      }
-    }
-    if (!prior) {
-      for (var j = 0; j < existing.length; j++) {
-        if (samePerson_(full, existing[j].full_name)) { prior = existing[j]; break; }
-      }
-      if (prior) renamed.push(prior.full_name + '  →  ' + full + '  (kept id ' + prior.employee_id + ')');
-    }
-    if (!prior) created.push(full);
-
-    var id = prior ? String(prior.employee_id).trim() : key;
-
-    // Merge onto the existing row: never blank a populated Core field with an empty payload value.
-    var merged = {};
-    if (prior) Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
-    merged.employee_id = id;
-    ['full_name', 'home_store', 'role_title', 'status', 'hire_date', 'employee_number'].forEach(function (k) {
-      var v = String(r[k] == null ? '' : r[k]).trim();
-      /* A title the sheet spells its own way maps onto one of the four; one that maps to nothing
-         is skipped, not written. The sheet is history and cannot widen the vocabulary. */
-      if (k === 'role_title' && v !== '') {
-        v = normRole_(v);
-        if (!v) { skippedRoles.push(full + ': ' + String(r[k]).trim()); return; }
-      }
-      if (v === '') return;
-      // FILL mode: never overturn a value the roster already holds. Crew is the system of
-      // record now, so an import can complete it but not contradict it.
-      if (!overwrite && String(merged[k] || '').trim() !== '') return;
-      merged[k] = v;
-    });
-    idRows.push(merged);
-
-    var was = attrs[id] || {};
-    var a = { employee_id: id, name_key: key, full_name: full };
-    attrFields_().forEach(function (k) {
-      var v = String(r[k] == null ? '' : r[k]).trim();
-      if (k === 'birthday') v = normBirthday_(v);
-      if (k === 'shirt_size') v = normShirt_(v) || (was[k] || '');
-      var current = String(was[k] || '').trim();
-      a[k] = (!overwrite && current !== '') ? current : (v !== '' ? v : current);
-    });
-    a.updated_at = new Date().toISOString();
-    a.updated_by = 'hr-import';
-    attrRows.push(a);
-  });
-
-  var summary = {
-    ok: true, mode: dry ? 'preview' : 'commit',
-    write_mode: overwrite ? 'OVERWRITE (contradicts the roster)' : 'fill-only (never overturns a held value)',
-    incoming: list.length,
-    matched_existing: idRows.length - created.length,
-    would_create: created.length, created_names: created.slice(0, 40),
-    matched_despite_name_drift: renamed, matched_via_merge_alias: viaAlias,
-    // Named, never silent: a title the sheet holds that is not one of the four was dropped,
-    // and somebody has to decide which of the four that person actually is.
-    skipped_unknown_roles: skippedRoles,
-    active: idRows.filter(function (r) { return String(r.status).toLowerCase() !== 'retired'; }).length,
-    retired: idRows.filter(function (r) { return String(r.status).toLowerCase() === 'retired'; }).length,
-    with_permit: attrRows.filter(function (r) { return r.permit_number; }).length,
-    with_wage: attrRows.filter(function (r) { return r.wage; }).length,
-    with_employee_number: attrRows.filter(function (r) { return r.employee_number; }).length
-  };
-  if (dry) { summary.note = 'DRY RUN — nothing written. Repeat with confirm=yes.'; return summary; }
-
-  GXCore.gxUpsertEmployees(idRows);
-  attrRows.forEach(writeAttrs_);
-  bustRosterCache_();
-  summary.identity_written = idRows.length;
-  summary.attributes_written = attrRows.length;
-  return summary;
 }
 
 // ─── Identity seeding (Crew → GX Core) ──────────────────────────────────────────
