@@ -332,8 +332,10 @@ says which are missing.
   - **`metrc_permit`** — an active person with no number, exactly one free listed person answering
     to the name, and no rival on the roster. **Accepting is the only write**: `resolveReview_`
     read-merge-writes `permit_number` (and `permit_expires` only where empty).
-  - **`name_spelling`** — METRC's spelling (`metrcSpelling_`: a middle name the roster lacks is
-    dropped, ALL CAPS is title-cased).
+  - **`name_spelling`** — only when a word of the roster's legal name is missing from METRC's or
+    spelled differently (`metrcNameCovers_`). **METRC carrying MORE — a middle name, a second
+    surname — is not a disagreement**; never propose dropping words (it once proposed "Rene
+    Villanueva" → "Rene Lopez"). The proposal is METRC's whole name, capitalization fixed per word.
   - **The roster's permit status** — `metrc_listed` true/false/null, rendered "Listed" / "Not on our
     licenses" / nothing. **The `permit_status` attribute column (from the old import) is no longer
     read by anything**; it stays in `ATTR_HEADERS` (append-only).
@@ -354,9 +356,11 @@ says which are missing.
   the spreadsheet imports. An item METRC already raised is not shown twice.
 - Accepting a `name_spelling` item writes `full_name` **only**; `preferred_name` is a separate edit.
 - **METRC does not name a store and the registry has no license column.** `METRC_LICENSE_STORE` in
-  `Code.gs` is the literal table; `?action=metrc_licenses` (deploy-secret, counts only) shows, per
-  license, the home stores of active staff listed on that license ONLY — the evidence for the
-  table. Six staff with company-wide access sit on all six.
+  `Code.gs` is the literal table, all six mapped (2026-10-19): 050-12997 commercial · 050-13000
+  river-rd · 050-13003 bend · 050-13006 hillsboro · 050-13009 center · 050-16892 portland-rd.
+  `?action=metrc_licenses` (deploy-secret, counts only) is the evidence — the home stores of active
+  staff listed on each license ONLY; re-check it if a store ever changes license. Six staff with
+  company-wide access sit on all six.
 
 ## Nightly Dutchie scan — it REPORTS, it never writes
 `nightlyDutchieScan()` runs at **05:00 store time**, compares Dutchie's active people with the GX

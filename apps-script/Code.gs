@@ -2218,7 +2218,12 @@ var METRC_SNAPSHOT_FRESH_MS = 3 * 24 * 3600 * 1000;
    has no license column, so this is a literal table — a store that moves license should make it
    WRONG AND VISIBLE (?action=metrc_licenses shows who is on each), not silently different. A
    license missing here is labeled by its number. */
-var METRC_LICENSE_STORE = { '050-16892': 'portland-rd' };
+/* Read off ?action=metrc_licenses on 2026-10-19: each license had six active staff listed on it
+   alone, every one of them from a single store. */
+var METRC_LICENSE_STORE = {
+  '050-12997': 'commercial', '050-13000': 'river-rd', '050-13003': 'bend',
+  '050-13006': 'hillsboro', '050-13009': 'center', '050-16892': 'portland-rd'
+};
 
 /* Write the copy. Tab first, then the timestamp, so a failed tab write leaves the old time and the
    copy ages out rather than looking fresh over a half-written tab. A copy identical to the one on
@@ -2364,33 +2369,40 @@ function metrcRosterView_(rows, people) {
     out.unknown.push(x.p);
   });
 
-  // Legal spelling. METRC wins on spelling, never on capitalization, and a middle name METRC
-  // carries that the roster does not is not a disagreement.
+  // Legal spelling. METRC wins on spelling, never on capitalization. A name METRC carries MORE of
+  // — a middle name, or a second surname ("Rene Villanueva Lopez" for the roster's "Rene
+  // Villanueva", live on 2026-10-19) — is not a disagreement: every word the roster has is there,
+  // in order. Only a word that is missing or spelled differently raises the question, and the
+  // proposal is METRC's whole name, never a guess at which words to drop.
   rows.forEach(function (r) {
     if (r.retired) return;
     var pk = metrcPermitKey_(r.permit_number);
     var m = pk && people[pk];
     if (!m) return;
-    var proposed = metrcSpelling_(m.name, r.name);
-    if (proposed && normSpace_(proposed).toLowerCase() !== normSpace_(r.name).toLowerCase()) {
-      out.spelling.push({ row: r, metrc: m, proposed: proposed });
-    }
+    if (metrcNameCovers_(m.name, r.name)) return;
+    var proposed = metrcSpelling_(m.name);
+    if (proposed) out.spelling.push({ row: r, metrc: m, proposed: proposed });
   });
   return out;
 }
 
-/* METRC's spelling in the roster's shape: middle names dropped when the roster carries none, and
-   an ALL-CAPS or all-lowercase name title-cased (METRC wins on spelling, not capitalization). */
-function metrcSpelling_(metrcName, crewName) {
-  var m = normSpace_(metrcName).split(' ').filter(Boolean);
-  var c = normSpace_(crewName).split(' ').filter(Boolean);
-  if (!m.length) return '';
-  if (c.length === 2 && m.length > 2) m = [m[0], m[m.length - 1]];
-  var s = m.join(' ');
-  if (s === s.toUpperCase() || s === s.toLowerCase()) {
-    s = s.toLowerCase().replace(/(^|[\s\-'])([a-z])/g, function (_, a, b) { return a + b.toUpperCase(); });
-  }
-  return s;
+/* Does METRC's name contain every word of the roster's, in order, ignoring case and punctuation? */
+function metrcNameCovers_(metrcName, crewName) {
+  var words = function (s) { return normSpace_(String(s || '').toLowerCase().replace(/[.,]/g, ' ')).split(' ').filter(Boolean); };
+  var m = words(metrcName), c = words(crewName);
+  if (!c.length) return false;
+  var j = 0;
+  for (var i = 0; i < m.length && j < c.length; i++) if (m[i] === c[j]) j++;
+  return j === c.length;
+}
+
+/* METRC's spelling with the capitalization fixed word by word: a word typed ALL CAPS or all
+   lowercase is title-cased; a word with its own mixed case ("McDonald") is left alone. */
+function metrcSpelling_(metrcName) {
+  return normSpace_(metrcName).split(' ').filter(Boolean).map(function (w) {
+    if (w.length < 2 || (w !== w.toUpperCase() && w !== w.toLowerCase())) return w;
+    return w.toLowerCase().replace(/(^|[\-'])([a-z])/g, function (_, a, b) { return a + b.toUpperCase(); });
+  }).join(' ');
 }
 
 /**
