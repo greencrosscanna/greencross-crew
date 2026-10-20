@@ -75,7 +75,7 @@ const MUTATIONS = [
   ['assignNumbers_ writes its rows around writeAttrs_',   (s) => inFn(s, 'assignNumbers_', "    writeAttrs_(rec);", "    " + BYPASS + "(rec);")],
   ['saveRosterAttrs_ writes its row around writeAttrs_',  (s) => inFn(s, 'saveRosterAttrs_', "  writeAttrs_(rec);", "  " + BYPASS + "(rec);")],
   ['mergeEmployees_ writes its row around writeAttrs_',   (s) => inFn(s, 'mergeEmployees_', "  writeAttrs_(merged);", "  " + BYPASS + "(merged);")],
-  ['hrImport_ writes its rows around writeAttrs_',        (s) => inFn(s, 'hrImport_', "  attrRows.forEach(writeAttrs_);", "  attrRows.forEach(" + BYPASS + ");")],
+  ['accepting a METRC permit writes around writeAttrs_',  (s) => inFn(s, 'resolveReview_', "      writeAttrs_(recP);", "      " + BYPASS + "(recP);")],
   ['the Metrc sync writes its rows around writeAttrs_',   (s) => inFn(s, 'metrcPermitSyncRun_', "    try { writeAttrs_(rec); out.written++; }", "    try { " + BYPASS + "(rec); out.written++; }")],
   ['a seventh writer appears: the roster read tidies the tab',
    (s) => inFn(s, 'getRoster_', "  var joined = rosterJoin_();", "  var joined = rosterJoin_();\n  crewSheet_().getRange(1, 1).setValue('employee_id');")],

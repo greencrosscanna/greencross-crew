@@ -253,10 +253,11 @@ bump `?v=N` on the `crew.js` tag, `./gxengine.sh --deploy` for the engine, then 
 - GX Core library cuts stay PR-gated regardless.
 
 ## System of record — Crew, not the spreadsheet (decided 2026-08-18)
-`GreenCross_Staff.xlsx` built the initial roster and is now **history**. **GX Crew, backed by the GX
-Core `employees` registry, is the point of truth for people data.** `hr_import` defaults to
-**fill-only** — it writes a field only where the current value is empty; overturning a held value
-needs an explicit `mode=overwrite`. A superseded source must not be able to contradict the record.
+`GreenCross_Staff.xlsx` built the initial roster and is now **obsolete** (Sky, 2026-10-19). **GX
+Crew, backed by the GX Core `employees` registry, is the point of truth for people data**, and
+METRC is read directly. **The `hr_import` route that loaded the sheet and the METRC exports is gone
+and must not come back** — a superseded source must not be able to contradict the record. Roster
+changes are made in the app, one person at a time.
 
 - **`employee_number` is issued, never typed** — `assign_numbers` allocates `max(ever seen) + 1`,
   counting retired and merged rows, so a number is never reused. `00` is reserved for the owner,
@@ -318,17 +319,29 @@ says which are missing.
     to a script property that `metrc_health` reads back as `last_nightly_permit_sync`.
   - The route is a **preview unless `confirm=yes`**; a write needs the deploy secret or an
     edit-grade session.
-- **"Retired, still has access" comes from METRC, not from `permit_status`.** A valid OLCC permit
-  is the person's own and outlives their job here; it says nothing about OUR licenses. The 5am run
-  (on a complete read only) writes which retired people are still listed to Crew's own
-  `crew_metrc_access` tab, replaced wholesale, and the time + a count to
-  `CREW_METRC_ACCESS_CHECKED` — never names in a property (ids are name slugs). The review queue
-  and Monday email read that through `metrcAccessSnapshot_`; with no check in 3 days they fall
-  back to `permit_status` and say so. `metrcRetiredListed_` is the one matcher for this and for
-  `metrc_access`.
-- METRC is the authority for `permit_number` (the export's **License Number**), `permit_granted`,
-  `permit_expires`, `permit_status`, and the **legal first + last name spelling**. Only
-  `permit_expires` is synced automatically.
+- **The METRC copy is what everything else reads.** Every complete, non-empty read (the 5am run,
+  or `metrc_permit_sync` with `confirm=yes` — never a preview) copies everyone listed into Crew's
+  own `crew_metrc_people` tab (`recordMetrcSnapshot_`, rewritten only when it changed); the time
+  and a count go to `CREW_METRC_SNAPSHOT_AT` — **never names in a property**. `metrcSnapshot_`
+  reads it back as `fresh` / `stale` (connected, but nothing good in 3 days) / `off` (no keys).
+  From that copy and the LIVE roster, `metrcRosterView_` derives, at read time:
+  - **`retired_with_access`** — a former employee still listed. A valid OLCC permit is the person's
+    own and outlives their job here; it says nothing about OUR licenses.
+  - **`metrc_unknown`** — listed on our license, and nobody on the roster (current or former)
+    answers to the permit or the name.
+  - **`metrc_permit`** — an active person with no number, exactly one free listed person answering
+    to the name, and no rival on the roster. **Accepting is the only write**: `resolveReview_`
+    read-merge-writes `permit_number` (and `permit_expires` only where empty).
+  - **`name_spelling`** — METRC's spelling (`metrcSpelling_`: a middle name the roster lacks is
+    dropped, ALL CAPS is title-cased).
+  - **The roster's permit status** — `metrc_listed` true/false/null, rendered "Listed" / "Not on our
+    licenses" / nothing. **The `permit_status` attribute column (from the old import) is no longer
+    read by anything**; it stays in `ATTR_HEADERS` (append-only).
+  - **`stale` raises one `metrc_unchecked` item** and nothing else — no guess from old data.
+  `metrcRetiredListed_` is the one former-staff matcher, shared with `metrc_access`.
+- METRC is the authority for `permit_number`, `permit_granted`, `permit_expires`, and the **legal
+  first + last name spelling**. Only `permit_expires` is written automatically; a permit number or
+  a spelling is a proposal a human accepts.
 - **`hire_date` is NOT on that list. A METRC sync must leave `hire_date` alone** — METRC's *Hired*
   is the date the person was added to that license. It is plausible only for someone on **one**
   license with a non-bulk date, and even then it is a proposal for a human, not a value to write.
@@ -337,19 +350,13 @@ says which are missing.
   `home_store`.
 - **Dutchie is not trustworthy for legal spelling** (an admin can type a nickname there, which the
   identity seed carries into `full_name`). On a Dutchie/METRC name disagreement, **METRC wins**.
-- **Do not route a METRC name ingest through `hr_import`.** `full_name` is in its guarded list, so a
-  correct legal name is *silently skipped* (reported only under `matched_despite_name_drift`);
-  nothing errors. Fill-only **is** right for the permit
-  columns, which are usually empty.
-- A sync must either post `review_report` items (`name_spelling`, which `resolveReview_` applies
-  through `saveIdentity_` and records the rename alias) or write its owned fields explicitly.
-  **`review_report` replaces the whole `crew_reviews` tab wholesale** — a sync must re-post what it
-  did not author.
+- `review_report` (the `crew_reviews` tab, replaced wholesale) is still read; its old posters were
+  the spreadsheet imports. An item METRC already raised is not shown twice.
 - Accepting a `name_spelling` item writes `full_name` **only**; `preferred_name` is a separate edit.
-- **Exports do not name a store and the registry has no license column.** Known: **050-16892 →
-  `portland-rd`**. The other five (050-12997 / 13000 / 13003 / 13006 / 13009) are unmapped; identify
-  one from the people who appear on that license only (six staff with company-wide access sit on
-  all six).
+- **METRC does not name a store and the registry has no license column.** `METRC_LICENSE_STORE` in
+  `Code.gs` is the literal table; `?action=metrc_licenses` (deploy-secret, counts only) shows, per
+  license, the home stores of active staff listed on that license ONLY — the evidence for the
+  table. Six staff with company-wide access sit on all six.
 
 ## Nightly Dutchie scan — it REPORTS, it never writes
 `nightlyDutchieScan()` runs at **05:00 store time**, compares Dutchie's active people with the GX
@@ -360,7 +367,7 @@ Core registry, and parks anyone unmatched in **`crew_pending_hires`**.
 - **The same 5am trigger also runs the METRC permit-date sync, which DOES write** (one field, in
   Crew's own sheet — see the METRC section). "Reports, never writes" is about the Dutchie scan; the
   sync runs after it, never throws, and cannot change what the scan returns.
-- **Matching is `hrImport_`'s ladder** — exact `employee_id`, then a merge alias, then `samePerson_`
+- **Matching is the registry ladder** — exact `employee_id`, then a merge alias, then `samePerson_`
   fuzzy. Do not write a second detector.
 - **A failed Dutchie read changes nothing** — an empty read returns an error, never "no new hires".
 - **Its own tab, deliberately not `crew_reviews`** (`reportConflicts_` replaces that one wholesale).
