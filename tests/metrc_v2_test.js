@@ -577,11 +577,19 @@ console.log('\nThe METRC copy, and everything the queue derives from it');
   ok('…and nothing was written by building the queue', T.writes.every(w => w.employee_id !== 'uma_frey' || !w.permit_number));
 
   // [4] legal spelling
-  eq('METRC\'s spelling is proposed: middle name dropped, ALL CAPS title-cased',
-     items('name_spelling').map(i => [i.employee_id, i.current_value, i.proposed_value]), [['dana_ray', 'Dana Ray', 'Dana Rae']]);
-  eq('casing alone, and a middle name alone, are not disagreements',
-     [C.metrcSpelling_('CASEY LANE', 'Casey Lane'), C.metrcSpelling_('Casey Q Lane', 'Casey Lane'), C.metrcSpelling_("MARY O'NEIL-SMITH", 'Mary Oneil')],
-     ['Casey Lane', 'Casey Lane', "Mary O'Neil-Smith"]);
+  eq('a word METRC spells differently: METRC\'s whole name is proposed, ALL CAPS title-cased',
+     items('name_spelling').map(i => [i.employee_id, i.current_value, i.proposed_value]), [['dana_ray', 'Dana Ray', 'Dana M Rae']]);
+  eq('capitalization is fixed word by word; a word with its own mixed case is left alone',
+     [C.metrcSpelling_('CASEY LANE'), C.metrcSpelling_("MARY O'NEIL-SMITH"), C.metrcSpelling_('Ana Garcia lopez'), C.metrcSpelling_('Ian McDonald')],
+     ['Casey Lane', "Mary O'Neil-Smith", 'Ana Garcia Lopez', 'Ian McDonald']);
+  /* Live, 2026-10-19: METRC's "<first> <surname> <second surname>" against the roster's
+     "<first> <surname>" was proposed as "<first> <second surname>" — the surname dropped. */
+  const extra = (metrcName, crewName) => C.metrcRosterView_(
+    [{ employee_id: 'x', name: crewName, retired: false, permit_number: 'QQ1' }],
+    { QQ1: { permit: 'QQ1', name: metrcName, licenses: ['LIC-A'] } }).spelling.length;
+  eq('more of a name in METRC — a second surname, a middle name, other casing — is not a disagreement',
+     [extra('Ana Garcia lopez', 'Ana Garcia'), extra('Casey Q Lane', 'Casey Lane'), extra('CASEY LANE', 'Casey Lane')], [0, 0, 0]);
+  eq('…but a missing or differently spelled word is', [extra('Ana Lopez', 'Ana Garcia'), extra('Kasey Lane', 'Casey Lane')], [1, 1]);
 
   // [2] the roster's permit status
   const v = C.metrcRosterView_(T.joined.rows, C.metrcSnapshot_().people);
