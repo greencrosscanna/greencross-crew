@@ -242,7 +242,7 @@ const M = (function () {
 /* ── The email ──────────────────────────────────────────────────────────────────────────────────── */
 console.log('\nThe store email says it too');
 {
-  const body = `${H.fnSrc('storeEmailModel_')} ${H.fnSrc('storeEmailHtml_')}
+  const body = `${H.fnSrc('storeEmailModel_')} ${H.fnSrc('storeEmailHtml_')} ${H.fnSrc('storeEmailSpiffHtml_')} ${H.fnSrc('storeEmailSpiffInner_')}
     var CREW_URL = 'https://crew.example/';
     return { model: storeEmailModel_, html: storeEmailHtml_ };`;
   const E = new Function(body)();

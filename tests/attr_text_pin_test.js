@@ -359,6 +359,7 @@ else {
       delete d.timings;
       delete d.snapshot_people;
       if (d.hr_sheet_url === '') delete d.hr_sheet_url;
+      if (typeof d.html === 'string') d.html = d.html.replace(/<!--spiff-->.*?<!--\/spiff-->/g, '');   // the store email's SPIFF section is new since the baseline
       if (Array.isArray(d.rows)) d.rows.forEach((r) => { if (r && r.metrc_listed === null) delete r.metrc_listed; });
       if (d.roster && Array.isArray(d.roster.rows)) d.roster.rows.forEach((r) => { if (r && r.metrc_listed === null) delete r.metrc_listed; });
       if (Array.isArray(d.actions)) d.actions.forEach((a) => { if (a && Array.isArray(a.stages)) a.stages = a.stages.filter((s) => ADDED_STAGES.indexOf(s.stage) < 0); });
