@@ -5032,11 +5032,11 @@ function storeEmailHtml_(model, meta) {
   function dash(v, f) { return (v == null || v === '' || !Number(v)) ? '—' : (f || m0)(v); }
   function pct1(n) { return (Math.round(n * 10) / 10).toFixed(1) + '%'; }
   var R = function (v) { return '<td align="right">' + v + '</td>'; };
-  /* Dollars earned (once earned), then units / goal per program: "Kaprikorn 14 / 20" or "… ✅". */
+  /* Dollars earned (once earned), then units / goal per program: "14 / 20" or "14 / 20 ✅". */
   function spiffCell(r) {
-    var out = dash(r.spiff, m2);
+    var out = dash(r.spiff, m2), many = (r.progs || []).length > 1;   // a brand is named only to tell two programs apart
     (r.progs || []).forEach(function (x) {
-      out += '<div style="font-size:11px;color:#555;white-space:nowrap">' + esc(x.label) + ' ' + x.units + ' / ' + x.target +
+      out += '<div style="font-size:11px;color:#555;white-space:nowrap">' + (many ? esc(x.label) + ' ' : '') + x.units + ' / ' + x.target +
         (x.hit ? ' ✅' : '') + '</div>';
     });
     return out;
