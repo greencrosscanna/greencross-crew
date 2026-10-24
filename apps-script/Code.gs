@@ -4881,6 +4881,17 @@ function storeEmailSetTo_(p) {
   return { ok: true, recipients: good };
 }
 
+/* A person's SPIFF progress, from the programs the incentive screen already matched to them
+   (applySpiffEarnings_ → spiff_programs) — the same SPIFF publication, joined to the right person by
+   the screen's own identity ladder, so the email does not match names a second way. Units and goal
+   are SPIFF's; nothing is recomputed. A closed (imported) period carries none. */
+function storeEmailProgs_(r) {
+  return (r && r.spiff_programs || []).map(function (x) {
+    return { label: String(x.vendor || x.name || ''), units: Number(x.units) || 0, target: Number(x.target) || 0,
+             hit: x.hit === true || x.hit === 'true' };
+  });
+}
+
 /* The rows the email prints, per store. Corporate is not a store (floaters and the owner are booked
    there) and the admin belongs to none, so neither has a table — the same rule as the store view. */
 function storeEmailModel_(d, labelOf) {
@@ -4903,13 +4914,13 @@ function storeEmailModel_(d, labelOf) {
     if (imported) {
       row = { name: nameOf(m), target: m.target, sales: m.sales, pct: pctOf(m.sales, m.target),
               disc: m.discount_pct, aov: m.aov, team: m.team_attendance, spiff: m.spiff,
-              bonus: m.bonus, payroll: m.payroll };
+              bonus: m.bonus, payroll: m.payroll, progs: storeEmailProgs_(m) };
     } else {
       var c = incCalcMgr_(m, T, inputs, d.budtenders || []);
       var i = inputs[m.employee_id || m.nameKey] || {};
       row = { name: nameOf(m), target: m.target, sales: m.sales, pct: c.pct, disc: m.discount * 100,
               aov: m.aov, team: c.teamA, spiff: c.spiff, bonus: c.bonus,
-              payroll: incPayroll_(c.payroll, i) };
+              payroll: incPayroll_(c.payroll, i), progs: storeEmailProgs_(m) };
     }
     slot(id).mgrs.push(row);
   });
@@ -4918,12 +4929,12 @@ function storeEmailModel_(d, labelOf) {
     var row;
     if (imported) {
       row = { name: nameOf(b), sales: b.sales, disc: b.discount_pct, aov: b.aov, spiff: b.spiff,
-              bonus: b.bonus, payroll: b.payroll };
+              bonus: b.bonus, payroll: b.payroll, progs: storeEmailProgs_(b) };
     } else {
       var c = incCalcBud_(b, T, inputs);
       var i = inputs[b.employee_id || b.nameKey] || {};
       row = { name: nameOf(b), sales: b.sales, disc: b.discount * 100, aov: b.aov, spiff: c.spiff,
-              bonus: c.bonus, payroll: incPayroll_(c.payroll, i) };
+              bonus: c.bonus, payroll: incPayroll_(c.payroll, i), progs: storeEmailProgs_(b) };
     }
     slot(id).buds.push(row);
   });
@@ -4975,18 +4986,10 @@ function storeEmailSpiffModel_(sp, storeIds) {
       var covered = rows.length > 0 || (pr.store_goals && pr.store_goals[id] != null) ||
                     (pr.bt_goals && pr.bt_goals[id] != null);
       if (!covered) return;
-      var people = rows.map(function (r) {
-        var units = Number(r.units) || 0, target = Number(r.target) || 0;
-        return { name: String(r.display_name || r.name || ''), units: units, target: target,
-                 hit: r.hit === true || r.hit === 'true' };
-      }).sort(function (a, b) {
-        return (b.target ? b.units / b.target : 0) - (a.target ? a.units / a.target : 0) ||
-               (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
-      });
       out[id].programs.push({ program_id: pr.program_id, vendor: String(pr.vendor || ''),
         name: String(pr.program_name || ''), product: String(pr.product || ''), status: st,
-        start: pr.start_date, end: pr.end_date, payout: pr.payout, payout_type: pr.payout_type,
-        unavailable: rows.length === 0, people: people });
+        start: pr.start_date, end: pr.end_date,
+        unavailable: rows.length === 0 });
     });
   });
   return out;
@@ -5006,30 +5009,17 @@ function storeEmailSpiffHtml_(s, meta, esc) {
 }
 
 function storeEmailSpiffInner_(s, meta, esc) {
-  var head = '<div style="margin:10px 0 4px;font-size:13px"><b>SPIFF progress</b>' +
-    (meta.spiff_asof ? ' <span style="color:#777;font-size:12px">· as of ' + esc(meta.spiff_asof) + '</span>' : '') + '</div>';
-  var note = function (t) { return head + '<div style="font-size:12px;color:#777">' + esc(t) + '</div>'; };
-  if (!meta.spiff_ok) return note('SPIFF progress is unavailable right now — SPIFF could not be read.');
+  var asof = meta.spiff_asof ? ' · as of ' + esc(meta.spiff_asof) : '';
+  var line = function (t, color) { return '<div style="margin:4px 0 0;font-size:12px;color:' + (color || '#777') + '">' + t + '</div>'; };
+  if (!meta.spiff_ok) return line('SPIFF progress is unavailable right now — SPIFF could not be read.', '#a15c00');
   var progs = (s.spiff && s.spiff.programs) || [];
-  if (!progs.length) return note('No SPIFF program is running at this store.');
-  var html = head;
+  if (!progs.length) return line('No SPIFF program is running at this store' + asof + '.');
+  var html = '';
   progs.forEach(function (pr) {
-    var title = (pr.vendor ? pr.vendor + ' — ' : '') + pr.name +
-      (pr.product && pr.product !== 'All ' + pr.vendor + ' products' ? ' (' + pr.product + ')' : '') +
-      (pr.status === 'closed' ? ' · ended' : '');
-    html += '<div style="margin:6px 0 2px;font-size:12px"><b>' + esc(title) + '</b></div>';
-    if (pr.unavailable) {
-      html += '<div style="font-size:12px;color:#a15c00">⚠️ Unavailable — SPIFF has no measurement for this store yet. This is not zero.</div>';
-      return;
-    }
-    html += '<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-size:12px;border-color:#ccc">' +
-      '<thead><tr><th align="left">Name</th><th>Units / goal</th><th>Status</th></tr></thead><tbody>';
-    pr.people.forEach(function (p) {
-      var left = Math.max(0, p.target - p.units);
-      html += '<tr><td>' + esc(p.name) + '</td><td align="right">' + p.units + ' / ' + p.target + '</td><td>' +
-        (p.hit ? '✅ Goal hit' : (p.target ? left + ' to go' : '—')) + '</td></tr>';
-    });
-    html += '</tbody></table>';
+    var title = (pr.vendor ? pr.vendor + ' — ' : '') + pr.name + (pr.status === 'closed' ? ' (ended)' : '');
+    html += pr.unavailable
+      ? line('⚠️ <b>' + esc(title) + '</b>: unavailable — SPIFF has no measurement for this store yet. This is not zero.', '#a15c00')
+      : line('SPIFF: <b>' + esc(title) + '</b> — units sold / goal in the SPIFF column' + asof);
   });
   return html;
 }
@@ -5042,6 +5032,15 @@ function storeEmailHtml_(model, meta) {
   function dash(v, f) { return (v == null || v === '' || !Number(v)) ? '—' : (f || m0)(v); }
   function pct1(n) { return (Math.round(n * 10) / 10).toFixed(1) + '%'; }
   var R = function (v) { return '<td align="right">' + v + '</td>'; };
+  /* Dollars earned (once earned), then units / goal per program: "Kaprikorn 14 / 20" or "… ✅". */
+  function spiffCell(r) {
+    var out = dash(r.spiff, m2);
+    (r.progs || []).forEach(function (x) {
+      out += '<div style="font-size:11px;color:#555;white-space:nowrap">' + esc(x.label) + ' ' + x.units + ' / ' + x.target +
+        (x.hit ? ' ✅' : '') + '</div>';
+    });
+    return out;
+  }
   var html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#222">' +
     '<h2 style="margin:0 0 4px">Store incentive reports</h2>' +
     '<p style="margin:0;color:#555">Pay period <b>' + esc(meta.dates) + '</b> · ' + esc(meta.status) + '</p>' +
@@ -5060,11 +5059,11 @@ function storeEmailHtml_(model, meta) {
     s.mgrs.forEach(function (r) {
       html += '<tr><td>' + esc(r.name) + ' <i>(manager)</i></td>' + R(dash(r.target)) + R(dash(r.sales)) +
         R(r.pct == null ? '—' : pct1(r.pct)) + R((Number(r.disc) || 0).toFixed(2) + '%') + R(m2(r.aov)) +
-        R(dash(r.team)) + R(dash(r.spiff, m2)) + R(dash(r.bonus)) + R(dash(r.payroll)) + '</tr>';
+        R(dash(r.team)) + R(spiffCell(r)) + R(dash(r.bonus)) + R(dash(r.payroll)) + '</tr>';
     });
     s.buds.forEach(function (r) {
       html += '<tr><td>' + esc(r.name) + '</td>' + R('—') + R(dash(r.sales)) + R('—') +
-        R((Number(r.disc) || 0).toFixed(2) + '%') + R(m2(r.aov)) + R('—') + R(dash(r.spiff, m2)) +
+        R((Number(r.disc) || 0).toFixed(2) + '%') + R(m2(r.aov)) + R('—') + R(spiffCell(r)) +
         R(dash(r.bonus)) + R(dash(r.payroll)) + '</tr>';
     });
     html += '</tbody></table>';

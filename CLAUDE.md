@@ -421,12 +421,14 @@ Built for Mike (2026-10-12). **It carries every person's name and pay in the bod
 - **Recipients are the Script Property `STORE_EMAIL_TO`** (`?action=store_email_to&to=<mailbox>`),
   company-domain only, no fallback list; one bad entry refuses the whole change. Not an opt-in
   checkbox: this email is a deliberate decision about who sees pay.
-- **Each store's table is followed by a SPIFF progress block** (units / goal per person, per running
-  program), read from GX Core's published SPIFF (`spiffProgressFromCore_`) and **never recomputed**.
-  It prints an "as of" time, warns past `SPIFF_PUBLISHED_STALE_MIN`, and a store a program covers
-  with no measured rows reads **Unavailable — not zero**. An unreadable publication marks the blocks
-  unavailable and must never stop the pay figures from going out. The block is wrapped in
-  `<!--spiff-->…<!--/spiff-->` so before/after tests can strip it. Pinned by `tests/store_email_test.js`.
+- **SPIFF progress sits IN the table's SPIFF cell** (dollars earned, then `Kaprikorn 14 / 20`, ✅ on a
+  hit), taken from each row's `spiff_programs` — the programs the incentive screen already matched to
+  that person from GX Core's published SPIFF. Never recomputed, and the email must not match names a
+  second way. A one-line note under each store (wrapped in `<!--spiff-->…<!--/spiff-->` so
+  before/after tests can strip it) names the program and the "as of" time, says **no program is
+  running**, or says **unavailable — not zero** for a store a program covers with no measured rows
+  (`storeEmailSpiffModel_`). Past `SPIFF_PUBLISHED_STALE_MIN` the email warns; an unreadable
+  publication must never stop the pay figures going out. Pinned by `tests/store_email_test.js`.
 - **A failed build from the trigger mails a notice with NO figures.** Corporate and the admin get no
   table. The one MailApp call stays `sendMail_`.
 - Routes (deploy secret): `store_email` (preview; `send=yes`, `show=html`, `pp_start=`, `today=`),
