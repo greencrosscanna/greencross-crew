@@ -49,7 +49,7 @@ function varLine(name) {
 }
 
 const LIFT = ['storeEmailPeriod_', 'storeEmailAddress_', 'storeEmailList_', 'storeEmailRecipients_',
-  'storeEmailSetTo_', 'storeEmailModel_', 'storeEmailDates_', 'storeEmailHtml_', 'storeEmailBuild_',
+  'storeEmailSetTo_', 'storeEmailProgs_', 'storeEmailModel_', 'storeEmailDates_', 'storeEmailHtml_', 'storeEmailBuild_',
   'sendStoreEmail_', 'storeIncentiveEmail', 'computedPeriods_', 'incCalcBud_', 'incCalcMgr_',
   'incPayroll_', 'incHours_', 'incSpiff_', 'storeEmailSpiffHtml_', 'storeEmailSpiffInner_',
   'storeEmailSpiffRead_', 'storeEmailSpiffModel_', 'spiffProgressFromCore_', 'spiffPublishedAgeMin_'];
@@ -276,29 +276,35 @@ console.log('\n5b. SPIFF progress: read as published, never recomputed\n');
   const env = (rows, programs, at) => ({ ok: true, producer: 'spiff', scope: '2026-10-12', published_at: at || '2026-10-12T11:00:00.000Z',
     age_minutes: 60, published_by: 'spiff', payload: { ok: true, pay_period: '2026-10-12', rows, by_employee: [], programs, last_programs: {} } });
   const props = { GX_DEPLOY_SECRET: 'fx' };
-  const build = (spiffEnv) => world({ payload: LIVE, props, spiffEnv }).ctx.storeEmailBuild_({ pp_start: '2026-10-12' });
 
   const rows = [row('k-all', 'bend', 'Ann Bend', 14, 20), row('k-all', 'bend', 'Bee Bend', 22, 20, { display_name: 'Bee B.' }),
                 row('k-pre', 'bend', 'Ann Bend', 3, 10, { program_name: 'Prerolls' })];
   const programs = [prog('k-all', 'active', { bend: 20, 'river-rd': 20 }), prog('k-pre', 'active', { bend: 10 }),
                     prog('k-draft', 'draft', { bend: 5 })];
+  /* The screen has already matched people to programs (applySpiffEarnings_ → spiff_programs); the
+     email reads that off the row, so it joins people the way the screen does. */
+  const sp = (label, units, target) => ({ program_id: 'x', vendor: label, name: 'All Products', units, target, hit: units >= target, earned: 0 });
+  const withProgs = JSON.parse(JSON.stringify(LIVE));
+  withProgs.budtenders.find((x) => x.employee_id === 'b1').spiff_programs = [sp('Kaprikorn', 14, 20), sp('Mule', 3, 10)];
+  withProgs.budtenders.find((x) => x.employee_id === 'b2').spiff_programs = [sp('Kaprikorn', 22, 20)];
+  const build = (spiffEnv, payload) => world({ payload: payload || withProgs, props, spiffEnv }).ctx.storeEmailBuild_({ pp_start: '2026-10-12' });
   const b = build(env(rows, programs));
-  const html = b.html, section = (store) => { const i = html.indexOf('>' + store + '</h3>'); const j = html.indexOf('<!--/spiff-->', i);
-                                               return html.slice(html.indexOf('<!--spiff-->', i), j); };
-  ok('the preview builds and carries a SPIFF section for every store', b.ok === true && (html.match(/<!--spiff-->/g) || []).length === 2);
-  const c = section('Century');
-  ok('units sold against each person\'s goal, as published ("14 / 20")', /Ann Bend<\/td><td align="right">14 \/ 20<\/td>/.test(c));
-  ok('…and the display name wins where SPIFF sent one', /Bee B\.<\/td><td align="right">22 \/ 20/.test(c) && !/Bee Bend<\/td><td align="right">22/.test(c));
-  ok('hit / not-yet indicator: "6 to go" and "Goal hit"', /6 to go/.test(c) && /Goal hit/.test(c));
-  ok('a store running two programs shows both', /Kaprikorn — All Products/.test(c) && /Kaprikorn — Prerolls/.test(c) && /3 \/ 10/.test(c));
-  ok('a draft program is not shown', !/k-draft/.test(c) && !/5 \/ /.test(c));
-  ok('the as-of time is printed, in store time (Oct 12, 4:00 AM PT)', /as of Oct 12, 4:00 AM PT/.test(c));
+  const html = b.html;
+  const cell = (name) => { const i = html.indexOf('<td>' + name + '</td>'); return html.slice(i, html.indexOf('</tr>', i)); };
+  ok('the preview builds', b.ok === true);
+  ok('units sold against the goal sit IN the person\'s SPIFF cell, with no brand name when there is one program ("22 / 20")', /22 \/ 20/.test(cell('Bee Bend')) && !/Kaprikorn/.test(cell('Bee Bend')));
+  ok('…a person in two programs would see both pairs (the brand is never printed in the cell)', /14 \/ 20/.test(cell('Ann Bend')) && /3 \/ 10/.test(cell('Ann Bend')) && !/Kaprikorn|Mule/.test(cell('Ann Bend')));
+  ok('…a goal hit is marked ✅ and a miss is not', /22 \/ 20 ✅/.test(cell('Bee Bend')) && !/14 \/ 20 ✅/.test(cell('Ann Bend')));
+  ok('a person with no SPIFF programs keeps the plain dash', !/ \/ /.test(cell('Rae River')));
+  ok('there is no separate per-person SPIFF table any more', !/Units \/ goal/.test(html));
+  const bs = (store) => { const i = html.indexOf('>' + store + '</h3>'); const j = html.indexOf('<!--/spiff-->', i);
+                          return html.slice(html.indexOf('<!--spiff-->', i), j); };
+  ok('each store gets one SPIFF line naming the program, with the as-of time (Oct 12, 4:00 AM PT)',
+     (html.match(/<!--spiff-->/g) || []).length === 2 && /Kaprikorn — All Products/.test(bs('Century')) && /as of Oct 12, 4:00 AM PT/.test(bs('Century')));
+  ok('a draft program is not named', !/k-draft/.test(html));
   ok('fresh data raises no warning', b.meta.warnings.length === 0);
-  const r = section('River');
   ok('a store SPIFF has a goal for but no measurement is UNAVAILABLE, not zeros',
-     /Unavailable/.test(r) && /not zero/.test(r) && !/ 0 \/ /.test(r));
-  ok('nothing is recomputed: a row whose hit flag disagrees with its units is shown as published, not re-judged',
-     /Goal hit/.test(build(env([row('k-all', 'bend', 'Odd One', 30, 20, { hit: false })], programs)).html) === false);
+     /unavailable/.test(bs('River')) && /not zero/.test(bs('River')));
 
   const none = build(env([], []));
   ok('no running program says so instead of an empty block',
@@ -307,7 +313,7 @@ console.log('\n5b. SPIFF progress: read as published, never recomputed\n');
   ok('data older than a day warns, and still prints its as-of time',
      stale.meta.warnings.some((x) => /out of date/.test(x)) && /as of Oct 9/.test(stale.html));
   const refused = build(null);
-  ok('a publication that cannot be read marks every SPIFF section unavailable and warns',
+  ok('a publication that cannot be read marks every SPIFF line unavailable and warns',
      refused.ok === true && (refused.html.match(/SPIFF progress is unavailable right now/g) || []).length === 2 &&
      refused.meta.warnings.some((x) => /could not be read/.test(x)));
   const threw = build('throw');
