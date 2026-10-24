@@ -760,7 +760,7 @@ console.log('\nThe store email does NOT share the screen\'s copy — it asks GX 
   else {
     const O = mk(SRC_OLD), N = mk(SRC_NEW);
     [O, N].forEach((X) => { X.load({ pp_start: RUNNING }); X.load({ pp_start: ENDED }); X.load({ pp_start: CLOSED }); });
-    const all = (X) => JSON.stringify([mail(X, RUNNING), mail(X, ENDED), mail(X, CLOSED), mail(X, '')]);
+    const all = (X) => JSON.stringify([mail(X, RUNNING), mail(X, ENDED), mail(X, CLOSED), mail(X, '')]).replace(/<!--spiff-->.*?<!--\/spiff-->/g, '');   // SPIFF section is new since the baseline
     const a = all(O), b = all(N);
     ok('four store emails (running, ended, closed, and the one the schedule would pick) byte-identical to the engine at ' + BASELINE, a === b && b.length > 2000 && /Bend/.test(b));
     ok('…and it asked the door exactly as it did before: once per live email, three in all, on top of the two screens that warmed the copy',

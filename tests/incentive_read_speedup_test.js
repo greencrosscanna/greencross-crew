@@ -202,7 +202,7 @@ if (!SRC_OLD) {
       ok((practiceApproved ? 'practice approved — ' : '') + label, o1 === n1 && o2 === n2 && o1.length > 30);
     });
     ['2026-09-14', '2026-09-28', '2026-10-12'].forEach((pp) => {
-      const mail = (W) => JSON.stringify(W.get({ action: 'store_email', secret: SECRET, pp_start: pp, show: 'html' }));
+      const mail = (W) => JSON.stringify(W.get({ action: 'store_email', secret: SECRET, pp_start: pp, show: 'html' })).replace(/<!--spiff-->.*?<!--\/spiff-->/g, '');   // SPIFF section is new since the baseline
       ok((practiceApproved ? 'practice approved — ' : '') + 'the store email for ' + pp, mail(O) === mail(N) && mail(N).length > 200);
     });
     const hist = (W) => JSON.stringify(W.get({ action: 'incentive_history', secret: SECRET, pp_start: '2026-09-14' }));

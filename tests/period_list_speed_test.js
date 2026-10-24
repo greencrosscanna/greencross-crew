@@ -198,9 +198,10 @@ function compare(label, mk) {
         if (/"status":"pending"/.test(a)) sent++;
       }
     }));
-    const mail = (W) => JSON.stringify(W.get({ action: 'store_email', secret: SECRET, pp_start: ENDED, show: 'html' })) +
+    const noSpiff = (s) => s.replace(/<!--spiff-->.*?<!--\/spiff-->/g, '');   // new since the baseline engine
+    const mail = (W) => noSpiff(JSON.stringify(W.get({ action: 'store_email', secret: SECRET, pp_start: ENDED, show: 'html' })) +
                         JSON.stringify(W.get({ action: 'store_email', secret: SECRET, pp_start: '2026-09-14', show: 'html' })) +
-                        JSON.stringify(W.get({ action: 'store_email', secret: SECRET, show: 'html' }));
+                        JSON.stringify(W.get({ action: 'store_email', secret: SECRET, show: 'html' })));
     const mailsEqual = mail(A) === mail(B);
     ok(label + ' — ' + state + ': ' + n + ' screen loads and 3 store emails identical' + (bad.length ? ' — DIFFERENT: ' + bad.slice(0, 3).join('; ') : ''),
        bad.length === 0 && mailsEqual && (!/^sent /.test(state) || sent > 0));

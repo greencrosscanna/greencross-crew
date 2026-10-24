@@ -4938,11 +4938,100 @@ function storeEmailModel_(d, labelOf) {
   });
 }
 
+/* SPIFF PROGRESS FOR THE EMAIL — read from GX Core's publication, never recomputed here.
+   SPIFF owns the numbers; this only reshapes what it published (the same source the incentive
+   screen reads, spiffProgressFromCore_). Read fresh, with no cache: it runs twice a week. Anything
+   that goes wrong is returned as { ok:false, error }, never thrown — SPIFF being unreachable must
+   not stop the pay figures from being emailed. */
+function storeEmailSpiffRead_(ppStart) {
+  var sp;
+  try { sp = spiffProgressFromCore_(ppStart, null); }
+  catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
+  if (!sp || sp.ok === false) return { ok: false, error: (sp && sp.error) || 'no published SPIFF' };
+  var age = spiffPublishedAgeMin_(sp.published_at);
+  return { ok: true, rows: sp.rows || [], programs: sp.programs || [], published_at: sp.published_at || '',
+           age_minutes: age, stale: age === null || age > SPIFF_PUBLISHED_STALE_MIN };
+}
+
+/* Per store: each program running there, and each person's units against their goal. A program
+   counts as "at" a store when SPIFF set that store a goal or measured someone there. A store a
+   program covers with NO measured rows is `unavailable` — SPIFF could not measure it, which is not
+   the same as nobody selling. Draft programs are not shown (not payable). */
+function storeEmailSpiffModel_(sp, storeIds) {
+  var out = Object.create(null);
+  storeIds.forEach(function (id) { out[id] = { programs: [] }; });
+  if (!sp || sp.ok === false) return out;
+  var rowsBy = Object.create(null);
+  (sp.rows || []).forEach(function (r) {
+    if (!r) return;
+    var k = String(r.program_id) + '|' + String(r.store_id);
+    (rowsBy[k] || (rowsBy[k] = [])).push(r);
+  });
+  (sp.programs || []).forEach(function (pr) {
+    var st = String(pr.status || '').toLowerCase();
+    if (st !== 'active' && st !== 'closed') return;
+    storeIds.forEach(function (id) {
+      var rows = rowsBy[String(pr.program_id) + '|' + id] || [];
+      var covered = rows.length > 0 || (pr.store_goals && pr.store_goals[id] != null) ||
+                    (pr.bt_goals && pr.bt_goals[id] != null);
+      if (!covered) return;
+      var people = rows.map(function (r) {
+        var units = Number(r.units) || 0, target = Number(r.target) || 0;
+        return { name: String(r.display_name || r.name || ''), units: units, target: target,
+                 hit: r.hit === true || r.hit === 'true' };
+      }).sort(function (a, b) {
+        return (b.target ? b.units / b.target : 0) - (a.target ? a.units / a.target : 0) ||
+               (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+      });
+      out[id].programs.push({ program_id: pr.program_id, vendor: String(pr.vendor || ''),
+        name: String(pr.program_name || ''), product: String(pr.product || ''), status: st,
+        start: pr.start_date, end: pr.end_date, payout: pr.payout, payout_type: pr.payout_type,
+        unavailable: rows.length === 0, people: people });
+    });
+  });
+  return out;
+}
+
 function storeEmailDates_(start, end) {
   var M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   function part(iso) { var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso)); return m ? { y: m[1], m: M[+m[2] - 1], d: +m[3] } : null; }
   var a = part(start), b = part(end);
   return (a && b) ? a.m + ' ' + a.d + ' – ' + b.m + ' ' + b.d + ', ' + b.y : start + ' – ' + end;
+}
+
+/* One store's SPIFF progress block, under its table. Units sold against each person's goal, from the
+   publication as published. A store SPIFF could not measure says so — it is never shown as zeros. */
+function storeEmailSpiffHtml_(s, meta, esc) {
+  return '<!--spiff-->' + storeEmailSpiffInner_(s, meta, esc) + '<!--/spiff-->';
+}
+
+function storeEmailSpiffInner_(s, meta, esc) {
+  var head = '<div style="margin:10px 0 4px;font-size:13px"><b>SPIFF progress</b>' +
+    (meta.spiff_asof ? ' <span style="color:#777;font-size:12px">· as of ' + esc(meta.spiff_asof) + '</span>' : '') + '</div>';
+  var note = function (t) { return head + '<div style="font-size:12px;color:#777">' + esc(t) + '</div>'; };
+  if (!meta.spiff_ok) return note('SPIFF progress is unavailable right now — SPIFF could not be read.');
+  var progs = (s.spiff && s.spiff.programs) || [];
+  if (!progs.length) return note('No SPIFF program is running at this store.');
+  var html = head;
+  progs.forEach(function (pr) {
+    var title = (pr.vendor ? pr.vendor + ' — ' : '') + pr.name +
+      (pr.product && pr.product !== 'All ' + pr.vendor + ' products' ? ' (' + pr.product + ')' : '') +
+      (pr.status === 'closed' ? ' · ended' : '');
+    html += '<div style="margin:6px 0 2px;font-size:12px"><b>' + esc(title) + '</b></div>';
+    if (pr.unavailable) {
+      html += '<div style="font-size:12px;color:#a15c00">⚠️ Unavailable — SPIFF has no measurement for this store yet. This is not zero.</div>';
+      return;
+    }
+    html += '<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-size:12px;border-color:#ccc">' +
+      '<thead><tr><th align="left">Name</th><th>Units / goal</th><th>Status</th></tr></thead><tbody>';
+    pr.people.forEach(function (p) {
+      var left = Math.max(0, p.target - p.units);
+      html += '<tr><td>' + esc(p.name) + '</td><td align="right">' + p.units + ' / ' + p.target + '</td><td>' +
+        (p.hit ? '✅ Goal hit' : (p.target ? left + ' to go' : '—')) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+  });
+  return html;
 }
 
 function storeEmailHtml_(model, meta) {
@@ -4979,6 +5068,7 @@ function storeEmailHtml_(model, meta) {
         R(dash(r.bonus)) + R(dash(r.payroll)) + '</tr>';
     });
     html += '</tbody></table>';
+    html += storeEmailSpiffHtml_(s, meta, esc);
   });
   return html + '</div>';
 }
@@ -5012,6 +5102,28 @@ function storeEmailBuild_(p) {
     }
   }
   var meta = { pp_start: per.pp_start, dates: storeEmailDates_(per.pp_start, end), status: status, warnings: warnings };
+  /* SPIFF progress, as SPIFF published it. Never allowed to fail the email. */
+  var spiff = storeEmailSpiffRead_(per.pp_start);
+  meta.spiff_ok = spiff.ok === true;
+  var byStore = storeEmailSpiffModel_(spiff, model.map(function (s) { return s.id; }));
+  model.forEach(function (s) { s.spiff = byStore[s.id]; });
+  if (!spiff.ok) {
+    warnings.push('SPIFF progress could not be read (' + spiff.error + ') — the SPIFF sections below are unavailable, not zero.');
+  } else {
+    var asof = '';
+    try {
+      var ts = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(Utilities.formatDate(new Date(spiff.published_at), STORE_TZ, 'yyyy-MM-dd HH:mm'));
+      if (ts) {
+        var hh = +ts[4];
+        asof = storeEmailDates_(ts[1] + '-' + ts[2] + '-' + ts[3], ts[1] + '-' + ts[2] + '-' + ts[3]).split(' – ')[0] + ', ' +
+               ((hh % 12) || 12) + ':' + ts[5] + (hh < 12 ? ' AM' : ' PM') + ' PT';
+      }
+    } catch (e) {}
+    meta.spiff_asof = asof || 'an unknown time';
+    if (spiff.stale) {
+      warnings.push('SPIFF progress is out of date — last published ' + meta.spiff_asof + '. Treat the SPIFF numbers as old.');
+    }
+  }
   /* Same words as the screen's note (crew.js INC_PRINTED_GOALS_NOTE). */
   if (d.source === 'imported' && d.goals_source === GOALS_SOURCE_PRINTED) {
     meta.goals_note = 'Targets are as printed on that period’s report, set on a different basis than today’s goals.';

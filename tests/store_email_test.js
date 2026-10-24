@@ -51,15 +51,17 @@ function varLine(name) {
 const LIFT = ['storeEmailPeriod_', 'storeEmailAddress_', 'storeEmailList_', 'storeEmailRecipients_',
   'storeEmailSetTo_', 'storeEmailModel_', 'storeEmailDates_', 'storeEmailHtml_', 'storeEmailBuild_',
   'sendStoreEmail_', 'storeIncentiveEmail', 'computedPeriods_', 'incCalcBud_', 'incCalcMgr_',
-  'incPayroll_', 'incHours_', 'incSpiff_'];
+  'incPayroll_', 'incHours_', 'incSpiff_', 'storeEmailSpiffHtml_', 'storeEmailSpiffInner_',
+  'storeEmailSpiffRead_', 'storeEmailSpiffModel_', 'spiffProgressFromCore_', 'spiffPublishedAgeMin_'];
 const VARS = ['STORE_EMAIL_TO_PROP', 'LAST_STORE_EMAIL_PROP', 'STORE_EMAIL_AUTH_', 'ACCOUNT_DOMAIN',
-  'STORE_TZ', 'CREW_URL'];
+  'STORE_TZ', 'CREW_URL', 'SPIFF_PUBLISHED_STALE_MIN'];
 
 const pad = (n) => String(n).padStart(2, '0');
 function fmtDate(date, tz, pat) {
-  const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' })
-    .formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
-  return p.year + '-' + p.month + '-' + p.day;
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date).reduce((a, x) => (a[x.type] = x.value, a), {});
+  return pat === 'yyyy-MM-dd HH:mm' ? p.year + '-' + p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute
+                                    : p.year + '-' + p.month + '-' + p.day;
 }
 
 function world(opts) {
@@ -82,7 +84,12 @@ function world(opts) {
     GXCore: {
       getKv: (k) => ({ 'cfg.payPeriodAnchor': '2026-09-28', 'cfg.payPeriodDays': '14' })[k] || '',
       getStores: () => [{ store_id: 'bend', display_name: 'Century' }, { store_id: 'river-rd', display_name: 'River' },
-                        { store_id: 'center', display_name: 'Center' }] },
+                        { store_id: 'center', display_name: 'Center' }],
+      publishedSpiffProgress: () => {
+        if (!opts.spiffEnv) return { ok: false, error: 'GX Core has no published SPIFF for this period' };
+        if (opts.spiffEnv === 'throw') throw new Error('library pin has no publishedSpiffProgress');
+        return opts.spiffEnv;
+      } },
     scrubSecrets_: (x) => x,
     sendMail_: (m) => { if (opts.mailThrows) throw new Error('mail refused'); mail.push(m); },
     getIncentive_: (p, auth) => {
@@ -252,6 +259,61 @@ console.log('\n5. getIncentive_ cannot be told to skip sign-in by a request\n');
   const callers = SRC.match(/(?<!function )getIncentive_\([^)]*,[^)]*\)/g) || [];
   ok('the only caller that passes a second argument is the store email', callers.length === 1 && /STORE_EMAIL_AUTH_/.test(callers[0]));
   ok('the system identity is read-only', /STORE_EMAIL_AUTH_ = \{ ok: true, user: 'store-email', role: 'viewer', __system: true \}/.test(SRC));
+}
+
+console.log('\n5b. SPIFF progress: read as published, never recomputed\n');
+{
+  /* Shaped like the real publication (GX Core published_spiff_progress, scope 2026-10-12): an
+     envelope with published_at, around SPIFF's payload — rows keyed on store_id with units / target /
+     hit, plus the programs sidecar with per-store goals. Names are made up. */
+  const row = (pid, store, name, units, target, extra) => Object.assign({ program_id: pid, pay_period: '2026-10-12',
+    store_id: store, employee_id: 40000 + units, name, units, target, hit: units >= target, earned: units >= target ? 50 : 0,
+    vendor: 'Kaprikorn', program_name: 'All Products', start_date: '2026-10-12', end_date: '2026-10-25',
+    refreshed_at: '2026-10-12 04:00:00', status: 'active' }, extra || {});
+  const prog = (pid, status, goals) => ({ program_id: pid, vendor: 'Kaprikorn', program_name: pid === 'k-all' ? 'All Products' : 'Prerolls',
+    status, start_date: '2026-10-12', end_date: '2026-10-25', product: 'All Kaprikorn products', payout: 50, payout_type: 'flat',
+    store_goals: goals, bt_goals: goals, tips: [] });
+  const env = (rows, programs, at) => ({ ok: true, producer: 'spiff', scope: '2026-10-12', published_at: at || '2026-10-12T11:00:00.000Z',
+    age_minutes: 60, published_by: 'spiff', payload: { ok: true, pay_period: '2026-10-12', rows, by_employee: [], programs, last_programs: {} } });
+  const props = { GX_DEPLOY_SECRET: 'fx' };
+  const build = (spiffEnv) => world({ payload: LIVE, props, spiffEnv }).ctx.storeEmailBuild_({ pp_start: '2026-10-12' });
+
+  const rows = [row('k-all', 'bend', 'Ann Bend', 14, 20), row('k-all', 'bend', 'Bee Bend', 22, 20, { display_name: 'Bee B.' }),
+                row('k-pre', 'bend', 'Ann Bend', 3, 10, { program_name: 'Prerolls' })];
+  const programs = [prog('k-all', 'active', { bend: 20, 'river-rd': 20 }), prog('k-pre', 'active', { bend: 10 }),
+                    prog('k-draft', 'draft', { bend: 5 })];
+  const b = build(env(rows, programs));
+  const html = b.html, section = (store) => { const i = html.indexOf('>' + store + '</h3>'); const j = html.indexOf('<!--/spiff-->', i);
+                                               return html.slice(html.indexOf('<!--spiff-->', i), j); };
+  ok('the preview builds and carries a SPIFF section for every store', b.ok === true && (html.match(/<!--spiff-->/g) || []).length === 2);
+  const c = section('Century');
+  ok('units sold against each person\'s goal, as published ("14 / 20")', /Ann Bend<\/td><td align="right">14 \/ 20<\/td>/.test(c));
+  ok('…and the display name wins where SPIFF sent one', /Bee B\.<\/td><td align="right">22 \/ 20/.test(c) && !/Bee Bend<\/td><td align="right">22/.test(c));
+  ok('hit / not-yet indicator: "6 to go" and "Goal hit"', /6 to go/.test(c) && /Goal hit/.test(c));
+  ok('a store running two programs shows both', /Kaprikorn — All Products/.test(c) && /Kaprikorn — Prerolls/.test(c) && /3 \/ 10/.test(c));
+  ok('a draft program is not shown', !/k-draft/.test(c) && !/5 \/ /.test(c));
+  ok('the as-of time is printed, in store time (Oct 12, 4:00 AM PT)', /as of Oct 12, 4:00 AM PT/.test(c));
+  ok('fresh data raises no warning', b.meta.warnings.length === 0);
+  const r = section('River');
+  ok('a store SPIFF has a goal for but no measurement is UNAVAILABLE, not zeros',
+     /Unavailable/.test(r) && /not zero/.test(r) && !/ 0 \/ /.test(r));
+  ok('nothing is recomputed: a row whose hit flag disagrees with its units is shown as published, not re-judged',
+     /Goal hit/.test(build(env([row('k-all', 'bend', 'Odd One', 30, 20, { hit: false })], programs)).html) === false);
+
+  const none = build(env([], []));
+  ok('no running program says so instead of an empty block',
+     (none.html.match(/No SPIFF program is running at this store/g) || []).length === 2);
+  const stale = build(env(rows, programs, '2026-10-09T11:00:00.000Z'));
+  ok('data older than a day warns, and still prints its as-of time',
+     stale.meta.warnings.some((x) => /out of date/.test(x)) && /as of Oct 9/.test(stale.html));
+  const refused = build(null);
+  ok('a publication that cannot be read marks every SPIFF section unavailable and warns',
+     refused.ok === true && (refused.html.match(/SPIFF progress is unavailable right now/g) || []).length === 2 &&
+     refused.meta.warnings.some((x) => /could not be read/.test(x)));
+  const threw = build('throw');
+  ok('a library that throws does not stop the pay figures from being emailed', threw.ok === true && /Ann Bend/.test(threw.html) && /\$/.test(threw.html));
+  ok('the SPIFF section only READS the publication: the module has no second SPIFF calculation',
+     !/storeEmailSpiff(Model|Read)_[^]*?(incCalc|applySpiffEarnings_)/.test(fnSrc('storeEmailSpiffModel_') + fnSrc('storeEmailSpiffRead_')));
 }
 
 console.log('\n6. One MailApp call, and the routes are gated\n');
