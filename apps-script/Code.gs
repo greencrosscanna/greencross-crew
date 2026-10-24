@@ -4887,7 +4887,7 @@ function storeEmailSetTo_(p) {
    are SPIFF's; nothing is recomputed. A closed (imported) period carries none. */
 function storeEmailProgs_(r) {
   return (r && r.spiff_programs || []).map(function (x) {
-    return { label: String(x.vendor || x.name || ''), units: Number(x.units) || 0, target: Number(x.target) || 0,
+    return { units: Number(x.units) || 0, target: Number(x.target) || 0,
              hit: x.hit === true || x.hit === 'true' };
   });
 }
@@ -5034,9 +5034,9 @@ function storeEmailHtml_(model, meta) {
   var R = function (v) { return '<td align="right">' + v + '</td>'; };
   /* Dollars earned (once earned), then units / goal per program: "14 / 20" or "14 / 20 ✅". */
   function spiffCell(r) {
-    var out = dash(r.spiff, m2), many = (r.progs || []).length > 1;   // a brand is named only to tell two programs apart
+    var out = dash(r.spiff, m2);
     (r.progs || []).forEach(function (x) {
-      out += '<div style="font-size:11px;color:#555;white-space:nowrap">' + (many ? esc(x.label) + ' ' : '') + x.units + ' / ' + x.target +
+      out += '<div style="font-size:11px;color:#555;white-space:nowrap">' + x.units + ' / ' + x.target +
         (x.hit ? ' ✅' : '') + '</div>';
     });
     return out;

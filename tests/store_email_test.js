@@ -293,7 +293,7 @@ console.log('\n5b. SPIFF progress: read as published, never recomputed\n');
   const cell = (name) => { const i = html.indexOf('<td>' + name + '</td>'); return html.slice(i, html.indexOf('</tr>', i)); };
   ok('the preview builds', b.ok === true);
   ok('units sold against the goal sit IN the person\'s SPIFF cell, with no brand name when there is one program ("22 / 20")', /22 \/ 20/.test(cell('Bee Bend')) && !/Kaprikorn/.test(cell('Bee Bend')));
-  ok('…a person in two programs sees both, brand named to tell them apart', /Kaprikorn 14 \/ 20/.test(cell('Ann Bend')) && /Mule 3 \/ 10/.test(cell('Ann Bend')));
+  ok('…a person in two programs would see both pairs (the brand is never printed in the cell)', /14 \/ 20/.test(cell('Ann Bend')) && /3 \/ 10/.test(cell('Ann Bend')) && !/Kaprikorn|Mule/.test(cell('Ann Bend')));
   ok('…a goal hit is marked ✅ and a miss is not', /22 \/ 20 ✅/.test(cell('Bee Bend')) && !/14 \/ 20 ✅/.test(cell('Ann Bend')));
   ok('a person with no SPIFF programs keeps the plain dash', !/ \/ /.test(cell('Rae River')));
   ok('there is no separate per-person SPIFF table any more', !/Units \/ goal/.test(html));

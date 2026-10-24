@@ -422,7 +422,7 @@ Built for Mike (2026-10-12). **It carries every person's name and pay in the bod
   company-domain only, no fallback list; one bad entry refuses the whole change. Not an opt-in
   checkbox: this email is a deliberate decision about who sees pay.
 - **SPIFF progress sits IN the table's SPIFF cell** (dollars earned, then `14 / 20`, ✅ on a
-  hit; the brand shows only for someone in two programs), taken from each row's `spiff_programs` — the programs the incentive screen already matched to
+  hit, no brand name: one program runs at a time), taken from each row's `spiff_programs` — the programs the incentive screen already matched to
   that person from GX Core's published SPIFF. Never recomputed, and the email must not match names a
   second way. A one-line note under each store (wrapped in `<!--spiff-->…<!--/spiff-->` so
   before/after tests can strip it) names the program and the "as of" time, says **no program is
