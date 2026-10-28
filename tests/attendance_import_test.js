@@ -109,6 +109,22 @@ console.log('\nFinding the right sheet and columns');
 
   ok('a file with no yes/no column at all is refused, not guessed at',
      M.attPlan(sheet('Name,Hours\nMya Ward,72\n')) === null);
+
+  /* Mike's two files for 10/12–10/25 (2026-10-27), headers verbatim. Both were refused outright. */
+  const yon = M.attPlan(sheet('Store,Name,Yes or No\nBaseline,Mya Ward,No\nCenter,Taner Perri,Yes\nRiver,Noah Pinkerton,Pending\n'));
+  ok('a column headed "Yes or No" is the attendance column', yon && yon.headers[yon.attCol] === 'Yes or No');
+  const qual = M.attPlan(sheet('Store Name,Staff Member Name,Qualifies for Attendance Bonus\nBaseline,Mya Ward,No\n'));
+  ok('"Staff Member Name" / "Qualifies for…" are found', qual &&
+     qual.headers[qual.nameCol] === 'Staff Member Name' && qual.headers[qual.attCol] === 'Qualifies for Attendance Bonus');
+
+  /* One "Pending" no longer disqualifies a column found by its values — but it is not a No either. */
+  const pend = M.attPlan(sheet('Name,Bonus?\nMya Ward,Yes\nTaner Perri,No\nNoah Pinkerton,Yes\nDean Deloof,No\nRobert Wydick,Pending\n'));
+  ok('one "Pending" does not stop a yes/no column being found by its values', pend && pend.headers[pend.attCol] === 'Bonus?');
+  ok('a column that is mostly NOT yes/no is still refused',
+     M.attPlan(sheet('Name,Bonus?\nMya Ward,Yes\nTaner Perri,maybe\nNoah Pinkerton,later\nRobert Wydick,ask\n')) === null);
+  const pb = pend && M.attBuild(pend, ROSTER, {}, T);
+  ok('…and the "Pending" row is skipped, not written as a No',
+     pb && !pb.change.concat(pb.noeffect).some(m => m.id === 'robert_wydick'));
 }
 
 console.log('\nMatching against the period');
