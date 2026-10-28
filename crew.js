@@ -5102,6 +5102,15 @@
     return n - 1;
   }
 
+  /* Elements by LOCAL name, whatever prefix the writer chose. Excel writes `<c>`; some exporters
+     (Mike's "COMPATIBLE" file, 2026-10-27) write `<x:c>` with the same namespace bound to `x`, and
+     getElementsByTagName('c') matches neither `x:c` nor anything else in that file — it read as an
+     empty workbook and was refused as "no Name and Yes/No columns". */
+  function impTags(node, name) {
+    return node.getElementsByTagNameNS ? node.getElementsByTagNameNS('*', name)
+                                       : node.getElementsByTagName(name);
+  }
+
   /* Every sheet, as rows of trimmed strings — the same shape impParseCsv returns, so everything
      downstream is blind to which kind of file it came from. */
   async function impReadXlsx(arrayBuffer) {
@@ -5118,9 +5127,9 @@
     var shared = [];
     var ss = await xml('xl/sharedStrings.xml');
     if (ss) {
-      var items = ss.getElementsByTagName('si');
+      var items = impTags(ss, 'si');
       for (var s = 0; s < items.length; s++) {
-        var ts = items[s].getElementsByTagName('t'), acc = '';
+        var ts = impTags(items[s], 't'), acc = '';
         for (var t = 0; t < ts.length; t++) acc += ts[t].textContent || '';
         shared.push(acc);
       }
@@ -5128,21 +5137,21 @@
     var wb = await xml('xl/workbook.xml');
     var names = [];
     if (wb) {
-      var sh = wb.getElementsByTagName('sheet');
+      var sh = impTags(wb, 'sheet');
       for (var q = 0; q < sh.length; q++) names.push(sh[q].getAttribute('name') || ('Sheet' + (q + 1)));
     }
     var out = [];
     for (var idx = 1; files['xl/worksheets/sheet' + idx + '.xml']; idx++) {
       var doc = await xml('xl/worksheets/sheet' + idx + '.xml');
-      var cells = doc.getElementsByTagName('c'), rows = [];
+      var cells = impTags(doc, 'c'), rows = [];
       for (var c2 = 0; c2 < cells.length; c2++) {
         var cell = cells[c2], ref = cell.getAttribute('r') || '', ty = cell.getAttribute('t');
         var val = '';
         if (ty === 'inlineStr') {
-          var its = cell.getElementsByTagName('t');
+          var its = impTags(cell, 't');
           for (var y = 0; y < its.length; y++) val += its[y].textContent || '';
         } else {
-          var vs = cell.getElementsByTagName('v');
+          var vs = impTags(cell, 'v');
           var raw2 = vs.length ? (vs[0].textContent || '') : '';
           val = (ty === 's') ? (shared[+raw2] || '') : raw2;
         }
@@ -5290,9 +5299,13 @@
       var AVOID = /supervisor|manager\b|department|store|location|company/i;
       var nameCol = find(/employee\s*name|^name$|full\s*name/i, AVOID);
       if (nameCol < 0) nameCol = find(/name/i, AVOID);
-      var attCol  = find(/attendance|eligib|bonus\s*\(?y/i, null);
+      /* `yes or no` / `qualif`: Mike's 10/12 list headed the column "Yes or No", and his other file
+         "Qualifies for Attendance Bonus". */
+      var attCol  = find(/attendance|eligib|qualif|bonus\s*\(?y|yes\s*(or|\/)\s*no/i, null);
       /* No column named attendance? Fall back to the first column whose VALUES are yes/no — a
-         header can be spelled anything, but the vocabulary in the cells cannot be mistaken. */
+         header can be spelled anything, but the vocabulary in the cells cannot be mistaken.
+         MOSTLY yes/no, not all: one "Pending" used to disqualify the whole column, which refused the
+         file outright. That cell is still skipped and named by attBuild — never read as a No. */
       if (attCol < 0) {
         for (var k = 0; k < headers.length && attCol < 0; k++) {
           if (k === nameCol) continue;
@@ -5303,7 +5316,7 @@
             seen++;
             if (ATT_YES.test(v) || ATT_NO.test(v)) yn++;
           }
-          if (seen >= 3 && yn === seen) attCol = k;
+          if (yn >= 3 && yn >= seen * 0.8) attCol = k;
         }
       }
       if (nameCol < 0 || attCol < 0) return;
