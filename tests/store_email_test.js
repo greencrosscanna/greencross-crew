@@ -49,7 +49,7 @@ function varLine(name) {
 }
 
 const LIFT = ['storeEmailPeriod_', 'storeEmailAddress_', 'storeEmailList_', 'storeEmailRecipients_',
-  'storeEmailSetTo_', 'storeEmailProgs_', 'storeEmailModel_', 'storeEmailDates_', 'storeEmailHtml_', 'storeEmailBuild_',
+  'storeEmailSetTo_', 'storeEmailProgs_', 'storeEmailZeroProgs_', 'storeEmailModel_', 'storeEmailDates_', 'storeEmailHtml_', 'storeEmailBuild_',
   'sendStoreEmail_', 'storeIncentiveEmail', 'computedPeriods_', 'incCalcBud_', 'incCalcMgr_',
   'incPayroll_', 'incHours_', 'incSpiff_', 'storeEmailSpiffHtml_', 'storeEmailSpiffInner_',
   'storeEmailSpiffRead_', 'storeEmailSpiffModel_', 'spiffProgressFromCore_', 'spiffPublishedAgeMin_'];
@@ -297,6 +297,27 @@ console.log('\n5b. SPIFF progress: read as published, never recomputed\n');
   ok('…a goal hit is marked ✅ and a miss is not', /22 \/ 20 ✅/.test(cell('Bee Bend')) && !/14 \/ 20 ✅/.test(cell('Ann Bend')));
   ok('a person with no SPIFF programs keeps the plain dash', !/ \/ /.test(cell('Rae River')));
   ok('there is no separate per-person SPIFF table any more', !/Units \/ goal/.test(html));
+
+  /* SPIFF lists only people who sold, so a measured store's other staff have no row. */
+  const zeroProg = (label, units, target) => Object.assign(sp(label, units, target), { program_id: 'k-all' });
+  const zeros = JSON.parse(JSON.stringify(LIVE));
+  zeros.budtenders.concat(zeros.managers).forEach((x) => { x.spiff_programs = []; });
+  zeros.budtenders.find((x) => x.employee_id === 'b2').spiff_programs = [zeroProg('Kaprikorn', 22, 20)];
+  const zb = build(env(rows, programs), zeros);
+  const zc = (name) => { const i = zb.html.indexOf('<td>' + name + '</td>'); return zb.html.slice(i, zb.html.indexOf('</tr>', i)); };
+  ok('a person at a measured store with no SPIFF row shows 0 / goal, not a blank', /0 \/ 20/.test(zc('Ann Bend')));
+  ok('…and someone who did sell keeps their real figure', /22 \/ 20 ✅/.test(zc('Bee Bend')) && !/>0 \/ 20/.test(zc('Bee Bend')));
+  ok('…a store SPIFF could not measure stays unavailable, with no zeros printed', !/ \/ /.test(zc('Rae River')));
+  const noJoin = JSON.parse(JSON.stringify(zeros));
+  noJoin.budtenders.concat(noJoin.managers).forEach((x) => { delete x.spiff_programs; });
+  const nj = build(env(rows, programs), noJoin);
+  ok('if the person join never ran, nobody is reported as zero', !/\d \/ \d/.test(nj.html));
+  const pay = (bld) => bld.model.map((s) => s.mgrs.concat(s.buds).map((r) => [r.name, r.spiff, r.bonus, r.payroll]));
+  ok('…the zero changes no SPIFF dollars, bonus or payroll', JSON.stringify(pay(zb)) === JSON.stringify(pay(nj)));
+  const noLanding = JSON.parse(JSON.stringify(zeros));
+  noLanding.budtenders.find((x) => x.employee_id === 'b2').spiff_programs = [];
+  const nl = build(env(rows, programs), noLanding);
+  ok('if nobody at the store landed on the program, nobody is reported as zero', !/0 \/ 20/.test(nl.html));
   const bs = (store) => { const i = html.indexOf('>' + store + '</h3>'); const j = html.indexOf('<!--/spiff-->', i);
                           return html.slice(html.indexOf('<!--spiff-->', i), j); };
   ok('each store gets one SPIFF line naming the program, with the as-of time (Oct 12, 4:00 AM PT)',

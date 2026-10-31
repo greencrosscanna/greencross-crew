@@ -453,6 +453,9 @@ Built for Mike (2026-10-12). **It carries every person's name and pay in the bod
   running**, or says **unavailable — not zero** for a store a program covers with no measured rows
   (`storeEmailSpiffModel_`). Past `SPIFF_PUBLISHED_STALE_MIN` the email warns; an unreadable
   publication must never stop the pay figures going out. Pinned by `tests/store_email_test.js`.
+- **SPIFF lists only people who sold, so a missing row prints `0 / goal`** (`storeEmailZeroProgs_`,
+  Sky, 2026-10-30), but only when the program has a goal at that store, SPIFF measured the store, the
+  person's join ran, and someone at the store landed on that program. Any other blank stays blank.
 - **A failed build from the trigger mails a notice with NO figures.** Corporate and the admin get no
   table. The one MailApp call stays `sendMail_`.
 - Routes (deploy secret): `store_email` (preview; `send=yes`, `show=html`, `pp_start=`, `today=`),

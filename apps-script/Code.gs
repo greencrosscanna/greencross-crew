@@ -5029,11 +5029,32 @@ function storeEmailSetTo_(p) {
 /* A person's SPIFF progress, from the programs the incentive screen already matched to them
    (applySpiffEarnings_ → spiff_programs) — the same SPIFF publication, joined to the right person by
    the screen's own identity ladder, so the email does not match names a second way. Units and goal
-   are SPIFF's; nothing is recomputed. A closed (imported) period carries none. */
+   are SPIFF's; nothing is recomputed. A closed (imported) period carries none. NULL means the join
+   never ran for this row, which storeEmailZeroProgs_ must not read as "sold nothing"; [] means it
+   ran and SPIFF has no row for this person. */
 function storeEmailProgs_(r) {
-  return (r && r.spiff_programs || []).map(function (x) {
-    return { units: Number(x.units) || 0, target: Number(x.target) || 0,
+  if (!r || !Array.isArray(r.spiff_programs)) return null;
+  return r.spiff_programs.map(function (x) {
+    return { program_id: x.program_id, units: Number(x.units) || 0, target: Number(x.target) || 0,
              hit: x.hit === true || x.hit === 'true' };
+  });
+}
+
+/* SPIFF only lists people who sold the product, so "sold none yet" arrives as no row at all, and a
+   blank cell reads as missing data. Print 0 / goal instead, but only where a zero is known to be
+   true: the program has a goal here, SPIFF measured this store, this person's join ran, and at least
+   one person at this store's table landed on the program. That last one keeps a program the fold
+   excluded (straddling, malformed dates) from turning everyone at the store into a false zero. */
+function storeEmailZeroProgs_(s) {
+  var people = s.mgrs.concat(s.buds);
+  function has(r, pid) { return (r.progs || []).some(function (x) { return x.program_id === pid; }); }
+  ((s.spiff && s.spiff.programs) || []).forEach(function (pr) {
+    var goal = Number(pr.goal) || 0;
+    if (pr.unavailable || goal <= 0) return;
+    if (!people.some(function (r) { return has(r, pr.program_id); })) return;
+    people.forEach(function (r) {
+      if (r.progs && !has(r, pr.program_id)) r.progs.push({ program_id: pr.program_id, units: 0, target: goal, hit: false });
+    });
   });
 }
 
@@ -5133,7 +5154,7 @@ function storeEmailSpiffModel_(sp, storeIds) {
       if (!covered) return;
       out[id].programs.push({ program_id: pr.program_id, vendor: String(pr.vendor || ''),
         name: String(pr.program_name || ''), product: String(pr.product || ''), status: st,
-        start: pr.start_date, end: pr.end_date,
+        start: pr.start_date, end: pr.end_date, goal: pr.bt_goals ? pr.bt_goals[id] : null,
         unavailable: rows.length === 0 });
     });
   });
@@ -5250,7 +5271,7 @@ function storeEmailBuild_(p) {
   var spiff = storeEmailSpiffRead_(per.pp_start);
   meta.spiff_ok = spiff.ok === true;
   var byStore = storeEmailSpiffModel_(spiff, model.map(function (s) { return s.id; }));
-  model.forEach(function (s) { s.spiff = byStore[s.id]; });
+  model.forEach(function (s) { s.spiff = byStore[s.id]; storeEmailZeroProgs_(s); });
   if (!spiff.ok) {
     warnings.push('SPIFF progress could not be read (' + spiff.error + ') — the SPIFF sections below are unavailable, not zero.');
   } else {
