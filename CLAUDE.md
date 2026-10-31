@@ -238,8 +238,13 @@ checkout. **`add_note` to `core-admin` with what you need and why, and stop.**
   project.
 
 ## Shipping — branch + PR, because Crew is LIVE
-**Crew is live to Sky and Mike.** A **feature** goes on a `feat/…` branch with a PR and **Sky
-merges**. A **small fix** that is correct the moment it lands ships direct to `main`. After a merge:
+**Crew is live to Sky and Mike.** A **feature** goes on a `feat/…` branch with a PR, and **Claude
+merges it** (Sky's ask, 2026-10-30: he had never declined one, so the hand-off was a wasted step) —
+**only when the full test suite and the push gate are green and the PR matches what Sky asked for.**
+Say in the reply that it was merged. A merge is not a deploy: the deploy rule below still holds.
+**Claude does not merge** anything touching GX Core, gx-theme or the hub from here, a PR with a red
+or unrun check, or one that grew beyond the ask. A **small fix** that is correct the moment it lands
+ships direct to `main`. After a merge:
 bump `?v=N` on the `crew.js` tag, `./gxengine.sh --deploy` for the engine, then `./deploy.sh`, then
 `dev_ship` the job if there is one.
 
