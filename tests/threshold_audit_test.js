@@ -58,6 +58,9 @@ const LIB_SURFACE = [
      fails the gate in two places, as it just did. Worth folding into one shared list next time
      somebody is in here; not worth a drive-by refactor of two passing gates today. */
   'publishedSpiffProgress',
+  /* Library v352 (hub PR 96, 2026-10-30): the OLCC permit publish. The hub's permit_contract_test.js
+     exports and runs both. Crew pins 352; below it neither exists, and publishPermitsNow_ says so. */
+  'publishPermits', 'permitStatus',
 ];
 
 /* Names Crew references that the library does NOT have, and that are correct anyway because the

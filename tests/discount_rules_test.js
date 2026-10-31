@@ -59,6 +59,8 @@ const LIB_SURFACE = [
   /* gx_dutchie.gs incentivePerf — GX Core's in-process snapshot door, exported at library v313
      (commit 537d6ee, 2026-09-09). The incentive SCREEN reads it (2026-09-15); approval and send never do. */
   'incentivePerf',
+  /* Library v352 (hub PR 96, 2026-10-30): the OLCC permit publish and its counts-only status. */
+  'publishPermits', 'permitStatus',
 ];
 
 let CALLS, LOGS, FETCHES, KV, KV_THROWS, LB_REPLY, LB_HTTP, USER, NOTE_RESULT, NOTE_THROWS;

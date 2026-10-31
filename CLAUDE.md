@@ -362,6 +362,25 @@ says which are missing.
   staff listed on each license ONLY; re-check it if a store ever changes license. Six staff with
   company-wide access sit on all six.
 
+## Permit publish — Crew feeds the kiosk's "is this really you" check (Sky, 2026-10-30)
+Changing a face on the Leaderboard kiosk takes that person's own OLCC permit number. Crew owns
+`permit_number` and publishes it to GX Core (`GXCore.publishPermits`, library v352+); Core stores a
+keyed hash only. Permit numbers must never reach a kiosk browser, a log, a property, a URL or a reply.
+
+- **One full list per run, every person on Core's roster, the number sent as the sheet holds it.** Do
+  not hash or normalize (Core does; `metrcPermitKey_` is the hub's contract and its
+  `permit_contract_test.js` runs it). **Retired, merged and permit-less people go BLANK** — an unlisted
+  person is left alone by Core, so listing only holders would keep an old number working.
+- **When:** every night after the 5am scan, and within ~15 minutes of any roster write
+  (`bustRosterCache_` sets `CREW_PERMITS_DIRTY`; the sweep sends it). Never inline in a request.
+- **Records counts only** (`CREW_LAST_PERMIT_PUBLISH`); a failure or a non-empty `unknown_employee_ids`
+  mails the approver once per distinct problem. `?action=permit_publish&secret=…` previews; add
+  `confirm=yes` to run; it also returns Core's `permitStatus` counts (`with_permit`, `stale_key_rows`).
+- **An empty roster or a failed read sends nothing** — never a partial list.
+- 2026-10-30 shape of `permit_number` (counts): 42 active, 10 seven-digit, 32 six-character
+  letter-and-digit, 0 blank. Sky confirmed the letter-and-digit codes are the numbers on the permit.
+- Pinned by `tests/permit_publish_test.js` and `tests/cross_app_permit_contract_test.js` (the hub's).
+
 ## Nightly Dutchie scan — it REPORTS, it never writes
 `nightlyDutchieScan()` runs at **05:00 store time**, compares Dutchie's active people with the GX
 Core registry, and parks anyone unmatched in **`crew_pending_hires`**.
