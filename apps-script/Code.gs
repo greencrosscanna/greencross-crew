@@ -363,6 +363,7 @@ function route_(e) {
 
       // ── METRC connector (worker permits) ───────────────────────────────────
       case 'metrc_health': return json_(metrcHealth_(p), p.callback);
+      case 'permit_publish': return json_(permitPublish_(p), p.callback);
       /* REMOVED 2026-10-12: `metrc_setup` and `metrc_probe`. They were sandbox bootstrap tools
          for Metrc's evaluation, which is finished, and they held the only POSTs in the connector.
          Every route left here reads. Do not add one that sends Metrc anything but a GET. */
@@ -2704,6 +2705,147 @@ function nightlyMetrcPermitSync_() {
   return note;
 }
 
+// ─── Permit publish to GX Core ──────────────────────────────────────────────────
+/* Changing a face on the Leaderboard kiosk takes that person's own OLCC permit number (Sky,
+   2026-10-30). Crew owns `permit_number`; GX Core keeps only a keyed hash of it, in its own tab, and
+   the kiosk asks Core. Until this runs, every employee answers `no_permit`.
+
+   ONE LIST PER RUN, through the library (`GXCore.publishPermits`, v352+), which POSTs the rows in the
+   body. The rows hold government IDs, so: they are never logged, never put in a URL, never stored in
+   a property, and never returned by a route. What is recorded is COUNTS.
+   • The number goes as the sheet holds it. Core normalizes (metrcPermitKey_ plus a leading OLCC), so
+     Crew must not hash or reshape it first, and metrcPermitKey_ must not change for this: the hub's
+     tests/permit_contract_test.js runs the real one.
+   • EVERY person on Core's roster is listed. A BLANK permit goes for anyone retired or merged and for
+     anyone whose permit is gone, because Core leaves an unlisted person alone and the old number
+     would go on opening their face. Core drops an id it does not know and reports it back.
+   • A short or failed read lists nobody (publishing an empty list is refused by Core and by us),
+     so a bad read can never clear anyone.
+   • Republishing the same number changes nothing and does not clear a lockout, so a full publish
+     every night is safe. */
+var PERMIT_PUBLISH_PROP = 'CREW_LAST_PERMIT_PUBLISH';
+var PERMIT_DIRTY_PROP = 'CREW_PERMITS_DIRTY';
+
+/* The list, from Core's roster and Crew's attributes. PURE — tests/permit_publish_test.js runs it
+   against fixtures, so it must touch no service. */
+function permitPublishRows_(identity, attrs) {
+  var rows = [];
+  (identity || []).forEach(function (r) {
+    var id = String((r && r.employee_id) || '').trim();
+    if (!id) return;
+    var held = statusIsLive_(r.status) ? String(((attrs && attrs[id]) || {}).permit_number || '') : '';
+    rows.push({ employee_id: id, permit_number: held });
+  });
+  return rows;
+}
+
+/* The flag is SET inside bustRosterCache_ (as the literal 'CREW_PERMITS_DIRTY', because that function
+   is lifted on its own by tests), so every roster writer (a permit typed or accepted, a retire, a
+   merge) queues a publish without a call site to remember. The 15-minute sweep sends it. Publishing
+   inline would put a /exec round trip, sometimes 30s, inside someone's save. */
+
+/* Publishes now. NEVER THROWS, and returns the Core answer (ids included, for the deploy-secret
+   route) while recording counts only. */
+function publishPermitsNow_(why) {
+  var note = { why: why, at: new Date().toISOString(), ok: false };
+  var out = { ok: false };
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var secret = props.getProperty('GX_DEPLOY_SECRET');
+    if (!secret) {
+      note.code = 'no_secret';
+      note.error = 'GX_DEPLOY_SECRET is not set on the Crew script';
+    } else if (typeof GXCore === 'undefined' || !GXCore || typeof GXCore.publishPermits !== 'function') {
+      note.code = 'library_too_old';
+      note.error = 'the pinned GXCore has no publishPermits (needs v352)';
+    } else {
+      var rows = permitPublishRows_(GXCore.getEmployees() || [], readAttrs_());
+      note.listed = rows.length;
+      note.blank = rows.filter(function (r) { return !r.permit_number; }).length;
+      if (!rows.length) {
+        note.code = 'empty_roster';
+        note.error = 'GX Core returned no employees, so nothing was sent';
+      } else {
+        out = GXCore.publishPermits(secret, rows, { by: 'crew' }) || { ok: false, code: 'error', error: 'no answer' };
+        note.ok = out.ok === true;
+        if (!note.ok) { note.code = String(out.code || 'error'); note.error = String(out.error || ''); }
+        ['received', 'stored', 'unchanged', 'cleared', 'invalid'].forEach(function (k) {
+          if (out[k] != null) note[k] = out[k];
+        });
+        var unk = (out.unknown_employee_ids && out.unknown_employee_ids.length) || 0;
+        if (unk) note.unknown = unk;                      // how many, never who
+        if (note.ok) props.deleteProperty(PERMIT_DIRTY_PROP);
+      }
+    }
+  } catch (e) {
+    note.code = 'threw';
+    note.error = String((e && e.message) || e);
+  }
+  note.attention = !note.ok || !!note.unknown;
+  if (note.error) note.error = scrubSecrets_(note.error).slice(0, 300);
+  try { permitPublishNotify_(note); } catch (e2) {}
+  try { PropertiesService.getScriptProperties().setProperty(PERMIT_PUBLISH_PROP, scrubSecrets_(JSON.stringify(note))); } catch (e3) {}
+  try { Logger.log('permit publish: ' + scrubSecrets_(JSON.stringify(note))); } catch (e4) {}
+  var result = { ok: note.ok, note: note };
+  if (out && out.unknown_employee_ids) result.unknown_employee_ids = out.unknown_employee_ids;
+  return result;
+}
+
+/* A failed publish or an unknown id is mailed to the approver, once per distinct problem, with counts
+   and no names: a kiosk that quietly says "no permit" to everyone is the failure this exists for. */
+function permitPublishNotify_(note) {
+  if (!note.attention) return;
+  var sig = [note.code || '', note.unknown || 0].join('|');
+  var last = null;
+  try { last = JSON.parse(PropertiesService.getScriptProperties().getProperty(PERMIT_PUBLISH_PROP) || 'null'); } catch (e) {}
+  if (last && last.attention && [last.code || '', last.unknown || 0].join('|') === sig) return;
+  var to = wfApproverEmails_();
+  if (!to.length) return;
+  sendMail_({ to: to.join(','), name: 'GX Crew',
+    subject: 'Permit publish to GX Core needs a look',
+    body: 'Crew could not publish permit numbers to GX Core cleanly (' + (note.why || 'run') + ').\n\n' +
+          (note.ok ? '' : 'Result: ' + (note.code || 'error') + (note.error ? ' - ' + note.error : '') + '\n') +
+          (note.unknown ? note.unknown + ' employee id(s) are not on GX Core\'s roster and were not stored.\n' : '') +
+          '\nUntil it succeeds, anyone whose permit is not yet published cannot unlock their own face on the kiosk.\n' +
+          'Details (counts only): ?action=permit_publish with the deploy secret.' });
+}
+
+/* Run by the 15-minute sweep: publish only when a roster write has queued one. */
+function publishPermitsIfDirty_() {
+  var dirty = '';
+  try { dirty = PropertiesService.getScriptProperties().getProperty(PERMIT_DIRTY_PROP) || ''; } catch (e) {}
+  if (!dirty) return null;
+  return publishPermitsNow_('after a roster change');
+}
+
+/* Deploy-secret route. A preview unless confirm=yes: the preview reads Core's roster and Crew's
+   sheet and reports COUNTS, calling nothing. The answer carries the last run, and Core's own
+   `permitStatus` counts when the library has it. Never a permit number. */
+function permitPublish_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var out = { ok: true, last_run: null };
+  try { out.last_run = JSON.parse(PropertiesService.getScriptProperties().getProperty(PERMIT_PUBLISH_PROP) || 'null'); } catch (e) {}
+  if (String(p.confirm || '') === 'yes') {
+    var r = publishPermitsNow_('manual');
+    out.ok = r.ok; out.ran = true; out.note = r.note;
+    if (r.unknown_employee_ids) out.unknown_employee_ids = r.unknown_employee_ids;
+    out.last_run = r.note;
+  } else {
+    try {
+      var rows = permitPublishRows_(GXCore.getEmployees() || [], readAttrs_());
+      out.would_list = rows.length;
+      out.would_send_blank = rows.filter(function (x) { return !x.permit_number; }).length;
+    } catch (e2) { out.preview_error = scrubSecrets_(String((e2 && e2.message) || e2)); }
+  }
+  try {
+    var secret = PropertiesService.getScriptProperties().getProperty('GX_DEPLOY_SECRET');
+    if (secret && typeof GXCore !== 'undefined' && GXCore && typeof GXCore.permitStatus === 'function') {
+      out.core = GXCore.permitStatus(secret);
+    }
+  } catch (e3) { out.core = { ok: false, error: scrubSecrets_(String((e3 && e3.message) || e3)).slice(0, 200) }; }
+  return out;
+}
+
 // ─── Review queue ───────────────────────────────────────────────────────────────
 /*
  * The point of holding three sources is catching where they disagree — and then asking a human,
@@ -3680,6 +3822,9 @@ function bustRosterCache_() {
   /* The incentive screen's five-minute copy of GX Core's performance answer goes too: a roster
      write can change what GX Core computes next, and the next load should ask rather than assume. */
   try { bustPerfScreenCache_(); } catch (e) {}
+  /* ...and a permit publish is queued: a permit typed or accepted, a retire and a merge all reach
+     GX Core's kiosk check through here, and the 15-minute sweep sends it. */
+  try { PropertiesService.getScriptProperties().setProperty('CREW_PERMITS_DIRTY', '1'); } catch (e) {}
 }
 
 /* Returns null on ANY failure — a miss, a parse error, a cache outage — so the caller falls through
@@ -5287,6 +5432,9 @@ function nightlyDutchieScan() {
      puts the format back within a day instead of within a page load. It cannot throw into the scan
      and cannot change what the scan returns; the workbook is reached the guarded way, as always. */
   try { crewSheetPrepare_(true); } catch (e) {}
+  /* AND THE FULL PERMIT PUBLISH TO GX CORE (2026-10-30), every night whether or not anything changed:
+     a no-change republish is free and it repairs a missed after-change run. Never throws. */
+  try { publishPermitsNow_('nightly'); } catch (e2) {}
   return out;
 }
 
@@ -9634,6 +9782,8 @@ function approvalEscalationSweep() {
   /* Request timing rides this trigger: closed hours go from cache to their tab here, never on a
      request. reqStatsFlush_ does not throw; the try is so that stays true whatever it becomes. */
   try { reqStatsFlush_(); } catch (e) {}
+  /* A roster write queues a permit publish (bustRosterCache_); it goes out here, off the request. */
+  try { publishPermitsIfDirty_(); } catch (e2) {}
   return out;
 }
 
