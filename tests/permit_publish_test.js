@@ -182,8 +182,9 @@ console.log('\n7. wiring and source guards');
   ok(/publishPermitsIfDirty_\(\)/.test(lift('approvalEscalationSweep')), 'the 15-minute sweep sends a queued publish');
   ok(/case 'permit_publish':\s*return json_\(permitPublish_\(p\)/.test(SRC), 'the deploy-secret route is wired');
   ok(/deploySecretOk_\(p\)/.test(lift('permitPublish_')), 'and gated on the deploy secret');
-  ok(/"version": "352"/.test(fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'appsscript.json'), 'utf8')),
-     'GXCore is pinned at 352 or later in the manifest');
+  var pinM = /"userSymbol":\s*"GXCore"[\s\S]*?"version":\s*"(\d+)"/.exec(
+    fs.readFileSync(path.join(__dirname, '..', 'apps-script', 'appsscript.json'), 'utf8'));
+  ok(!!pinM && parseInt(pinM[1], 10) >= 352, 'GXCore is pinned at 352 or later in the manifest');
 }
 
 console.log('\n─────────────────────────────');
