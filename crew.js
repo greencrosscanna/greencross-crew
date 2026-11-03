@@ -1650,6 +1650,13 @@
      damages worst — name, store and role — ask once before overwriting a value that is already
      there; the rest just save. */
   var fieldSeq = 0;
+  /* Empty (a deliberate clear) or a date with a four-digit year from 1900 on. A date box mid-typing
+     reports 0002-…, 0020-…, 0202-… as complete dates; none of those is a day anyone here worked. */
+  function plausibleDate(v) {
+    if (!v) return true;
+    var m = /^(\d{4})-\d{2}-\d{2}$/.exec(String(v));
+    return !!m && Number(m[1]) >= 1900;
+  }
   function fieldCard(row, o) {
     /* A DIV wrapping a real <label for>, not a <label> wrapping everything. The wage card carries
        its own "Not on payroll" checkbox, and a <label> nested inside a <label> is invalid — the
@@ -1708,6 +1715,12 @@
       clearTimeout(timer);
       var v = input.value;
       if (input.type !== 'date' && !o.options) v = v.trim();
+      /* A DATE BOX FIRES `change` ON EVERY KEYSTROKE THAT FORMS A VALID DATE — and typing a year
+         digit by digit passes through 0002, 0020, 0202 on the way to 2024. Committing the first of
+         those saved year 0002 and disabled the box, so the rest of the typing went nowhere
+         (Poem's hire date landed as 0022-11-26, 2026-11-03). Wait for a real year; the blur
+         handler below reverts one that never arrives. */
+      if (input.type === 'date' && !plausibleDate(v)) return;
       if (v === last) return;
       var prev = last;
       if (o.confirm && String(prev).trim() &&
@@ -1729,8 +1742,15 @@
       }).catch(function () {});
     }
 
-    if (o.options || input.type === 'date') input.addEventListener('change', commit);
-    else {
+    if (o.options) input.addEventListener('change', commit);
+    else if (input.type === 'date') {
+      input.addEventListener('change', commit);
+      input.addEventListener('blur', function () {
+        if (plausibleDate(input.value)) return;
+        input.value = last;
+        toast(o.label + ' needs a full four-digit year — nothing was saved', true);
+      });
+    } else {
       input.addEventListener('input', function () {
         clearTimeout(timer);
         timer = setTimeout(commit, 600);

@@ -4104,6 +4104,12 @@ function saveIdentity_(p) {
   if (p.hire_date != null) {
     var hd = String(p.hire_date).trim();
     if (hd && !normDate_(hd)) return { ok: false, error: 'invalid hire date: ' + hd + ' (expected YYYY-MM-DD)' };
+    /* A browser date box mid-typing hands over year 0002 / 0020 / 0202 as a complete date, and
+       normDate_ accepts any four digits — that is how a hire date became 0022-11-26 (2026-11-03).
+       Refuse it here too, so an old open tab without the browser fix cannot store one. */
+    if (hd && Number(normDate_(hd).slice(0, 4)) < 1900) {
+      return { ok: false, error: 'hire date needs a full four-digit year: ' + hd };
+    }
     changes.hire_date = hd ? normDate_(hd) : '';
   }
   if (!Object.keys(changes).length) return { ok: false, error: 'nothing to change' };
