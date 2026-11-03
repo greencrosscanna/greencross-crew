@@ -91,6 +91,17 @@ console.log('\nSomeone with no attributes row yet gets one');
   ok('a row is written with the name and the date', r.ok === true && a && a.retired_on === '2026-09-30' && a.full_name === 'Cyrus Budd' && a.name_key === 'cyrus_budd');
 }
 
+console.log('\nSomeone retired before the date existed gets one (the backfill path)');
+{
+  const W = world(SRC);
+  ok('(old_bud is retired in the fixture, with no date)', statusOf(W, 'old_bud') === 'retired' && !rosterRow(W, 'old_bud').retired_on);
+  const r = retire(W, 'old_bud', { retired: '1', retired_on: '2026-10-01' });
+  ok('the date is saved and they stay retired', r.ok === true && statusOf(W, 'old_bud') === 'retired' && rosterRow(W, 'old_bud').retired_on === '2026-10-01');
+  const before = rosterRow(W, 'old_bud');
+  ok('a bad date for them is still refused, and the saved one kept',
+     retire(W, 'old_bud', { retired: '1', retired_on: '2018-01-01' }).ok === false && rosterRow(W, 'old_bud').retired_on === before.retired_on);
+}
+
 console.log('\nUn-retiring clears it');
 {
   const W = world(SRC);

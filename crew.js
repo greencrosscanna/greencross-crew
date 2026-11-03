@@ -1773,7 +1773,7 @@
     /* Below the button that opened it, not above — the chooser is what "Merge duplicate…" does
        next, and putting it before the footer made it read as part of the record. */
     if (state.merging && state.canEdit) body.appendChild(mergeBox(row));
-    if (state.retiring && state.canEdit && !row.retired) body.appendChild(retireBox(row));
+    if (state.retiring && state.canEdit && (!row.retired || !row.retired_on)) body.appendChild(retireBox(row));
     pane.appendChild(body);
   }
 
@@ -2294,6 +2294,13 @@
         toast((e && e.message) || 'Failed', true);
       }
     });
+    /* Someone retired before the date was recorded: the same form, saving the day only. */
+    if (row.retired && !row.retired_on) {
+      var add = el('button', 'crew-btn', state.retiring ? 'Cancel' : 'Add last day…');
+      add.type = 'button';
+      add.addEventListener('click', function () { state.retiring = !state.retiring; paintPane(); });
+      foot.appendChild(add);
+    }
     foot.appendChild(ret);
     return foot;
   }
@@ -2306,9 +2313,11 @@
   }
   function retireBox(row) {
     var box = el('div', 'crew-mergebox');
-    box.appendChild(el('p', 'crew-hint',
-      '<b style="color:var(--gx-text)">' + esc(displayName(row) || row.name) + '</b> drops out of the ' +
-      'roster but keeps their record, permit history and employee number.'));
+    box.appendChild(el('p', 'crew-hint', row.retired
+      ? '<b style="color:var(--gx-text)">' + esc(displayName(row) || row.name) + '</b> is already retired; ' +
+        'this records the last day they worked.'
+      : '<b style="color:var(--gx-text)">' + esc(displayName(row) || row.name) + '</b> drops out of the ' +
+        'roster but keeps their record, permit history and employee number.'));
     var lab = el('label', 'crew-retire-row');
     lab.appendChild(el('span', null, 'Last day worked'));
     var day = el('input', 'crew-permit-in');
@@ -2318,7 +2327,7 @@
     if (day.value) day.max = day.value;
     if (row.hire_date) day.min = row.hire_date;
     lab.appendChild(day);
-    var go = el('button', 'crew-btn is-danger', 'Retire');
+    var go = el('button', row.retired ? 'crew-btn' : 'crew-btn is-danger', row.retired ? 'Save last day' : 'Retire');
     go.type = 'button';
     lab.appendChild(go);
     box.appendChild(lab);
@@ -2332,7 +2341,7 @@
           { timeoutMs: 45000, retries: 2 });
         if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
         state.retiring = false;
-        toast('Retired · ' + row.name + ' · last day ' + v);
+        toast((row.retired ? 'Saved · ' : 'Retired · ') + row.name + ' · last day ' + v);
         boot(true);
       } catch (e) {
         go.disabled = false;
