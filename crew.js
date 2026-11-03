@@ -70,7 +70,7 @@
                  eom: undefined,           // undefined = not loaded yet; null = nobody holds it
                  eomHistory: undefined, eomHistoryErr: '',
                  dismissed: {},            // review ids resolved in this session
-                 avatarOpen: false, merging: false };
+                 avatarOpen: false, merging: false, retiring: false };
 
 
   // ─── tiny DOM helpers ────────────────────────────────────────────────────────
@@ -1307,7 +1307,8 @@
        in the list: scanning for somebody you are looking for, "Budtender · “Michael”" is one more
        thing to read past on every row to answer a question nobody is asking at that moment. It is
        still on the header the moment you open them. */
-    txt.appendChild(el('span', 'crew-person-meta', esc(r.role)));
+    txt.appendChild(el('span', 'crew-person-meta',
+      esc(r.role) + (r.retired && r.retired_on ? ' · Retired ' + esc(r.retired_on) : '')));
     b.appendChild(txt);
 
     if (state.eom && String(state.eom) === String(r.employee_id)) {
@@ -1353,7 +1354,7 @@
        half-typed merge search across a selection change would show one person's editor over
        another person's record. */
     if (String(state.selected) !== String(lastPainted)) {
-      state.avatarOpen = false; state.merging = false; lastPainted = state.selected;
+      state.avatarOpen = false; state.merging = false; state.retiring = false; lastPainted = state.selected;
       ui.pane.scrollTop = 0;
     }
     ui.pane.innerHTML = '';
@@ -1772,6 +1773,7 @@
     /* Below the button that opened it, not above — the chooser is what "Merge duplicate…" does
        next, and putting it before the footer made it read as part of the record. */
     if (state.merging && state.canEdit) body.appendChild(mergeBox(row));
+    if (state.retiring && state.canEdit && !row.retired) body.appendChild(retireBox(row));
     pane.appendChild(body);
   }
 
@@ -1833,7 +1835,7 @@
     repaintName = paintName;
     nameRow.appendChild(nameEl);
     nameRow.appendChild(legal);
-    if (row.retired) nameRow.appendChild(el('span', 'crew-tag', 'retired'));
+    if (row.retired) nameRow.appendChild(el('span', 'crew-tag', row.retired_on ? 'Retired ' + esc(row.retired_on) : 'retired'));
     txt.appendChild(nameRow);
 
     var meta = el('div', 'crew-pmeta');
@@ -2273,11 +2275,12 @@
 
     /* Nothing is deleted. Retired staff keep their record, their permit history and their
        employee number; they drop out of the default view. */
-    var ret = el('button', 'crew-btn is-danger crew-pfoot-right', row.retired ? 'Un-retire' : 'Retire');
+    var ret = el('button', 'crew-btn is-danger crew-pfoot-right',
+      row.retired ? 'Un-retire' : (state.retiring ? 'Cancel retire' : 'Retire…'));
     ret.type = 'button';
     ret.addEventListener('click', async function () {
-      if (!row.retired && !confirm('Retire ' + (row.name || 'this person') + '?\n\n' +
-          'They drop out of the roster but keep their record, permit history and employee number.')) return;
+      /* Retiring asks for the last day worked first (retireBox); only un-retiring is one click. */
+      if (!row.retired) { state.retiring = !state.retiring; paintPane(); return; }
       ret.disabled = true;
       try {
         var r = await Engine.jsonp('roster_retire',
@@ -2293,6 +2296,50 @@
     });
     foot.appendChild(ret);
     return foot;
+  }
+
+  /* "Last day worked" — required to retire. Defaults to today in Los Angeles; the engine refuses a
+     future day or one before the hire date, and the input's min/max say the same up front. */
+  function laToday() {
+    try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date()); }
+    catch (e) { return ''; }
+  }
+  function retireBox(row) {
+    var box = el('div', 'crew-mergebox');
+    box.appendChild(el('p', 'crew-hint',
+      '<b style="color:var(--gx-text)">' + esc(displayName(row) || row.name) + '</b> drops out of the ' +
+      'roster but keeps their record, permit history and employee number.'));
+    var lab = el('label', 'crew-retire-row');
+    lab.appendChild(el('span', null, 'Last day worked'));
+    var day = el('input', 'crew-permit-in');
+    day.type = 'date';
+    day.required = true;
+    day.value = laToday();
+    if (day.value) day.max = day.value;
+    if (row.hire_date) day.min = row.hire_date;
+    lab.appendChild(day);
+    var go = el('button', 'crew-btn is-danger', 'Retire');
+    go.type = 'button';
+    lab.appendChild(go);
+    box.appendChild(lab);
+    go.addEventListener('click', async function () {
+      var v = day.value.trim();
+      if (!v) { toast('Pick their last day worked first', true); day.focus(); return; }
+      go.disabled = true;
+      try {
+        var r = await Engine.jsonp('roster_retire',
+          { token: token(), employee_id: row.employee_id, retired: '1', retired_on: v },
+          { timeoutMs: 45000, retries: 2 });
+        if (!r || !r.ok) throw new Error((r && r.error) || 'Failed');
+        state.retiring = false;
+        toast('Retired · ' + row.name + ' · last day ' + v);
+        boot(true);
+      } catch (e) {
+        go.disabled = false;
+        toast((e && e.message) || 'Failed', true);
+      }
+    });
+    return box;
   }
 
   /* Merging is picking the OTHER record. The old roster did it as a two-click dance across a

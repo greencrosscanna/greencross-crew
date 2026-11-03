@@ -62,7 +62,14 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                              sit who are not floaters at all — the same trap `pay_type` was written
                              to escape when `Admin` and `corporate` turned out to belong to hourly
                              staff too. Somebody has to say it, so this is a flag. */
-                          'is_floater'];
+                          'is_floater',
+                          /* APPENDED 2026-11-02. The last day a retired person worked, YYYY-MM-DD,
+                             a Los Angeles calendar day. Retiring used to record only THAT someone
+                             left, and reports (the monthly staff loyalty report) need WHEN. Written
+                             only by setRetired_; un-retiring clears it. CREW'S, NOT GX CORE'S: status
+                             is identity, but a leaving date is an HR attribute and nothing outside
+                             Crew needs it badly enough to cost a library cut. */
+                          'retired_on'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
  *
@@ -3877,6 +3884,9 @@ function rosterJoin_() {
       middle_initial: String(a.middle_initial || '').trim().toUpperCase().slice(0, 1),
       swipeclock_code: String(a.swipeclock_code || '').trim(),
       is_floater: isTruthyFlag_(a.is_floater),
+      /* Only for someone retired — a stale date left on an un-retired row would read as a leaving
+         date for a person who is still here. */
+      retired_on: isRetired ? normDate_(a.retired_on) : '',
       avatar_config: String(r.avatar_config || ''),
       /* THE AVATAR SEED. DiceBear generates a face from a seed, and Leaderboard historically
          seeded on nameKey — which derives from the NAME, so a rename or one of our merges
@@ -4226,6 +4236,10 @@ function avatarCfgSame_(a, b) {
  *
  * Nothing is deleted. Retired staff keep their attributes, their permit history and their
  * employee number; they simply drop out of the default roster view.
+ *
+ * RETIRING NEEDS THE LAST DAY WORKED (`retired_on`, YYYY-MM-DD, a Los Angeles day). It is Crew's
+ * attribute, read-merge-written to crew_attributes after the status goes up to Core. Un-retiring
+ * clears it. Validated before anything is written, so a refused date changes nothing.
  */
 function setRetired_(p) {
   var auth = requireCrew_(p);
@@ -4243,13 +4257,49 @@ function setRetired_(p) {
   }
   if (!prior) return { ok: false, error: 'unknown employee_id: ' + id };
 
+  var retiredOn = '';
+  if (retire) {
+    retiredOn = String(p.retired_on == null ? '' : p.retired_on).trim();
+    var bad = retiredOnProblem_(retiredOn, Utilities.formatDate(new Date(), STORE_TZ, 'yyyy-MM-dd'),
+                                normDate_(prior.hire_date));
+    if (bad) return { ok: false, error: bad };
+  }
+
   var merged = {};
   Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
   merged.employee_id = id;
   merged.status = retire ? 'retired' : 'active';
   GXCore.gxUpsertEmployee(merged);
+
+  var was = readAttrs_()[id];
+  if (retire || (was && was.retired_on)) {
+    var rec = {};
+    if (was) Object.keys(was).forEach(function (k) { rec[k] = was[k]; });
+    else { rec.name_key = nameToKey_(prior.full_name); rec.full_name = String(prior.full_name || ''); }
+    rec.employee_id = id;
+    rec.retired_on = retiredOn;
+    rec.updated_at = new Date().toISOString();
+    rec.updated_by = String(auth.user || '');
+    writeAttrs_(rec);
+  }
   bustRosterCache_();
-  return { ok: true, employee_id: id, status: merged.status, by: auth.user };
+  return { ok: true, employee_id: id, status: merged.status, retired_on: retiredOn, by: auth.user };
+}
+
+/* PURE: why a last-day-worked is refused, or '' when it is fine. `today` and `hire` are YYYY-MM-DD
+   text (hire may be ''); comparing them as text is comparing them as days. A real calendar day only —
+   normDate_ would let 2026-02-31 through. */
+function retiredOnProblem_(v, today, hire) {
+  var s = String(v == null ? '' : v).trim();
+  if (!s) return 'Last day worked is required to retire someone';
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  var d = m && new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  if (!d || d.getUTCFullYear() !== Number(m[1]) || d.getUTCMonth() !== Number(m[2]) - 1 || d.getUTCDate() !== Number(m[3])) {
+    return 'invalid last day worked: ' + s + ' (expected YYYY-MM-DD)';
+  }
+  if (s > today) return 'Last day worked cannot be in the future (' + s + ')';
+  if (hire && s < hire) return 'Last day worked (' + s + ') is before their hire date (' + hire + ')';
+  return '';
 }
 
 /**
@@ -4340,6 +4390,8 @@ function saveRosterAttrs_(p) {
     is_floater:         p.is_floater == null
                         ? (existing.is_floater || '')
                         : (isTruthyFlag_(p.is_floater) ? 'yes' : ''),
+    // Carried, never set here: roster_retire is its only writer.
+    retired_on:         existing.retired_on || '',
     updated_at:       new Date().toISOString(),
     updated_by:       String(auth.user || '')
   };

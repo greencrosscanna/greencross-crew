@@ -346,7 +346,17 @@ function world(src, opts) {
     const d = {}; Object.keys(W.reads).forEach((k) => { if ((W.reads[k] || 0) !== (r0[k] || 0)) d[k] = W.reads[k] - (r0[k] || 0); });
     const kd = {}; Object.keys(W.kvCalls).forEach((k) => { if ((W.kvCalls[k] || 0) !== (k0[k] || 0)) kd[k] = W.kvCalls[k] - (k0[k] || 0); });
     return { reads: d, registry: W.registry - e0, kv: kd, kvTabReads: W.kvTabReads - t0 }; };
-  W.book = () => { const o = {}; Object.keys(sheets).sort().forEach((n) => { if (n !== 'crew_request_stats') o[n] = sheets[n].data; }); return JSON.stringify(o); };
+  /* 2026-11-02: ATTR_HEADERS gained `retired_on`, so an engine seeded from the newer list holds one
+     more attributes column than one seeded from a baseline. It is dropped here ONLY while every cell
+     under it is blank — so the before/after comparisons still fail on any route that writes it. */
+  const ADDED_ATTR_COLS = ['retired_on'];
+  const dropBlankAdded = (n, data) => {
+    if (n !== g('ATTR_TAB') || !data.length) return data;
+    const cut = ADDED_ATTR_COLS.map((h) => data[0].indexOf(h))
+      .filter((c) => c >= 0 && data.slice(1).every((r) => r[c] == null || r[c] === ''));
+    return cut.length ? data.map((r) => r.filter((v, i) => cut.indexOf(i) < 0)) : data;
+  };
+  W.book = () => { const o = {}; Object.keys(sheets).sort().forEach((n) => { if (n !== 'crew_request_stats') o[n] = dropBlankAdded(n, sheets[n].data); }); return JSON.stringify(o); };
   /* Withhold the hand-over: incentiveHistory_ is called with ONE argument, as the route calls it. */
   W.forceSlow = () => vm.runInContext('var __ih = incentiveHistory_; incentiveHistory_ = function (p) { return __ih(p); };', sandbox);
   return W;

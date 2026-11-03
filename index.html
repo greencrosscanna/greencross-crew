@@ -447,6 +447,9 @@
        than a two-click dance across a table that no longer exists. */
     .crew-mergebox { margin: 12px 0 0; background: var(--gx-surface); border: 1px solid var(--gx-border);
       border-radius: var(--gx-radius-lg); padding: 14px 16px; }
+    /* Retire asks for the last day worked in the same box, one row. */
+    .crew-retire-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 0;
+      font-size: 12.5px; color: var(--gx-text); }
     .crew-mergelist { max-height: 240px; overflow-y: auto; margin: 10px 0 0; }
     .crew-mergerow { display: flex; align-items: center; gap: 10px; width: 100%;
       box-sizing: border-box; text-align: left; background: transparent; border: 0;
@@ -1181,6 +1184,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.425"></script>
+  <script src="crew.js?v=1.426"></script>
 </body>
 </html>

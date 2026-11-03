@@ -60,6 +60,10 @@ one person's record, or the **overview** (stat tiles, open-questions queue, Empl
 - **The OLCC permit card is read-only** (METRC owns it; an import overwrites it). **One exception:**
   with no permit number on file it shows two inputs and an Add button, because `missing_permit` is
   HIGH severity and "Mark handled" only acknowledges. `saveRosterAttrs_` allows exactly this write.
+- **Retiring records the last day worked** (`retired_on`, Crew's attribute, not Core's). `roster_retire`
+  refuses without it, refuses a future day or one before `hire_date`, and un-retiring clears it.
+  **METRC has no leaving date** — its `EndDate` is the permit's expiry, and retired staff are not in
+  the METRC copy at all — so nothing prefills it from METRC. Pinned by `tests/retired_on_test.js`.
 - `design_handoff_roster_workspace/*.dc.html` is a **reference prototype**, not shippable code.
 
 ## Layout
