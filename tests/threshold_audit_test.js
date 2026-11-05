@@ -61,6 +61,8 @@ const LIB_SURFACE = [
   /* Library v352 (hub PR 96, 2026-10-30): the OLCC permit publish. The hub's permit_contract_test.js
      exports and runs both. Crew pins 352; below it neither exists, and publishPermitsNow_ says so. */
   'publishPermits', 'permitStatus',
+  /* Swag-size counts for SPIFF; feature-detected, so Crew works before the re-pin. */
+  'publishCrewSwagSizes',
 ];
 
 /* Names Crew references that the library does NOT have, and that are correct anyway because the
