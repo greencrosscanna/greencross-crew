@@ -61,6 +61,8 @@ const LIB_SURFACE = [
   'incentivePerf',
   /* Library v352 (hub PR 96, 2026-10-30): the OLCC permit publish and its counts-only status. */
   'publishPermits', 'permitStatus',
+  /* Swag-size counts for SPIFF; feature-detected, so Crew works before the re-pin. */
+  'publishCrewSwagSizes',
 ];
 
 let CALLS, LOGS, FETCHES, KV, KV_THROWS, LB_REPLY, LB_HTTP, USER, NOTE_RESULT, NOTE_THROWS;

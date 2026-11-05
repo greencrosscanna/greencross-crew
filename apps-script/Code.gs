@@ -371,6 +371,7 @@ function route_(e) {
       // ── METRC connector (worker permits) ───────────────────────────────────
       case 'metrc_health': return json_(metrcHealth_(p), p.callback);
       case 'permit_publish': return json_(permitPublish_(p), p.callback);
+    case 'swag_sizes_publish': return json_(swagSizesPublish_(p), p.callback);
       /* REMOVED 2026-10-12: `metrc_setup` and `metrc_probe`. They were sandbox bootstrap tools
          for Metrc's evaluation, which is finished, and they held the only POSTs in the connector.
          Every route left here reads. Do not add one that sends Metrc anything but a GET. */
@@ -2712,6 +2713,110 @@ function nightlyMetrcPermitSync_() {
   return note;
 }
 
+// ─── Swag sizes: shirt-size COUNTS to GX Core ───────────────────────────────────
+/* SPIFF's Staff swag card shows what shirts to order ("6 M, 10 L"). Crew owns `shirt_size`; the counts
+   go to GX Core through `GXCore.publishCrewSwagSizes(secret, payload, { by: 'crew' })` and SPIFF reads
+   them back from Core. Never app to app.
+   • COUNTS ONLY: no name, id or per-person size is in the payload, the record, a log or a reply.
+   • ACTIVE staff only (statusIsLive_), grouped by Core's `home_store`. Someone with no store is in the
+     chain `total` but in no store. `not_set` = active with no size; `active` = active headcount.
+   • No hat field: Sky decided hats are one size (2026-11-05); SPIFF counts one per active person.
+   • FEATURE-DETECTED: before the library is re-pinned this records `library_too_old` and sends nothing.
+   • Hourly off the 15-minute sweep, and queued by every roster write (bustRosterCache_ sets
+     CREW_SWAG_DIRTY, as a literal, like the permit flag). Never inline in a request. */
+var SWAG_PUBLISH_PROP = 'CREW_LAST_SWAG_PUBLISH';
+var SWAG_DIRTY_PROP = 'CREW_SWAG_DIRTY';
+var SWAG_EVERY_MS = 55 * 60 * 1000;
+
+/* PURE — tests run it on fixtures. `day` is the Los Angeles calendar day (TEXT). */
+function swagSizesPayload_(identity, attrs, day) {
+  function blank() {
+    var shirt = {};
+    SHIRT_SIZES.forEach(function (s) { shirt[s] = 0; });
+    return { shirt: shirt, not_set: 0, active: 0 };
+  }
+  var total = blank(), by = {};
+  (identity || []).forEach(function (r) {
+    if (!r || !statusIsLive_(r.status)) return;
+    var id = String(r.employee_id || '').trim();
+    var size = normShirt_(((attrs && id && attrs[id]) || {}).shirt_size);
+    var store = String(r.home_store || '').trim();
+    var bins = [total];
+    if (store) { if (!by[store]) by[store] = blank(); bins.push(by[store]); }
+    bins.forEach(function (b) {
+      b.active++;
+      if (size && b.shirt.hasOwnProperty(size)) b.shirt[size]++; else b.not_set++;
+    });
+  });
+  return { as_of: String(day), sizes: SHIRT_SIZES.slice(), by_store: by, total: total };
+}
+
+/* Publishes now. NEVER THROWS. Records counts only. */
+function publishSwagSizesNow_(why, dryRun) {
+  var note = { why: why, at: new Date().toISOString(), ok: false };
+  var swagCounts = null;
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var secret = props.getProperty('GX_DEPLOY_SECRET');
+    if (!secret) {
+      note.code = 'no_secret'; note.error = 'GX_DEPLOY_SECRET is not set on the Crew script';
+    } else if (!dryRun && (typeof GXCore === 'undefined' || !GXCore || typeof GXCore.publishCrewSwagSizes !== 'function')) {
+      note.code = 'library_too_old'; note.error = 'the pinned GXCore has no publishCrewSwagSizes';
+    } else {
+      var emps = GXCore.getEmployees() || [];
+      if (!emps.length) {
+        note.code = 'empty_roster'; note.error = 'GX Core returned no employees, so nothing was sent';
+      } else {
+        var day = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+        swagCounts = swagSizesPayload_(emps, readAttrs_(), day);
+        note.active = swagCounts.total.active; note.not_set = swagCounts.total.not_set;
+        note.stores = Object.keys(swagCounts.by_store).length;
+        if (dryRun) {
+          note.code = 'dry_run'; note.ok = true;
+        } else {
+          var out = GXCore.publishCrewSwagSizes(secret, swagCounts, { by: 'crew' }) || { ok: false, code: 'error', error: 'no answer' };
+          note.ok = out.ok === true;
+          if (!note.ok) { note.code = String(out.code || 'error'); note.error = String(out.error || ''); }
+          else props.deleteProperty(SWAG_DIRTY_PROP);
+        }
+      }
+    }
+  } catch (e) {
+    note.code = 'threw'; note.error = String((e && e.message) || e);
+  }
+  if (note.error) note.error = scrubSecrets_(note.error).slice(0, 300);
+  if (!dryRun) {
+    try { PropertiesService.getScriptProperties().setProperty(SWAG_PUBLISH_PROP, scrubSecrets_(JSON.stringify(note))); } catch (e3) {}
+    try { Logger.log('swag publish: ' + scrubSecrets_(JSON.stringify(note))); } catch (e4) {}
+  }
+  return { ok: note.ok, note: note, counts: dryRun ? swagCounts : undefined };
+}
+
+/* Run by the 15-minute sweep: publish when a roster write queued one, or the last run is over ~an hour old. */
+function publishSwagSizesIfDue_() {
+  var props, dirty = '', last = null;
+  try {
+    props = PropertiesService.getScriptProperties();
+    dirty = props.getProperty(SWAG_DIRTY_PROP) || '';
+    last = JSON.parse(props.getProperty(SWAG_PUBLISH_PROP) || 'null');
+  } catch (e) {}
+  var age = last && last.at ? (Date.now() - new Date(last.at).getTime()) : Infinity;
+  if (!dirty && !(age >= SWAG_EVERY_MS)) return null;
+  return publishSwagSizesNow_(dirty ? 'after a roster change' : 'hourly');
+}
+
+/* Deploy-secret route. A preview (counts and the payload, calling nothing) unless confirm=yes. The
+   payload is counts only, so returning it is safe. */
+function swagSizesPublish_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  var out = { ok: true, last_run: null };
+  try { out.last_run = JSON.parse(PropertiesService.getScriptProperties().getProperty(SWAG_PUBLISH_PROP) || 'null'); } catch (e) {}
+  var r = publishSwagSizesNow_('manual', String(p.confirm || '') !== 'yes');
+  out.ok = r.ok; out.note = r.note;
+  if (r.counts) out.would_send = r.counts; else out.ran = true;
+  return out;
+}
+
 // ─── Permit publish to GX Core ──────────────────────────────────────────────────
 /* Changing a face on the Leaderboard kiosk takes that person's own OLCC permit number (Sky,
    2026-10-30). Crew owns `permit_number`; GX Core keeps only a keyed hash of it, in its own tab, and
@@ -3832,6 +3937,8 @@ function bustRosterCache_() {
   /* ...and a permit publish is queued: a permit typed or accepted, a retire and a merge all reach
      GX Core's kiosk check through here, and the 15-minute sweep sends it. */
   try { PropertiesService.getScriptProperties().setProperty('CREW_PERMITS_DIRTY', '1'); } catch (e) {}
+  /* ...and so are shirt-size counts for SPIFF's swag card (a size saved, a retire, a merge). */
+  try { PropertiesService.getScriptProperties().setProperty('CREW_SWAG_DIRTY', '1'); } catch (e) {}
 }
 
 /* Returns null on ANY failure — a miss, a parse error, a cache outage — so the caller falls through
@@ -9863,6 +9970,8 @@ function approvalEscalationSweep() {
   try { reqStatsFlush_(); } catch (e) {}
   /* A roster write queues a permit publish (bustRosterCache_); it goes out here, off the request. */
   try { publishPermitsIfDirty_(); } catch (e2) {}
+  /* Shirt-size counts for SPIFF's swag card: hourly, or sooner after a roster write. */
+  try { publishSwagSizesIfDue_(); } catch (e3) {}
   return out;
 }
 
