@@ -89,7 +89,11 @@ function formatDate(d, tz, fmt) {
 function world(src, opts) {
   opts = opts || {};
   const W = { clock: { t: NOW, step: 0, perRead: 0, perRegistry: 0 }, reads: Object.create(null), writes: Object.create(null),
-              registry: 0, fetches: [], mails: [], cache: new Map(), ttl: new Map(), props: { CREW_SHEET_ID: 'SHEET-1', GX_DEPLOY_SECRET: SECRET, STORE_EMAIL_TO: 'mike@greencrosscanna.com' },
+              registry: 0, fetches: [], mails: [], cache: new Map(), ttl: new Map(), props: { CREW_SHEET_ID: 'SHEET-1', GX_DEPLOY_SECRET: SECRET, STORE_EMAIL_TO: 'mike@greencrosscanna.com',
+                       /* Every fixture user sees pay, as every Crew user did before the pay gate —
+                          so the before/after comparisons below still compare like with like. Who
+                          is REFUSED pay is tests/pay_access_test.js's question. */
+                       CREW_PAY_VIEWERS: 'sky,mike,dev,shawn' },
               employees: EMPLOYEES(), uuid: 0, created: 0 };
   const kv = { 'cfg.payPeriodAnchor': '2026-08-17', 'cfg.payPeriodDays': '14', 'cfg.crewApprover': 'sky',
                'cfg.crewBackupApprover': 'shawn', incentiveThresholds: JSON.stringify(T), spiffProgress: 'https://spiff.example/exec' };

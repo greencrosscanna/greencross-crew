@@ -117,7 +117,8 @@ const WANT = [
   ['fn', 'authParamValue_'], ['fn', 'scrubSecrets_'], ['fn', 'loginScrub_'],
   /* json_ tells request timing a reply was built. The shipped hook, with no request open. */
   ['var', '_reqT_'], ['fn', 'reqReplied_'],
-  ['fn', 'json_'], ['fn', 'sendMail_'], ['fn', 'requireCrew_'], ['fn', 'bugNotify_']
+  ['fn', 'json_'], ['fn', 'sendMail_'], ['fn', 'requireCrew_'], ['fn', 'requireCrewSession_'], ['var', 'PAY_ACTIONS_EXTRA_'], ['fn', 'isPayAction_'],
+  ['fn', 'bugNotify_']
 ];
 const missing = WANT.filter(([k, n]) => !block(k, n)).map(([, n]) => n);
 ok('every helper this test executes was found in Code.gs' + (missing.length ? ' (missing: ' + missing.join(', ') + ')' : ''),

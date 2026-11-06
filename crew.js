@@ -57,7 +57,7 @@
    * and nothing to forget to press. `dismissed` and `celebrations` are the optimistic overlays
    * that let a resolved question disappear and a checkbox move before the write comes back.
    */
-  var state  = { rows: [], canEdit: false, shirtSizes: [], roleTitles: [], user: '', role: '', identity: null,
+  var state  = { rows: [], canEdit: false, canSeePay: true, shirtSizes: [], roleTitles: [], user: '', role: '', identity: null,
                  stores: {}, storeOrder: {}, storeFilter: {},
                  retiredTotal: 0, q: '',
                  /* 'active' | 'attention' | 'retired'. Replaces the old showRetired + onlyFlagged
@@ -689,7 +689,13 @@
     var nav = document.getElementById('navTabs');
     if (!nav) return null;
     nav.innerHTML = '';
-    [['roster', 'Roster'], ['incentive', 'Incentive']].forEach(function (t) {
+    /* No Incentive tab for an account the engine refuses pay to (`can_see_pay === false` on the
+       roster). An older engine sends no such field, and the tab shows as it always did. */
+    var payOk = state.canSeePay !== false;
+    if (!payOk && state.tab === 'incentive') state.tab = 'roster';
+    [['roster', 'Roster'], ['incentive', 'Incentive']].filter(function (t) {
+      return payOk || t[0] !== 'incentive';
+    }).forEach(function (t) {
       var b = el('button', 'gx-topnav-tab' + (state.tab === t[0] ? ' is-active' : ''), t[1]);
       b.type = 'button';
       b.addEventListener('click', function () {
@@ -1182,6 +1188,7 @@
      incentive tab, so it is hidden rather than left there doing nothing to the table below it. */
   function paintTab() {
     if (!ui) return;
+    if (state.tab === 'incentive' && state.canSeePay === false) state.tab = 'roster';   // an #incentive link
     var onInc = state.tab === 'incentive';
     ui.subnav.style.display = onInc ? 'none' : '';
     ui.rail.style.display = onInc ? 'none' : '';
@@ -1615,7 +1622,7 @@
     ['wage', 'shirt_size', 'birthday', 'permit_number', 'permit_expires', 'permit_status']
       .forEach(function (k) { if (saved[k] != null) row[k] = saved[k]; });
     if (saved.celebrations_opt_out != null) row.celebrations_opt_out = !!saved.celebrations_opt_out;
-    retagFlag(row, 'wage', !row.wage);
+    if (state.canSeePay !== false) retagFlag(row, 'wage', !row.wage);
     retagFlag(row, 'birthday', !row.birthday);
     retagFlag(row, 'permit', !row.permit_number);
   }
@@ -2102,7 +2109,12 @@
             : { text: 'Learned on the first hours import', kind: '' };
         },
         read: function (r) { return r.swipeclock_code || ''; } }
-    ].forEach(function (o) { grid.appendChild(fieldCard(row, o)); });
+    ].filter(function (o) {
+      /* No wage card for someone the engine says may not see pay — it sent no wage to show, and
+         an empty card would read as "Not set" on every person. The engine is what refuses; this
+         only keeps the screen from offering a field that cannot be filled. */
+      return state.canSeePay !== false || o.field !== 'wage';
+    }).forEach(function (o) { grid.appendChild(fieldCard(row, o)); });
 
     return grid;
   }
@@ -5962,6 +5974,7 @@
       }
       state.rows       = r.rows || [];
       state.canEdit    = !!r.can_edit;
+      state.canSeePay  = r.can_see_pay !== false;   // the engine sends it only when it is false
       state.shirtSizes = r.shirt_sizes || [];
       // The role vocabulary is the engine's, not the UI's — so the dropdown can never offer a
       // title the engine would refuse, and adding a fifth role is a one-line server change.

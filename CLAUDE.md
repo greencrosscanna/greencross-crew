@@ -1097,6 +1097,25 @@ Sky, Mike, and Shawn (backup approver, `editor` grant); HR / managers later. GX 
 compensation + PII, so it is a
 **separate deployment** from the all-staff kiosk Leaderboard — keep the sensitive surface isolated.
 
+### A Crew grant opens the roster; seeing PAY is a second, Crew-side list (Sky, 2026-11-05)
+Asked for so Tawny could use Crew without seeing pay. **Pay viewers are the Script Property
+`CREW_PAY_VIEWERS`** (GX user ids; `?action=pay_viewers&to=…`, deploy-secret) **plus the approver
+and backup approver**, always. Everyone else with a grant gets the roster with no `wage`, `pay_type`,
+`wage_exempt`, `not_on_payroll` and no `wage` gap, is refused every `incentive*` route and
+`approver_away`, and cannot write a wage or pay basis.
+
+- **Enforced in the engine, in `requireCrew_`** (`isPayAction_` matches the whole `incentive*` family
+  by prefix, so a new pay route is covered when written). The browser only hides the Incentive tab and
+  the wage card when the roster says `can_see_pay: false`.
+- **An allowlist, so it fails CLOSED.** Unset, only the approvers see pay — so **set the property
+  before (or with) any deploy of this code**, or Mike loses the incentive tab.
+- **Never a person's name in code, and not a GX Core role** — "may edit" and "may see pay" are
+  different questions. No GX Core change was needed.
+- **`can_see_pay` is sent only when false**, so a pay viewer's roster reply is byte-identical to
+  before. The test harness lists every fixture user as a pay viewer for the same reason.
+- The deploy-secret pay routes (history, PDFs, pay audit, backups, store email) never take a session
+  and are unchanged. Pinned by `tests/pay_access_test.js`.
+
 ## Sync with the brain — run `/gxbrain` (or say "brain sync")
 `/gxbrain` loads the shared rules and reconciles this chat with GX Core: it reads notes addressed
 to `to_app=crew`, resolves done ones (`resolve_note`), and writes note-backs (`add_note`). The
