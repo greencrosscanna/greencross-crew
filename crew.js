@@ -645,6 +645,16 @@
     return bn - an;
   }
 
+  /* ACTIVE staff with no shirt size on file, grouped by store (the pill order). Same population as
+     the swag-size publish in Code.gs: not retired. A saved copy keeps shirt_size, so this is safe
+     to read before the live response lands. Shirt size is not pay, so no can_see_pay gate. */
+  function noShirtGroups(rows) {
+    var gap = (rows || []).filter(function (r) { return !r.retired && !String(r.shirt_size || '').trim(); });
+    return storesInRoster(gap).map(function (sid) {
+      return { store: sid, rows: gap.filter(function (r) { return (r.store || '') === sid; }).sort(byName) };
+    });
+  }
+
   /* Alphabetical within a store group, on the name the list actually SHOWS. Sorting on the legal
      name instead would file Rebeka Perez under R while the row in front of you reads "Bekah
      Perez" — an alphabetical list you cannot scan alphabetically is worse than an unsorted one.
@@ -1396,6 +1406,8 @@
     var open     = openItems();
     var expiring = live.filter(function (r) { return r.permit_days_left != null && r.permit_days_left <= 90; }).length;
     var gaps     = live.filter(function (r) { return (r.flags || []).length; }).length;
+    var noShirt  = noShirtGroups(live);
+    var noShirtN = noShirt.reduce(function (n, g) { return n + g.rows.length; }, 0);
 
     wrap.appendChild(el('h1', 'crew-ov-h1', 'Everything that needs a person'));
     wrap.appendChild(el('p', 'crew-ov-sub',
@@ -1407,7 +1419,8 @@
     [[live.length, 'active people', ''],
      [open.length, 'open questions', open.length ? 'is-warn' : 'is-ok'],
      [expiring, 'permits inside 90 days', expiring ? 'is-bad' : 'is-ok'],
-     [gaps, 'records with a gap', gaps ? 'is-warn' : 'is-ok']
+     [gaps, 'records with a gap', gaps ? 'is-warn' : 'is-ok'],
+     [noShirtN, 'missing a shirt size', noShirtN ? 'is-warn' : 'is-ok']
     ].forEach(function (t) {
       var c = el('div', 'crew-stat');
       c.appendChild(el('div', 'crew-stat-n' + (t[2] ? ' ' + t[2] : ''), String(t[0])));
@@ -1442,6 +1455,30 @@
       wrap.appendChild(el('div', 'crew-clear', '✓ Every source agrees. Nothing to review.'));
     } else {
       open.forEach(function (it) { wrap.appendChild(queueCard(it)); });
+    }
+
+    if (noShirtN) {
+      var ssect = el('div', 'crew-sect');
+      ssect.appendChild(el('h2', null, 'Missing shirt size'));
+      ssect.appendChild(el('span', null, 'for the swag order — click a name to fill it in'));
+      wrap.appendChild(ssect);
+      noShirt.forEach(function (g) {
+        var box = el('div', 'crew-q crew-new crew-shirtgap');
+        box.appendChild(el('span', 'crew-q-kind',
+          esc(g.store ? storeName(g.store) : 'no store') + ' · ' + g.rows.length));
+        var names = el('div', 'crew-q-detail');
+        g.rows.forEach(function (r) {
+          var b = el('button', 'crew-btn', esc(displayName(r) || r.employee_id));
+          b.type = 'button';
+          b.addEventListener('click', function () {
+            state.selected = r.employee_id; paintRail(); paintPane();
+          });
+          names.appendChild(b);
+          names.appendChild(document.createTextNode(' '));
+        });
+        box.appendChild(names);
+        wrap.appendChild(box);
+      });
     }
 
     var esect = el('div', 'crew-sect');
