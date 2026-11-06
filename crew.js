@@ -1018,7 +1018,19 @@
       merged.current = !!(prev.current || h.current);
       out[out.length - 1] = merged;
     });
-    return out;
+    /* A "nobody" in a month somebody WON is not a month nobody held it (Sky, 2026-11-05: two
+       "Nobody held it" rows beside real winners). Clearing the star before picking — or after —
+       logs a clear stamped when Crew noticed it, which lands in the same month as the pick. The
+       award was given that month, so the clear is a step in the picking, not part of the record.
+       Display only: the rows stay on the sheet. A month with NO winner keeps its "nobody". */
+    var won = Object.create(null);
+    out.forEach(function (h) {
+      var m = eomMonth(h.started_at);
+      if (!h.nobody && String(h.employee_id || '') && m !== '—') won[m] = true;
+    });
+    return out.filter(function (h) {
+      return !(h.nobody && won[eomMonth(h.started_at)]);
+    });
   }
 
   function eomHistoryNodes() {

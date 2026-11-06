@@ -130,6 +130,25 @@ console.log('\nOne row per person per month — Noah appeared twice under Sep 20
   ok('and a nobody never folds into a person',
      M.eomFold([nob1, { employee_id: '', nobody: false, started_at: '2026-07-02T18:00:00Z' }]).length === 2);
 
+  /* A "nobody" in a month somebody won is a step in picking, not a gap (Sky, 2026-11-05: two
+     "Nobody held it" rows sat beside real winners). Hidden whichever side of the pick it falls. */
+  const novWin   = { employee_id: 'ayla_mcarthur', started_at: '2026-11-03T18:00:00Z', current: true };
+  const novClear = { employee_id: '', nobody: true, started_at: '2026-11-02T18:00:00Z' };
+  const octWin   = { employee_id: 'noah_pinkerton', started_at: '2026-10-01T18:00:00Z' };
+  const octClear = { employee_id: '', nobody: true, started_at: '2026-10-20T18:00:00Z' };
+  const augGap   = { employee_id: '', nobody: true, started_at: '2026-08-05T18:00:00Z' };
+  const shown = M.eomFold([novWin, novClear, octClear, octWin, augGap]);
+  ok('a clear BEFORE the pick in the same month is hidden',
+     !shown.some(h => h.nobody && M.eomWhen(h) === 'Nov 2026'));
+  ok('a clear AFTER the pick in the same month is hidden',
+     !shown.some(h => h.nobody && M.eomWhen(h) === 'Oct 2026'));
+  ok('both winners still show', shown.filter(h => !h.nobody).length === 2);
+  ok('a month with NO winner keeps its "nobody"',
+     shown.some(h => h.nobody && M.eomWhen(h) === 'Aug 2026'));
+  ok('and a nobody with no usable date is not hidden by an undatable winner',
+     M.eomFold([{ employee_id: 'x', started_at: '' }, { employee_id: '', nobody: true, started_at: '' }])
+       .some(h => h.nobody));
+
   /* Undatable rows must not all collapse onto each other — '—' is not a month. */
   const junk1 = { employee_id: 'x', started_at: '' };
   const junk2 = { employee_id: 'x', started_at: 'nope' };
