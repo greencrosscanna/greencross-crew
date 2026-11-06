@@ -649,7 +649,14 @@
      the swag-size publish in Code.gs: not retired. A saved copy keeps shirt_size, so this is safe
      to read before the live response lands. Shirt size is not pay, so no can_see_pay gate. */
   function noShirtGroups(rows) {
-    var gap = (rows || []).filter(function (r) { return !r.retired && !String(r.shirt_size || '').trim(); });
+    return gapGroups(rows, function (r) { return !String(r.shirt_size || '').trim(); });
+  }
+  /* Active staff with no badge recorded, same shape. */
+  function noBadgeGroups(rows) {
+    return gapGroups(rows, function (r) { return !r.badge_issued; });
+  }
+  function gapGroups(rows, isGap) {
+    var gap = (rows || []).filter(function (r) { return !r.retired && isGap(r); });
     return storesInRoster(gap).map(function (sid) {
       return { store: sid, rows: gap.filter(function (r) { return (r.store || '') === sid; }).sort(byName) };
     });
@@ -1408,6 +1415,8 @@
     var gaps     = live.filter(function (r) { return (r.flags || []).length; }).length;
     var noShirt  = noShirtGroups(live);
     var noShirtN = noShirt.reduce(function (n, g) { return n + g.rows.length; }, 0);
+    var noBadge  = noBadgeGroups(live);
+    var noBadgeN = noBadge.reduce(function (n, g) { return n + g.rows.length; }, 0);
 
     wrap.appendChild(el('h1', 'crew-ov-h1', 'Everything that needs a person'));
     wrap.appendChild(el('p', 'crew-ov-sub',
@@ -1420,7 +1429,8 @@
      [open.length, 'open questions', open.length ? 'is-warn' : 'is-ok'],
      [expiring, 'permits inside 90 days', expiring ? 'is-bad' : 'is-ok'],
      [gaps, 'records with a gap', gaps ? 'is-warn' : 'is-ok'],
-     [noShirtN, 'missing a shirt size', noShirtN ? 'is-warn' : 'is-ok']
+     [noShirtN, 'missing a shirt size', noShirtN ? 'is-warn' : 'is-ok'],
+     [noBadgeN, 'missing a badge', noBadgeN ? 'is-warn' : 'is-ok']
     ].forEach(function (t) {
       var c = el('div', 'crew-stat');
       c.appendChild(el('div', 'crew-stat-n' + (t[2] ? ' ' + t[2] : ''), String(t[0])));
@@ -1457,29 +1467,8 @@
       open.forEach(function (it) { wrap.appendChild(queueCard(it)); });
     }
 
-    if (noShirtN) {
-      var ssect = el('div', 'crew-sect');
-      ssect.appendChild(el('h2', null, 'Missing shirt size'));
-      ssect.appendChild(el('span', null, 'for the swag order — click a name to fill it in'));
-      wrap.appendChild(ssect);
-      noShirt.forEach(function (g) {
-        var box = el('div', 'crew-q crew-new crew-shirtgap');
-        box.appendChild(el('span', 'crew-q-kind',
-          esc(g.store ? storeName(g.store) : 'no store') + ' · ' + g.rows.length));
-        var names = el('div', 'crew-q-detail');
-        g.rows.forEach(function (r) {
-          var b = el('button', 'crew-btn', esc(displayName(r) || r.employee_id));
-          b.type = 'button';
-          b.addEventListener('click', function () {
-            state.selected = r.employee_id; paintRail(); paintPane();
-          });
-          names.appendChild(b);
-          names.appendChild(document.createTextNode(' '));
-        });
-        box.appendChild(names);
-        wrap.appendChild(box);
-      });
-    }
+    gapSection(wrap, 'Missing shirt size', 'for the swag order — click a name to fill it in', noShirt);
+    gapSection(wrap, 'Missing badge', 'no printed ID badge recorded — click a name to fill it in', noBadge);
 
     var esect = el('div', 'crew-sect');
     esect.appendChild(el('h2', null, 'Employee of the Month'));
@@ -1489,6 +1478,32 @@
     eomHistoryNodes().forEach(function (n) { wrap.appendChild(n); });
 
     pane.appendChild(wrap);
+  }
+
+  /* One "missing X" list on the overview: a heading, then a card per store naming each person. */
+  function gapSection(wrap, title, sub, groups) {
+    if (!groups.length) return;
+    var sect = el('div', 'crew-sect');
+    sect.appendChild(el('h2', null, title));
+    sect.appendChild(el('span', null, sub));
+    wrap.appendChild(sect);
+    groups.forEach(function (g) {
+      var box = el('div', 'crew-q crew-new crew-shirtgap');
+      box.appendChild(el('span', 'crew-q-kind',
+        esc(g.store ? storeName(g.store) : 'no store') + ' · ' + g.rows.length));
+      var names = el('div', 'crew-q-detail');
+      g.rows.forEach(function (r) {
+        var b = el('button', 'crew-btn', esc(displayName(r) || r.employee_id));
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          state.selected = r.employee_id; paintRail(); paintPane();
+        });
+        names.appendChild(b);
+        names.appendChild(document.createTextNode(' '));
+      });
+      box.appendChild(names);
+      wrap.appendChild(box);
+    });
   }
 
   function eomCard() {
@@ -1659,6 +1674,7 @@
     ['wage', 'shirt_size', 'birthday', 'permit_number', 'permit_expires', 'permit_status']
       .forEach(function (k) { if (saved[k] != null) row[k] = saved[k]; });
     if (saved.celebrations_opt_out != null) row.celebrations_opt_out = !!saved.celebrations_opt_out;
+    if (saved.badge_issued != null) row.badge_issued = !!saved.badge_issued;
     if (state.canSeePay !== false) retagFlag(row, 'wage', !row.wage);
     retagFlag(row, 'birthday', !row.birthday);
     retagFlag(row, 'permit', !row.permit_number);
@@ -2137,6 +2153,16 @@
             : { text: 'Works one store', kind: '' };
         },
         read: function (r) { return r.is_floater ? 'yes' : ''; } },
+
+      /* Has the printed staff ID badge been handed over? A statement, like Floater. Not a row flag:
+         the overview lists who is missing one on its own, so "records with a gap" is unchanged. */
+      { label: 'Badge issued', route: 'attr', field: 'badge_issued',
+        value: row.badge_issued ? 'yes' : '', options: [['', 'Not yet'], ['yes', 'Yes']],
+        note: function (r) {
+          return r.badge_issued ? { text: 'Printed staff ID badge handed over', kind: '' }
+                                : { text: 'No badge recorded yet', kind: '' };
+        },
+        read: function (r) { return r.badge_issued ? 'yes' : ''; } },
 
       { label: 'WorkforceHub code', route: 'attr', field: 'swipeclock_code',
         value: row.swipeclock_code, placeholder: '—',

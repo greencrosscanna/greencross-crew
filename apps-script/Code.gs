@@ -69,7 +69,11 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                              only by setRetired_; un-retiring clears it. CREW'S, NOT GX CORE'S: status
                              is identity, but a leaving date is an HR attribute and nothing outside
                              Crew needs it badly enough to cost a library cut. */
-                          'retired_on'];
+                          'retired_on',
+                          /* APPENDED 2026-11-05. Has this person been handed their printed staff ID
+                             badge (the label-maker one)? 'yes' or blank. A statement a human makes,
+                             never inferred. Carried by every writer via attrFields_. */
+                          'badge_issued'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
  *
@@ -4073,6 +4077,7 @@ function rosterJoin_() {
       middle_initial: String(a.middle_initial || '').trim().toUpperCase().slice(0, 1),
       swipeclock_code: String(a.swipeclock_code || '').trim(),
       is_floater: isTruthyFlag_(a.is_floater),
+      badge_issued: isTruthyFlag_(a.badge_issued),
       /* Only for someone retired — a stale date left on an un-retired row would read as a leaving
          date for a person who is still here. */
       retired_on: isRetired ? normDate_(a.retired_on) : '',
@@ -4597,6 +4602,9 @@ function saveRosterAttrs_(p) {
     is_floater:         p.is_floater == null
                         ? (existing.is_floater || '')
                         : (isTruthyFlag_(p.is_floater) ? 'yes' : ''),
+    badge_issued:       p.badge_issued == null
+                        ? (existing.badge_issued || '')
+                        : (isTruthyFlag_(p.badge_issued) ? 'yes' : ''),
     // Carried, never set here: roster_retire is its only writer.
     retired_on:         existing.retired_on || '',
     updated_at:       new Date().toISOString(),
