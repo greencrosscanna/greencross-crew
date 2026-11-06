@@ -38,7 +38,7 @@ console.log('\nThe column');
 {
   const W = world(SRC);
   const H = W.g('ATTR_HEADERS');
-  ok('retired_on is APPENDED to ATTR_HEADERS (the last column)', H[H.length - 1] === 'retired_on');
+  ok('retired_on is APPENDED to ATTR_HEADERS (after every column that existed before it)', H.indexOf('retired_on') === H.indexOf('is_floater') + 1);
   ok('…and is not a GX Core identity field the route sends up', !/retired_on/.test(JSON.stringify(W.employees)));
 }
 
