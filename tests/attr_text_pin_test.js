@@ -362,10 +362,11 @@ else {
       if (typeof d.html === 'string') d.html = d.html.replace(/<!--spiff-->.*?<!--\/spiff-->/g, '');   // the store email's SPIFF section is new since the baseline
       /* 2026-11-02: every roster row gained `retired_on` — '' unless the person is retired with a
          date, which no fixture row is. Removed only when blank. */
-      const added = (r) => { if (!r) return; if (r.metrc_listed === null) delete r.metrc_listed; if (r.retired_on === '') delete r.retired_on; };
+      const added = (r) => { if (!r) return; if (r.metrc_listed === null) delete r.metrc_listed; if (r.retired_on === '') delete r.retired_on; if (r.badge_issued === false) delete r.badge_issued; };
       if (Array.isArray(d.rows)) d.rows.forEach(added);
       if (d.roster && Array.isArray(d.roster.rows)) d.roster.rows.forEach(added);
       if (d.saved && d.saved.retired_on === '') delete d.saved.retired_on;
+      if (d.saved && d.saved.badge_issued === '') delete d.saved.badge_issued;
       if (Array.isArray(d.actions)) d.actions.forEach((a) => { if (a && Array.isArray(a.stages)) a.stages = a.stages.filter((s) => ADDED_STAGES.indexOf(s.stage) < 0); });
     }
     return JSON.stringify(d);

@@ -9,7 +9,7 @@
 const fs = require('fs');
 let src = fs.readFileSync(__dirname + '/../crew.js', 'utf8');
 const cut = src.lastIndexOf('})();');
-src = src.slice(0, cut) + '\n; return { noShirtGroups, state };\n' + src.slice(cut);
+src = src.slice(0, cut) + '\n; return { noShirtGroups, noBadgeGroups, state };\n' + src.slice(cut);
 src = src.replace('(function () {', 'return (function () {');
 const fakeEl = () => ({ style: { setProperty() {} }, classList: { add() {} }, setAttribute() {},
   addEventListener() {}, appendChild() {} });
@@ -43,5 +43,23 @@ eq('names sorted within a store', g[1].rows.map(r => r.employee_id), ['b', 'a'])
 eq('blank/whitespace counts as missing; a size does not; retired never', g[0].rows.map(r => r.employee_id), ['d']);
 eq('roster-only users (no pay) get the same list', M.noShirtGroups(rows).length, 3);
 eq('nobody missing -> no groups', M.noShirtGroups([{ store: 'bend', shirt_size: 'L' }]), []);
+
+// ── badges: same population, same grouping ──
+const brows = [
+  { employee_id: 'a', name: 'Zed Z', store: 'center' },
+  { employee_id: 'b', name: 'Amy A', store: 'center', badge_issued: true },
+  { employee_id: 'c', name: 'Bo B', store: 'bend', badge_issued: false },
+  { employee_id: 'e', name: 'Old O', store: 'bend', retired: true },
+];
+const bg = M.noBadgeGroups(brows);
+eq('badge: groups by store, issued and retired excluded', bg.map(x => [x.store, x.rows.map(r => r.employee_id)]),
+   [['bend', ['c']], ['center', ['a']]]);
+
+// ── engine: badge_issued is appended, carried by the save, never inferred ──
+const code = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
+const hdr = code.slice(code.indexOf('var ATTR_HEADERS'), code.indexOf('/* The ATTRIBUTE columns'));
+eq('badge_issued is the LAST ATTR_HEADERS entry (append-only)', /'retired_on',[\s\S]*'badge_issued'\];/.test(hdr), true);
+eq('roster_save carries it (patch-safe)', /badge_issued:\s+p\.badge_issued == null\s+\? \(existing\.badge_issued \|\| ''\)/.test(code), true);
+eq('roster rows expose it', /badge_issued: isTruthyFlag_\(a\.badge_issued\)/.test(code), true);
 console.log(fail ? '\n' + fail + ' FAILED' : '\nmissing shirt overview: all passed');
 process.exit(fail ? 1 : 0);
