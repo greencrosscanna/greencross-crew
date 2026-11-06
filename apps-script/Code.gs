@@ -487,6 +487,8 @@ function route_(e) {
       case 'store_email':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(sendStoreEmail_(p), p.callback);
+      // Who may see pay besides the approvers. Deploy-secret; see canSeePay_.
+      case 'pay_viewers':       return json_(payViewersRoute_(p), p.callback);
       case 'store_email_to':
         if (!deploySecretOk_(p)) return json_({ ok: false, error: 'bad deploy secret' }, p.callback);
         return json_(storeEmailSetTo_(p), p.callback);
@@ -1088,6 +1090,16 @@ function libVersion_() {
    dropped: Core reads `token` first, so ?session= and ?auth= authenticate exactly as before. */
 function requireCrew_(p) {
   var params = p || {};
+  var auth = requireCrewSession_(params);
+  /* THE PAY GATE (see canSeePay_). Here, and not in each incentive handler, so a pay route added
+     later is covered the day it is written: every session-reachable pay route goes through this
+     function, and isPayAction_ matches the whole `incentive*` family by prefix. */
+  if (auth && auth.ok === true && isPayAction_(params.action) && !canSeePay_(auth)) {
+    return { ok: false, error: NO_PAY_ERROR_, code: 'no_pay' };
+  }
+  return auth;
+}
+function requireCrewSession_(params) {
   var tok = authParamValue_(params);
   // Nothing presented: hand the request straight over so Core phrases the refusal, as it always has.
   if (!tok) return GXCore.requireAuth(params, 'crew');
@@ -1095,6 +1107,76 @@ function requireCrew_(p) {
   for (var k in params) if (Object.prototype.hasOwnProperty.call(params, k)) q[k] = params[k];
   q.token = tok;
   return GXCore.requireAuth(q, 'crew');
+}
+
+/* ══ WHO MAY SEE PAY (Sky, 2026-11-05: "can we make it so tawny doesn't see pay info?") ══════════
+ *
+ * A Crew grant opens the ROSTER. Pay is a second question, answered here: the people named in the
+ * Script Property CREW_PAY_VIEWERS (comma-separated GX user ids, set with
+ * ?action=pay_viewers&to=mike,shawn — deploy-secret), plus the approver and the backup approver,
+ * who cannot do their job without the figures. Everyone else with a Crew grant gets the roster with
+ * no wage and no pay basis, and is refused every incentive route.
+ *
+ * AN ALLOWLIST, so it fails CLOSED: an empty property, an unknown user, or an unreadable approver
+ * setting all mean "no pay". Never a check on a person's name in code, and never a role: GX Core's
+ * roles answer "may this person edit", which is a different question (Tawny may well need to edit
+ * the roster and still not see wages).
+ *
+ * WHAT "PAY" IS: wage, pay_type (and the derived wage_exempt and the `wage` gap flag) on the
+ * roster, and every `incentive*` route plus approver_away. The deploy-secret pay routes
+ * (incentive_history, pdf_file, pay_audit, backups, the store email) never accept a session and
+ * are unchanged. Pinned by tests/pay_access_test.js. */
+var PAY_VIEWERS_PROP = 'CREW_PAY_VIEWERS';
+var NO_PAY_ERROR_ = 'Pay figures are not shown to this account. Ask Sky if that is wrong.';
+var PAY_ACTIONS_EXTRA_ = ['approver_away'];
+function isPayAction_(action) {
+  var a = String(action || '').trim().toLowerCase();
+  return a.indexOf('incentive') === 0 || PAY_ACTIONS_EXTRA_.indexOf(a) >= 0;
+}
+function payViewerIds_() {
+  var raw = '';
+  try { raw = String(PropertiesService.getScriptProperties().getProperty(PAY_VIEWERS_PROP) || ''); }
+  catch (e) { raw = ''; }
+  return raw.split(/[,;\s]+/).map(function (x) { return x.trim().toLowerCase(); })
+            .filter(function (x) { return !!x; });
+}
+function canSeePay_(auth) {
+  if (!auth || auth.ok !== true) return false;
+  var me = String(auth.user || '').trim().toLowerCase();
+  if (!me) return false;
+  if (payViewerIds_().indexOf(me) >= 0) return true;    // cheap first: no GX Core read
+  try { if (approverIds_().indexOf(me) >= 0) return true; } catch (e) {}
+  try { if (backupApproverIds_().indexOf(me) >= 0) return true; } catch (e) {}
+  return false;
+}
+/* A roster row with the pay fields taken OUT, not blanked — an empty wage would read as "not set"
+   and paint a gap on every person. A COPY: the joined rows are shared with the review payload. */
+var PAY_ROW_FIELDS_ = ['wage', 'pay_type', 'wage_exempt', 'not_on_payroll'];
+function stripPayFromRow_(r, today) {
+  var o = {};
+  for (var k in r) {
+    if (Object.prototype.hasOwnProperty.call(r, k) && PAY_ROW_FIELDS_.indexOf(k) < 0) o[k] = r[k];
+  }
+  o.flags = (r.flags || []).filter(function (f) { return f !== 'wage'; });
+  o.needs_setup = needsSetup_(o, today || new Date());
+  return o;
+}
+/* Deploy-secret route: ?action=pay_viewers[&to=mike,shawn]. No `to` reads; an empty one clears
+   (approver and backup still see pay). Ids only, lowercased; anything else is refused whole. */
+function payViewersRoute_(p) {
+  if (!deploySecretOk_(p)) return { ok: false, error: 'bad deploy secret' };
+  if (p.to == null) return { ok: true, pay_viewers: payViewerIds_() };
+  var ids = String(p.to).split(/[,;\s]+/).map(function (x) { return x.trim().toLowerCase(); })
+                .filter(function (x) { return !!x; });
+  for (var i = 0; i < ids.length; i++) {
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(ids[i])) {
+      return { ok: false, error: 'not a GX user id: ' + ids[i] + ' — nothing was changed' };
+    }
+  }
+  var props = PropertiesService.getScriptProperties();
+  if (!ids.length) props.deleteProperty(PAY_VIEWERS_PROP);
+  else props.setProperty(PAY_VIEWERS_PROP, ids.join(','));
+  return { ok: true, pay_viewers: ids };
 }
 
 /**
@@ -4076,11 +4158,13 @@ function getRoster_(p) {
   var retiredCount = 0;
   joined.rows.forEach(function (r) { if (r.retired) retiredCount++; });
 
+  var seePay = canSeePay_(auth), today = new Date();
   var out = {
     ok: true, user: auth.user, role: auth.role, can_edit: canEdit_(auth),
     shirt_sizes: SHIRT_SIZES, role_titles: ROLE_TITLES,
     include_retired: includeRetired, retired_total: retiredCount, cached: joined.cached,
-    rows: joined.rows.filter(function (r) { return includeRetired || !r.retired; }),
+    rows: joined.rows.filter(function (r) { return includeRetired || !r.retired; })
+                     .map(function (r) { return seePay ? r : stripPayFromRow_(r, today); }),
     identity_source: {
       count: joined.identityCount, error: joined.identityError,
       note: joined.identityCount ? '' :
@@ -4099,6 +4183,10 @@ function getRoster_(p) {
      `review` / `eom_history` calls it always made. Each part is its OWN try/catch — a broken
      review queue or EoM log must not cost the roster, which is the one thing boot cannot run
      without. */
+  /* Said only when it is FALSE: a reply to someone who sees pay is byte-for-byte what it was, and
+     crew.js reads `can_see_pay === false`, so an older engine (no field) shows pay as it always did. */
+  if (!seePay) out.can_see_pay = false;
+
   var wantParts = String(p.parts || '').split(',')
     .map(function (s) { return s.trim(); }).filter(Boolean);
   if (wantParts.indexOf('review') >= 0) {
@@ -4423,6 +4511,12 @@ function saveRosterAttrs_(p) {
   var auth = requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+  /* Writing a wage is handling pay. Refused before anything is read, and the reply below is
+     stripped too, because it echoes the whole stored record — wage included. */
+  var seePay = canSeePay_(auth);
+  if (!seePay && (p.wage != null || p.pay_type != null || p.not_on_payroll != null)) {
+    return { ok: false, error: NO_PAY_ERROR_, code: 'no_pay' };
+  }
 
   var id = String(p.employee_id || '').trim();
   if (!id) return { ok: false, error: 'employee_id required' };
@@ -4510,6 +4604,11 @@ function saveRosterAttrs_(p) {
   };
   writeAttrs_(rec);
   bustRosterCache_();
+  if (!seePay) {
+    var shown = {};
+    for (var sk in rec) if (PAY_ROW_FIELDS_.indexOf(sk) < 0) shown[sk] = rec[sk];
+    return { ok: true, employee_id: id, saved: shown };
+  }
   return { ok: true, employee_id: id, saved: rec };
 }
 
