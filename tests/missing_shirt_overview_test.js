@@ -58,7 +58,8 @@ eq('badge: groups by store, issued and retired excluded', bg.map(x => [x.store, 
 // ── engine: badge_issued is appended, carried by the save, never inferred ──
 const code = fs.readFileSync(__dirname + '/../apps-script/Code.gs', 'utf8');
 const hdr = code.slice(code.indexOf('var ATTR_HEADERS'), code.indexOf('/* The ATTRIBUTE columns'));
-eq('badge_issued is the LAST ATTR_HEADERS entry (append-only)', /'retired_on',[\s\S]*'badge_issued'\];/.test(hdr), true);
+eq('badge_issued is appended after retired_on, and only the badge-request columns come after it (append-only)',
+   /'retired_on',[\s\S]*'badge_issued',[\s\S]*'badge_requested_on', 'badge_requested_by', 'badge_request_kind'\];/.test(hdr), true);
 eq('roster_save carries it (patch-safe)', /badge_issued:\s+p\.badge_issued == null\s+\? \(existing\.badge_issued \|\| ''\)/.test(code), true);
 eq('roster rows expose it', /badge_issued: isTruthyFlag_\(a\.badge_issued\)/.test(code), true);
 console.log(fail ? '\n' + fail + ' FAILED' : '\nmissing shirt overview: all passed');

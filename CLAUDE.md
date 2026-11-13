@@ -64,6 +64,23 @@ one person's record, or the **overview** (stat tiles, open-questions queue, Empl
   refuses without it, refuses a future day or one before `hire_date`, and un-retiring clears it.
   **METRC has no leaving date** — its `EndDate` is the permit's expiry, and retired staff are not in
   the METRC copy at all — so nothing prefills it from METRC. Pinned by `tests/retired_on_test.js`.
+- **Badge requests (2026-11-13).** Mike asks for a printed staff ID badge from a person's record
+  (`badge_request` route, `op` = request / cancel / done); Sky makes it and marks it made, which sets
+  `badge_issued`. Three appended columns (`badge_requested_on` / `_by` / `_kind`) hold a PENDING
+  request; blank = none. `badgeRequest_` is their only writer; `saveRosterAttrs_` carries them.
+  - **The label files are built in the BROWSER** (`badgeFrontCsv` / `badgeBackCsv`), so a permit
+    number never goes to a request, URL, log, property or the notice email. The email (`sendMail_`,
+    approvers only) names the person and says what is missing in words, never a value.
+  - **Exact P-Touch shape** (Sky's BadgeFront.csv / BadgeBack.csv): UTF-8 BOM, CRLF, no final newline.
+    FRONT = nickname (else legal first name) upper case; BACK = FOUR rows per person: legal name
+    (METRC's spelling when METRC lists them), permit, issued, expires, dates `M/D/YY`. Files are
+    always named `BadgeFront.csv` / `BadgeBack.csv`, because his templates link to those names.
+  - **Anyone missing a BACK field is left out of the back file and named** — the four strips are
+    positional, so a blank would print a finished-looking wrong badge. Never print blanks.
+  - Issue date = stored `permit_granted`, else METRC's StartDate for their permit (roster row sends
+    `permit_granted` / `metrc_legal_name` / `badge_request` only when present, so other rows are
+    byte-identical). Artwork is `badge/front.png` / `badge/back.png`, rendered from the real PDFs.
+  - Pinned by `tests/badge_request_test.js`.
 - `design_handoff_roster_workspace/*.dc.html` is a **reference prototype**, not shippable code.
 
 ## Layout
