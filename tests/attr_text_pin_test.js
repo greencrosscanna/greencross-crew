@@ -318,9 +318,11 @@ console.log('\nNothing but writeAttrs_ writes to the attributes tab');
   const callers = names.filter((n) => /\bwriteAttrs_\b/.test(body(n).replace(/^\nfunction [^\n]*/, '')));
   /* hrImport_ left with the staff spreadsheet (2026-10-19); resolveReview_ arrived with it, for
      accepting a permit number METRC lists. setRetired_ joined 2026-11-02, for the last day worked. */
-  /* badgeRequest_ joined 2026-11-13, for a pending badge request and its completion. */
+  /* badgeRequest_ joined 2026-11-13, for a pending badge request and its completion.
+     assignNumbers_ became assignNumbersRun_ the same day (its auth moved to a wrapper so adding a
+     new hire can issue the number too) — a rename, not a new writer. */
   ok('writeAttrs_ has the eight callers it has: ' + callers.sort().join(', '),
-     callers.sort().join(',') === 'assignNumbers_,badgeRequest_,mergeEmployees_,metrcPermitSyncRun_,resolveReview_,saveRosterAttrs_,setNumber_,setRetired_');
+     callers.sort().join(',') === 'assignNumbersRun_,badgeRequest_,mergeEmployees_,metrcPermitSyncRun_,resolveReview_,saveRosterAttrs_,setNumber_,setRetired_');
   const w = body('writeAttrs_');
   ok('writeAttrs_ asks for the tab FOR WRITE, and before its first write',
      /crewSheetPrepare_\(true\)/.test(w) && w.indexOf('crewSheetPrepare_(true)') < w.search(WRITE_CALL) && (w.match(/crewSheetPrepare_\(/g) || []).length === 1);

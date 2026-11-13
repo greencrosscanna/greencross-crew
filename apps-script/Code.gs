@@ -1648,7 +1648,14 @@ function assignNumbers_(p) {
   var auth = deploySecretOk_(p) ? { ok: true, user: 'tooling', role: 'admin' } : requireCrew_(p);
   if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
   if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+  return assignNumbersRun_(auth, String(p.confirm || '') === 'yes');
+}
 
+/* The allocator itself, after auth. Also called by resolveReview_ right after a new hire is added,
+   so a person never arrives without a number (Sky, 2026-11-13: Logan Turney sat with a "run the
+   auto-assign" warning that no button on the screen could act on). */
+function assignNumbersRun_(auth, confirm) {
+  var p = { confirm: confirm ? 'yes' : '' };
   var identity = GXCore.getEmployees() || [];
   var attrs = readAttrs_();
 
@@ -3658,6 +3665,16 @@ function resolveReview_(p) {
       var added = addPendingHire_(pend);
       if (!added.ok) return { ok: false, error: added.error };
       applied = 'added ' + pend.full_name + ' to the roster';
+      /* Issue their employee number now. The person IS added at this point, so a numbering
+         failure must not undo or hide that — it is reported in the decision note, and the
+         missing-number item raises itself as before. */
+      try {
+        var num = assignNumbersRun_(auth, true);
+        var mine = (num.plan || []).filter(function (x) { return x.employee_id === pend.name_key; })[0];
+        applied += mine ? ', employee #' + mine.number : ' (no employee number issued)';
+      } catch (e) {
+        applied += ' (employee number not issued: ' + String((e && e.message) || e) + ')';
+      }
     } else if (item.kind === 'metrc_permit') {
       /* The permit number METRC lists for this person, into Crew's own attribute row. Read the
          live row and merge onto it (writeAttrs_ replaces the whole row); refuse if somebody filled

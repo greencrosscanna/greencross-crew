@@ -73,6 +73,16 @@ const body = (() => {
 const nh = body.indexOf("item.kind === 'new_hire'"), rec = body.indexOf('sheetOf_(DECISION_TAB');
 eq('the new_hire branch returns on a failed add before the decision is written',
    nh > 0 && rec > nh && /if \(!added\.ok\) return/.test(body.slice(nh, rec)), true);
+const nhBranch = body.slice(nh, rec);
+const addAt = nhBranch.indexOf('if (!added.ok) return'), numAt = nhBranch.indexOf('assignNumbersRun_(auth, true)');
+eq('a successful add issues the employee number in the same request (after the add, never before)',
+   addAt > 0 && numAt > addAt, true);
+eq('a numbering failure cannot undo or hide the add — it is caught and written into the note',
+   /try \{\s*var num = assignNumbersRun_\(auth, true\);[\s\S]*?\} catch \(e\) \{\s*applied \+=/.test(nhBranch), true);
+const wrapper = SRC.slice(SRC.indexOf('function assignNumbers_('), SRC.indexOf('function assignNumbersRun_('));
+eq('the assign_numbers route still checks sign-in and edit rights before the allocator runs',
+   /requireCrew_\(p\)/.test(wrapper) && /canEdit_\(auth\)/.test(wrapper) &&
+   wrapper.indexOf('canEdit_(auth)') < wrapper.indexOf('assignNumbersRun_('), true);
 eq('the field-accept branch checks gxUpsertEmployee\'s answer too',
    /var upd = GXCore\.gxUpsertEmployee\(merged\);\s*if \(upd && upd\.ok === false\)/.test(body), true);
 eq('there is no bare, unread gxUpsertEmployee call left in resolveReview_',
