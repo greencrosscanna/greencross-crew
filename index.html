@@ -288,6 +288,34 @@
     .crew-q.is-done { opacity: .35; }
     .crew-shirtgap .crew-q-kind { flex: 0 0 150px; }
     .crew-shirtgap .crew-btn { padding: 4px 9px; font-size: 12px; margin: 0 4px 4px 0; }
+
+    /* Staff badge: the real artwork (badge/front.png, badge/back.png — 458×730) with the person's data
+       laid over it. Sizes are in cqw so the text scales with the card; positions are percentages of
+       the artwork, measured off the PDF. Anything missing renders red, never blank. */
+    .crew-badge { background: var(--gx-surface-2); border: 1px solid var(--gx-border);
+      border-radius: var(--gx-radius-md); padding: 16px; }
+    .crew-badge-status { font-size: 13px; color: var(--gx-text-dim); margin-bottom: 12px; }
+    .crew-badge-status.is-pending { color: var(--gx-gold); }
+    .crew-badge-prev { display: flex; flex-wrap: wrap; gap: 20px; margin-bottom: 12px; }
+    .crew-badge-col { width: 190px; }
+    .crew-badge-card { position: relative; width: 190px; aspect-ratio: 458 / 730; container-type: inline-size;
+      background-size: 100% 100%; border-radius: 6px; overflow: hidden;
+      box-shadow: 0 0 0 1px var(--gx-border-strong); }
+    .crew-badge-card.is-front { background-image: url('badge/front.png'); }
+    .crew-badge-card.is-back  { background-image: url('badge/back.png'); }
+    .crew-badge-cap { font-size: 11px; color: var(--gx-text-mute); margin-top: 6px; text-align: center; }
+    .crew-badge-name { position: absolute; left: 4%; right: 4%; top: 52%; transform: translateY(-50%);
+      text-align: center; color: #fff; font-weight: 800; font-size: 15cqw; line-height: 1.05;
+      letter-spacing: .01em; overflow-wrap: anywhere; }
+    .crew-badge-name.is-long { font-size: 10cqw; }
+    .crew-badge-v { position: absolute; left: 50.5%; right: 3%; transform: translateY(-50%);
+      color: #1a1a1a; font-weight: 700; font-size: 5.2cqw; line-height: 1.1; }
+    .crew-badge-v.is-holder { font-size: 4.2cqw; }
+    .crew-badge-v.is-missing, .crew-badge-name.is-missing { color: #d4322a; font-weight: 800; font-size: 4.4cqw; }
+    .crew-badge-name.is-missing { color: #ff8a80; font-size: 7cqw; }
+    .crew-badge-miss { color: var(--gx-red); font-size: 13px; margin-bottom: 12px; }
+    .crew-badge-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .crew-badge-btns .crew-btn { padding: 7px 13px; font-size: 12px; }
     /* A newcomer reuses the question card's shape — same row, same reading order — but carries a
        green edge rather than a severity color. Nothing is wrong with these records; they are
        simply unfinished, and coloring them like a problem would spend the queue's alarm budget
@@ -1186,6 +1214,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.432"></script>
+  <script src="crew.js?v=1.433"></script>
 </body>
 </html>

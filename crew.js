@@ -655,6 +655,85 @@
   function noBadgeGroups(rows) {
     return gapGroups(rows, function (r) { return !r.badge_issued; });
   }
+  /* ── Badge labels ─────────────────────────────────────────────────────────────────────────────
+   * Sky prints the badge by hand: Brother P-Touch Editor reads a one-column CSV per template.
+   *   FRONT  header `FRONT`, then one row per person: the friendly name, upper case (18mm tape).
+   *   BACK   header `BACK`, then FOUR rows per person, in this order: legal name, permit number,
+   *          issue date, expiry date (3.5mm tape, one strip each). Dates are M/D/YY.
+   * Both files are UTF-8 with a BOM and CRLF line ends and no final newline — byte-for-byte the shape
+   * of BadgeFront.csv / BadgeBack.csv in the badge folder, which is what his templates are linked to.
+   *
+   * Built in the browser from the roster the screen already holds, so a permit number never goes to
+   * a server, a URL or a log on its way into a file. A person with anything missing from the BACK is
+   * LEFT OUT of the back file and named — four strips with a blank among them would print a badge
+   * that looks finished and is not, and the strips are positional. */
+  function badgeDay(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '').trim());
+    return m ? (Number(m[2]) + '/' + Number(m[3]) + '/' + m[1].slice(2)) : '';
+  }
+  /* The friendly name: the nickname (minus a trailing surname initial) else the legal first name. */
+  function badgeFrontName(row) {
+    var full = String(row.name || '').trim();
+    var nick = nickWithoutSurnameInitial(String(row.preferred_name || '').trim(), full);
+    return (nick || full.split(/\s+/)[0] || '').toUpperCase();
+  }
+  /* Everything printed on one person's badge, and what is missing. The legal name is METRC's
+     spelling when METRC lists them (the permit is METRC's), else Crew's. */
+  function badgeFor(row) {
+    var legal = String(row.metrc_legal_name || row.name || '').trim();
+    var b = { front: badgeFrontName(row), name: legal.toUpperCase(),
+              permit: String(row.permit_number || '').trim().toUpperCase(),
+              issued: badgeDay(row.permit_granted), expires: badgeDay(row.permit_expires),
+              missing: [], nameFromMetrc: !!row.metrc_legal_name };
+    if (!b.front) b.missing.push('name');
+    if (!b.name) b.missing.push('legal name');
+    if (!b.permit) b.missing.push('permit number');
+    if (!b.issued) b.missing.push('permit issue date');
+    if (!b.expires) b.missing.push('permit expiry date');
+    b.frontOk = !!b.front;
+    b.backOk = !!(b.name && b.permit && b.issued && b.expires);
+    return b;
+  }
+  function badgeCsvCell(v) {
+    v = String(v);
+    return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function badgeCsv(header, values) {
+    return '﻿' + [header].concat(values.map(badgeCsvCell)).join('\r\n');
+  }
+  /* '' when there is nobody to print — the caller says so instead of handing over an empty file. */
+  function badgeFrontCsv(rows) {
+    var v = [];
+    (rows || []).forEach(function (r) { var b = badgeFor(r); if (b.frontOk) v.push(b.front); });
+    return v.length ? badgeCsv('FRONT', v) : '';
+  }
+  function badgeBackCsv(rows) {
+    var v = [];
+    (rows || []).forEach(function (r) {
+      var b = badgeFor(r);
+      if (b.backOk) v.push(b.name, b.permit, b.issued, b.expires);
+    });
+    return v.length ? badgeCsv('BACK', v) : '';
+  }
+  function badgeLeftOut(rows) {
+    return (rows || []).filter(function (r) { return !badgeFor(r).backOk; });
+  }
+  /* Active people with a pending badge request, oldest first. */
+  function pendingBadges(rows) {
+    return (rows || []).filter(function (r) { return !r.retired && r.badge_request; })
+      .sort(function (a, b) { return String(a.badge_request.on).localeCompare(String(b.badge_request.on)); });
+  }
+  function downloadCsv(filename, text) {
+    var blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1500);
+  }
+
   function gapGroups(rows, isGap) {
     var gap = (rows || []).filter(function (r) { return !r.retired && isGap(r); });
     return storesInRoster(gap).map(function (sid) {
@@ -1479,6 +1558,7 @@
       open.forEach(function (it) { wrap.appendChild(queueCard(it)); });
     }
 
+    badgeRequestsSection(wrap, live);
     gapSection(wrap, 'Missing shirt size', 'for the swag order — click a name to fill it in', noShirt);
     gapSection(wrap, 'Missing badge', 'no printed ID badge recorded — click a name to fill it in', noBadge);
 
@@ -1856,6 +1936,12 @@
     body.appendChild(ps);
     body.appendChild(permitCard(row));
 
+    var bs = el('div', 'crew-sect');
+    bs.appendChild(el('h2', null, 'Staff badge'));
+    bs.appendChild(el('span', null, 'request it, preview it, print it'));
+    body.appendChild(bs);
+    body.appendChild(badgeCard(row));
+
     var ls = el('div', 'crew-sect');
     ls.appendChild(el('h2', null, 'Links &amp; visibility'));
     body.appendChild(ls);
@@ -2194,6 +2280,152 @@
     return grid;
   }
 
+
+  /* ── Badge: request, preview, label files ─────────────────────────────────────────────────────
+   * Mike requests; Sky makes it by hand and marks it made (which sets "Badge issued"). The preview
+   * is the real artwork with the person's own data laid over it, and anything missing is shown as
+   * MISSING in red rather than as a blank that looks finished. */
+  async function badgeOp(row, op, kind) {
+    var q = { token: token(), employee_id: row.employee_id, op: op };
+    if (kind) q.kind = kind;
+    var r = await Engine.jsonp('badge_request', q, { timeoutMs: 45000, retries: 2 });
+    if (!r || !r.ok) throw new Error((r && r.error) || 'Badge request failed');
+    if (r.request) row.badge_request = r.request; else delete row.badge_request;
+    if (op === 'done') row.badge_issued = true;
+    return r;
+  }
+
+  function badgePreview(row) {
+    var b = badgeFor(row);
+    var wrap = el('div', 'crew-badge-prev');
+    function val(txt, cls, top) {
+      var s = el('span', 'crew-badge-v ' + (cls || '') + (txt ? '' : ' is-missing'), esc(txt || 'MISSING'));
+      s.style.top = top + '%';
+      return s;
+    }
+    var front = el('div', 'crew-badge-card is-front');
+    front.setAttribute('role', 'img');
+    front.setAttribute('aria-label', 'Badge front: ' + (b.front || 'name missing'));
+    var fn = el('span', 'crew-badge-name' + (b.front.length > 9 ? ' is-long' : '') + (b.front ? '' : ' is-missing'),
+      esc(b.front || 'MISSING'));
+    front.appendChild(fn);
+    var back = el('div', 'crew-badge-card is-back');
+    back.setAttribute('role', 'img');
+    back.setAttribute('aria-label', 'Badge back with permit details');
+    back.appendChild(val(b.permit, '', 55.8));
+    back.appendChild(val(b.issued, '', 64.9));
+    back.appendChild(val(b.expires, '', 74.7));
+    back.appendChild(val(b.name, 'is-holder', 83.8));
+    [['Front', front], ['Back', back]].forEach(function (p) {
+      var col = el('div', 'crew-badge-col');
+      col.appendChild(p[1]);
+      col.appendChild(el('div', 'crew-badge-cap', p[0] + (p[0] === 'Front' ? ' · 18mm tape' : ' · 3.5mm tape')));
+      wrap.appendChild(col);
+    });
+    return wrap;
+  }
+
+  function badgeCard(row) {
+    var box = el('div', 'crew-badge');
+    var b = badgeFor(row);
+    var req = row.badge_request;
+
+    var status = req
+      ? 'Requested ' + esc(req.on) + (req.by ? ' by ' + esc(req.by) : '') + ' · ' +
+        (req.kind === 'replacement' ? 'replacement' : 'new badge')
+      : row.badge_issued ? 'Badge handed over — nothing pending' : 'No badge yet';
+    box.appendChild(el('div', 'crew-badge-status' + (req ? ' is-pending' : ''), status));
+    box.appendChild(badgePreview(row));
+
+    var miss = b.missing.slice();
+    if (state.savedCopyAt) miss = [];     // a saved copy carries no permit details yet — do not cry wolf
+    if (miss.length) {
+      box.appendChild(el('div', 'crew-badge-miss',
+        'Missing: ' + esc(miss.join(', ')) + '. The back label file leaves this person out until it is filled in.'));
+    } else if (b.nameFromMetrc) {
+      box.appendChild(el('div', 'crew-hint', 'The legal name on the back is METRC’s spelling.'));
+    }
+
+    var btns = el('div', 'crew-badge-btns');
+    function btn(label, cls, fn) {
+      var x = el('button', 'crew-btn' + (cls ? ' ' + cls : ''), esc(label));
+      x.type = 'button';
+      x.addEventListener('click', function () { fn(x); });
+      btns.appendChild(x);
+      return x;
+    }
+    function run(x, op, kind, msg) {
+      x.disabled = true;
+      badgeOp(row, op, kind).then(function (r) {
+        toast(msg + (r && r.mail_error ? ' — ' + r.mail_error : ''));
+        paintRail(); paintPane();
+      }).catch(function (e) { x.disabled = false; toast((e && e.message) || 'Failed', true); });
+    }
+    if (state.canEdit) {
+      if (!req) {
+        var kind = row.badge_issued ? 'replacement' : 'new';
+        btn(row.badge_issued ? 'Request replacement badge' : 'Request badge', 'is-primary',
+          function (x) { run(x, 'request', kind, 'Badge requested · ' + row.name); });
+      } else {
+        btn('Mark badge made', 'is-primary', function (x) { run(x, 'done', '', 'Badge marked made · ' + row.name); });
+        btn('Withdraw request', '', function (x) { run(x, 'cancel', '', 'Request withdrawn · ' + row.name); });
+      }
+    }
+    var fbtn = btn('Download front CSV', '', function () {
+      downloadCsv('BadgeFront.csv', badgeFrontCsv([row]));
+    });
+    fbtn.disabled = !b.frontOk;
+    var bbtn = btn('Download back CSV', '', function () {
+      downloadCsv('BadgeBack.csv', badgeBackCsv([row]));
+    });
+    bbtn.disabled = !b.backOk;
+    box.appendChild(btns);
+    box.appendChild(el('div', 'crew-hint',
+      'Files are named BadgeFront.csv and BadgeBack.csv to match your P-Touch templates. ' +
+      'Back = legal name, permit, issued, expires — four strips.'));
+    return box;
+  }
+
+  /* Overview: everything waiting to be made, and both label files for the whole batch. */
+  function badgeRequestsSection(wrap, live) {
+    var pend = pendingBadges(live);
+    if (!pend.length) return;
+    var sect = el('div', 'crew-sect');
+    sect.appendChild(el('h2', null, 'Badge requests'));
+    sect.appendChild(el('span', null, pend.length + ' waiting to be made'));
+    wrap.appendChild(sect);
+
+    var box = el('div', 'crew-q crew-new');
+    pend.forEach(function (r) {
+      var line = el('div', 'crew-q-detail');
+      var b = badgeFor(r);
+      var nm = el('button', 'crew-btn', esc(displayName(r) || r.employee_id));
+      nm.type = 'button';
+      nm.addEventListener('click', function () { state.selected = r.employee_id; paintRail(); paintPane(); });
+      line.appendChild(nm);
+      line.appendChild(document.createTextNode(' ' + storeName(r.store) + ' · ' +
+        (r.badge_request.kind === 'replacement' ? 'replacement' : 'new') + ' · asked ' + r.badge_request.on +
+        (r.badge_request.by ? ' by ' + r.badge_request.by : '') +
+        (b.backOk ? '' : ' · missing ' + b.missing.filter(function (m) { return m !== 'name'; }).join(', '))));
+      box.appendChild(line);
+    });
+    var btns = el('div', 'crew-badge-btns');
+    var out = badgeLeftOut(pend);
+    var f = el('button', 'crew-btn is-primary', 'Download front CSV (' + pend.length + ')');
+    f.type = 'button';
+    f.addEventListener('click', function () { downloadCsv('BadgeFront.csv', badgeFrontCsv(pend)); });
+    var k = el('button', 'crew-btn is-primary', 'Download back CSV (' + (pend.length - out.length) + ' of ' + pend.length + ')');
+    k.type = 'button';
+    k.disabled = out.length === pend.length;
+    k.addEventListener('click', function () {
+      downloadCsv('BadgeBack.csv', badgeBackCsv(pend));
+      if (out.length) toast('Left out of the back file (missing details): ' +
+        out.map(function (r) { return displayName(r); }).join(', '), true);
+    });
+    btns.appendChild(f); btns.appendChild(k);
+    box.appendChild(btns);
+    wrap.appendChild(box);
+  }
 
   /* ── OLCC permit ──────────────────────────────────────────────────────────────
    * READ-ONLY, because METRC owns every value in it and an import overwrites whatever is here

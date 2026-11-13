@@ -353,7 +353,7 @@ function world(src, opts) {
   /* 2026-11-02: ATTR_HEADERS gained `retired_on`, so an engine seeded from the newer list holds one
      more attributes column than one seeded from a baseline. It is dropped here ONLY while every cell
      under it is blank — so the before/after comparisons still fail on any route that writes it. */
-  const ADDED_ATTR_COLS = ['retired_on', 'badge_issued'];   // badge_issued added 2026-11-05
+  const ADDED_ATTR_COLS = ['retired_on', 'badge_issued', 'badge_requested_on', 'badge_requested_by', 'badge_request_kind'];   // badge_issued 2026-11-05; the three badge-request columns 2026-11-13
   const dropBlankAdded = (n, data) => {
     if (n !== g('ATTR_TAB') || !data.length) return data;
     const cut = ADDED_ATTR_COLS.map((h) => data[0].indexOf(h))

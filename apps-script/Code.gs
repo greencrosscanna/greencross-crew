@@ -73,7 +73,14 @@ var ATTR_HEADERS       = ['employee_id', 'name_key', 'full_name', 'shirt_size',
                           /* APPENDED 2026-11-05. Has this person been handed their printed staff ID
                              badge (the label-maker one)? 'yes' or blank. A statement a human makes,
                              never inferred. Carried by every writer via attrFields_. */
-                          'badge_issued'];
+                          'badge_issued',
+                          /* APPENDED 2026-11-13. A PENDING badge request: the day it was asked for
+                             (YYYY-MM-DD, Los Angeles), who asked (a GX user id) and whether it is a
+                             `new` badge or a `replacement`. All three blank = nothing pending. Written
+                             only by badgeRequest_, which clears them when the badge is made or the
+                             request is withdrawn. No permit data lives here: the badge is printed
+                             from the roster's own fields at the moment of printing. */
+                          'badge_requested_on', 'badge_requested_by', 'badge_request_kind'];
 
 /* The ATTRIBUTE columns — every ATTR_HEADER that is not an identity key or an audit stamp.
  *
@@ -365,6 +372,7 @@ function route_(e) {
       // ── Roster (auth-gated — holds PII) ─────────────────────────────────────
       case 'roster':       return json_(getRoster_(p), p.callback);
       case 'roster_save':  return json_(saveRosterAttrs_(p), p.callback);
+      case 'badge_request':return json_(badgeRequest_(p), p.callback);
       case 'roster_retire':return json_(setRetired_(p), p.callback);
       case 'roster_identity': return json_(saveIdentity_(p), p.callback);
       case 'roster_merge': return json_(mergeEmployees_(p), p.callback);
@@ -4133,6 +4141,18 @@ function rosterJoin_() {
     r.metrc_listed = l;
     r.permit_status = l === true ? 'Listed' : l === false ? 'Not on our licenses' : '';
     r.permit_active = l === true ? 'Yes' : l === false ? 'No' : '';
+    /* BADGE DATA, sent only when there is something to send so every other row is byte-identical.
+       The issue date is the stored one, else METRC's StartDate for their permit; the back of the
+       badge carries METRC's spelling of the legal name, so that rides along when METRC lists them.
+       A pending request is shown only for someone still here. */
+    var pk = metrcPermitKey_(r.permit_number);
+    var mp = pk && permitSnap.state === 'fresh' ? permitSnap.people[pk] : null;
+    var granted = normDate_(attrs[r.employee_id] && attrs[r.employee_id].permit_granted) ||
+                  (mp ? normDate_(mp.start) : '');
+    if (granted) r.permit_granted = granted;
+    if (mp && mp.name) r.metrc_legal_name = String(mp.name);
+    var br = badgeRequestOf_(attrs[r.employee_id]);
+    if (br && !r.retired) r.badge_request = br;
     r.flags = rowFlags_(r); r.needs_setup = needsSetup_(r, today);
   });
   rows.sort(function (x, y) { return x.name.localeCompare(y.name); });
@@ -4605,6 +4625,10 @@ function saveRosterAttrs_(p) {
     badge_issued:       p.badge_issued == null
                         ? (existing.badge_issued || '')
                         : (isTruthyFlag_(p.badge_issued) ? 'yes' : ''),
+    // Carried, never set here: badgeRequest_ is the only writer of the three request columns.
+    badge_requested_on: existing.badge_requested_on || '',
+    badge_requested_by: existing.badge_requested_by || '',
+    badge_request_kind: existing.badge_request_kind || '',
     // Carried, never set here: roster_retire is its only writer.
     retired_on:         existing.retired_on || '',
     updated_at:       new Date().toISOString(),
@@ -4618,6 +4642,135 @@ function saveRosterAttrs_(p) {
     return { ok: true, employee_id: id, saved: shown };
   }
   return { ok: true, employee_id: id, saved: rec };
+}
+
+
+// ─── Badge requests ─────────────────────────────────────────────────────────────
+/*
+ * Mike asks for a printed staff ID badge from a person's record; Sky makes it by hand and marks it
+ * done, which sets the existing `badge_issued` yes. Three attribute columns hold a PENDING request
+ * (badge_requested_on / _by / _kind); blank means nothing pending.
+ *
+ * ONE ROUTE, `badge_request`, with op = request | cancel | done. Every op is a read-merge-write of
+ * this person's attribute row (writeAttrs_ replaces the whole row) and busts the roster cache.
+ *
+ * WHAT NEVER GOES HERE: a permit number or a date. The notice email names the person, their store,
+ * the kind and who asked, and says which badge details are MISSING (as words). The numbers are
+ * printed from the roster the moment someone downloads the label files, in the browser.
+ *
+ * The email is best-effort: a request that reached the sheet has succeeded, and mail must never be
+ * what stops it. It goes through sendMail_ (the only MailApp call) to the approver(s).
+ */
+var BADGE_KINDS_ = ['new', 'replacement'];
+
+/* PURE: a pending request from one attribute row, or null. */
+function badgeRequestOf_(a) {
+  var on = a ? String(a.badge_requested_on == null ? '' : a.badge_requested_on).trim() : '';
+  if (!on) return null;
+  return { on: normDate_(on) || on, by: String(a.badge_requested_by || ''),
+           kind: String(a.badge_request_kind || 'new') };
+}
+
+/* PURE: the words the notice email may say about missing badge data — never a value. */
+function badgeMissingWords_(row) {
+  var m = [];
+  if (!String(row.permit_number || '').trim()) m.push('no permit number');
+  if (!String(row.permit_expires || '').trim()) m.push('no permit expiry date');
+  if (!String(row.permit_granted || '').trim()) m.push('no permit issue date');
+  return m;
+}
+
+function badgeRequest_(p) {
+  var auth = requireCrew_(p);
+  if (!auth.ok) return { ok: false, error: auth.error || 'Auth required' };
+  if (!canEdit_(auth)) return { ok: false, error: 'Your role is read-only on the Crew roster' };
+
+  var id = String(p.employee_id || '').trim();
+  if (!id) return { ok: false, error: 'employee_id required' };
+  var op = String(p.op == null ? 'request' : p.op).trim();
+  if (['request', 'cancel', 'done'].indexOf(op) < 0) {
+    return { ok: false, error: 'invalid op: ' + op + ' (expected request, cancel or done)' };
+  }
+  var kind = String(p.kind == null ? 'new' : p.kind).trim();
+  if (op === 'request' && BADGE_KINDS_.indexOf(kind) < 0) {
+    return { ok: false, error: 'invalid kind: ' + kind + ' (expected new or replacement)' };
+  }
+
+  var identity = GXCore.getEmployees() || [];
+  var match = null;
+  for (var i = 0; i < identity.length; i++) {
+    if (String(identity[i].employee_id || '').trim() === id) { match = identity[i]; break; }
+  }
+  if (!match) return { ok: false, error: 'unknown employee_id: ' + id };
+
+  var was = readAttrs_()[id] || {};
+  var pending = badgeRequestOf_(was);
+  var rec = { employee_id: id, name_key: nameToKey_(match.full_name),
+              full_name: String(match.full_name || '') };
+  // Carry EVERY stored attribute first; writeAttrs_ replaces the whole row.
+  attrFields_().forEach(function (k) { rec[k] = was[k] || ''; });
+
+  if (op === 'request') {
+    var st = String(match.status || 'active').toLowerCase();
+    if (st !== 'active') return { ok: false, error: 'cannot request a badge for someone who is not active' };
+    if (pending) return { ok: true, employee_id: id, already: true, request: pending };
+    rec.badge_requested_on = Utilities.formatDate(new Date(), STORE_TZ, 'yyyy-MM-dd');
+    rec.badge_requested_by = String(auth.user || '');
+    rec.badge_request_kind = kind;
+  } else {
+    /* A retried "done" that already landed is a success, not an error: the first copy cleared the
+       request and set the badge. Anything else with nothing pending is a real refusal. */
+    if (op === 'done' && !pending) {
+      if (isTruthyFlag_(was.badge_issued)) return { ok: true, employee_id: id, op: op, already: true, request: null, badge_issued: true };
+      return { ok: false, error: 'no pending badge request to mark done' };
+    }
+    if (op === 'cancel' && !pending) return { ok: true, employee_id: id, request: null };
+    rec.badge_requested_on = ''; rec.badge_requested_by = ''; rec.badge_request_kind = '';
+    if (op === 'done') rec.badge_issued = 'yes';
+  }
+  rec.updated_at = new Date().toISOString();
+  rec.updated_by = String(auth.user || '');
+  writeAttrs_(rec);
+  bustRosterCache_();
+
+  var out = { ok: true, employee_id: id, op: op, request: badgeRequestOf_(rec),
+              badge_issued: isTruthyFlag_(rec.badge_issued) };
+  if (op === 'request') {
+    var note = badgeNotify_(match, rec, was, auth);
+    if (note.mail_error) out.mail_error = note.mail_error;
+    if (note.mail_skipped) out.mail_skipped = note.mail_skipped;
+  }
+  return out;
+}
+
+/* Tell the approver(s). Never throws, never carries a number or a date. */
+function badgeNotify_(identity, rec, was, auth) {
+  try {
+    var to = approverIds_().map(function (u) { return accountEmail_({ user_id: u }); })
+                           .filter(function (e) { return /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(e); });
+    if (!to.length) return { mail_skipped: 'no approver is configured' };
+    var missing = badgeMissingWords_({
+      permit_number: was.permit_number, permit_expires: was.permit_expires,
+      permit_granted: was.permit_granted });
+    var who = String(identity.full_name || '');
+    var kind = rec.badge_request_kind === 'replacement' ? 'replacement' : 'new';
+    sendMail_({
+      to: to.join(','), name: 'GX Crew',
+      subject: 'Badge request: ' + who + ' (' + kind + ')',
+      body: [
+        String(auth.user || 'Someone') + ' asked for a ' + kind + ' staff badge for ' + who +
+          (identity.home_store ? ' (' + identity.home_store + ')' : '') + '.',
+        '',
+        missing.length ? 'Heads up: ' + missing.join(', ') + ' on their record yet.'
+                       : 'Their permit details are on file.',
+        '',
+        'Open their record in GX Crew to preview the badge and download the label files.'
+      ].join('\n')
+    });
+    return {};
+  } catch (e) {
+    return { mail_error: 'The request was saved, but the notice email could not be sent.' };
+  }
 }
 
 
