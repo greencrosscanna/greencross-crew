@@ -3553,6 +3553,34 @@ function reviewPayload_(joined, canEdit) {
   return { ok: true, can_edit: canEdit, total: items.length, counts: counts, items: items };
 }
 
+/* Create a pending hire in GX Core's registry. Returns { ok } or { ok:false, error }.
+ *
+ * `create: 1` IS REQUIRED. gxUpsertEmployee refuses an unknown employee_id without it (the guard
+ * against typo phantoms) and answers {ok:false} WITHOUT THROWING. Until 2026-11-13 this call sent
+ * no `create` and ignored the answer, so accepting Logan Turney on 2026-11-11 recorded "added to the
+ * roster", silenced the item for good, and added nobody. A refusal is not a throw: read the return,
+ * and never let the caller record a decision unless this says ok. */
+function addPendingHire_(pend) {
+  var res;
+  try {
+    res = GXCore.gxUpsertEmployee({
+      employee_id: pend.name_key, full_name: pend.full_name,
+      home_store: pend.home_store || '', role_title: normRole_(pend.role_title) || '',
+      dutchie_employee_id: pend.dutchie_employee_id || '', status: 'active',
+      create: 1, actor: 'crew:new_hire'
+    });
+  } catch (e) {
+    return { ok: false, error: 'GX Core could not add ' + pend.full_name + ' — nothing recorded: ' +
+                               String((e && e.message) || e) };
+  }
+  if (!res || res.ok !== true) {
+    return { ok: false, error: 'GX Core refused to add ' + pend.full_name + ' — nothing recorded: ' +
+                               String((res && res.error) || 'no answer') };
+  }
+  bustRosterCache_();
+  return { ok: true, created: !!res.created };
+}
+
 function getReview_(p) {
   // Deploy secret is accepted alongside a user session so the queue can be inspected from
   // tooling, same as seed_preview. Resolving still requires a real signed-in editor.
@@ -3612,7 +3640,10 @@ function resolveReview_(p) {
       var merged = {};
       Object.keys(prior).forEach(function (k) { merged[k] = prior[k]; });
       merged[field] = value;
-      GXCore.gxUpsertEmployee(merged);
+      var upd = GXCore.gxUpsertEmployee(merged);
+      if (upd && upd.ok === false) {
+        return { ok: false, error: 'GX Core refused the change — nothing recorded: ' + String(upd.error || 'no reason given') };
+      }
       applied = field + ' → ' + value;
     } else if (item.kind === 'new_hire') {
       /* THE ONE PLACE THE NIGHTLY SCAN'S FINDING BECOMES A WRITE, and it takes a human pressing
@@ -3624,12 +3655,8 @@ function resolveReview_(p) {
         if (String(x.name_key || '').trim() === item.employee_id) pend = x;
       });
       if (!pend) return { ok: false, error: 'no pending hire with that key — already added, or the scan has moved on' };
-      var rt = normRole_(pend.role_title) || '';
-      GXCore.gxUpsertEmployee({
-        employee_id: pend.name_key, full_name: pend.full_name,
-        home_store: pend.home_store || '', role_title: rt,
-        dutchie_employee_id: pend.dutchie_employee_id || '', status: 'active'
-      });
+      var added = addPendingHire_(pend);
+      if (!added.ok) return { ok: false, error: added.error };
       applied = 'added ' + pend.full_name + ' to the roster';
     } else if (item.kind === 'metrc_permit') {
       /* The permit number METRC lists for this person, into Crew's own attribute row. Read the
