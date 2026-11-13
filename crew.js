@@ -705,6 +705,9 @@
   function badgeFrontCsv(rows) {
     var v = [];
     (rows || []).forEach(function (r) { var b = badgeFor(r); if (b.frontOk) v.push(b.front); });
+    /* P-Touch Editor will not import a database with only one record (Sky, 2026-11-13), so a
+       single name gets a second row holding one space. It prints as a blank label, if at all. */
+    if (v.length === 1) v.push(' ');
     return v.length ? badgeCsv('FRONT', v) : '';
   }
   function badgeBackCsv(rows) {

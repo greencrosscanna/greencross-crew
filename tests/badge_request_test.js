@@ -137,14 +137,17 @@ console.log('\nThe label builders (crew.js)');
 
   const nate = { employee_id: 'n', name: 'Nathaniel Quill', preferred_name: '', permit_number: 'r106y7', permit_granted: '2022-03-25', permit_expires: '2027-03-24', metrc_legal_name: 'Michael Reynolds' };
   // Sky's own reference files, byte for byte (BOM, CRLF, no final newline).
-  ok('FRONT matches BadgeFront.csv: the legal first name when there is no nickname',
-     M.badgeFrontCsv([nate]) === '﻿FRONT\r\nNATHANIEL');
+  /* BadgeFront.csv holds one name, but P-Touch Editor will not import a one-record database
+     (Sky, 2026-11-13), so a single name is followed by a row holding one space. */
+  ok('FRONT for one person: the legal first name, then a one-space row so P-Touch imports it',
+     M.badgeFrontCsv([nate]) === '﻿FRONT\r\nNATHANIEL\r\n ');
+  ok('two or more people get no padding row', M.badgeFrontCsv([nate, nate]) === '﻿FRONT\r\nNATHANIEL\r\nNATHANIEL');
   ok('BACK matches BadgeBack.csv: METRC legal name, permit, issued, expires — four rows, M/D/YY',
      M.badgeBackCsv([nate]) === '﻿BACK\r\nMICHAEL REYNOLDS\r\nR106Y7\r\n3/25/22\r\n3/24/27');
   ok('no trailing newline', !/\r\n$/.test(M.badgeBackCsv([nate])) && !/\r\n$/.test(M.badgeFrontCsv([nate])));
   ok('the file starts with a UTF-8 byte-order mark', Buffer.from(M.badgeBackCsv([nate]))[0] === 0xEF);
-  ok('a nickname wins, and a trailing surname initial is dropped', M.badgeFrontCsv([{ name: 'Zach Babcock', preferred_name: 'Zach B' }]) === '﻿FRONT\r\nZACH');
-  ok('…but an initial that is not the surname stays', M.badgeFrontCsv([{ name: 'Zach Babcock', preferred_name: 'Zach R' }]) === '﻿FRONT\r\nZACH R');
+  ok('a nickname wins, and a trailing surname initial is dropped', M.badgeFrontCsv([{ name: 'Zach Babcock', preferred_name: 'Zach B' }]) === '﻿FRONT\r\nZACH\r\n ');
+  ok('…but an initial that is not the surname stays', M.badgeFrontCsv([{ name: 'Zach Babcock', preferred_name: 'Zach R' }]) === '﻿FRONT\r\nZACH R\r\n ');
   const legal = { employee_id: 'l', name: 'Ana Lopez', permit_number: '1029288', permit_granted: '2026-01-08', permit_expires: '2031-01-08' };
   ok('without METRC, Crew\'s legal name is used', /ANA LOPEZ\r\n1029288\r\n1\/8\/26\r\n1\/8\/31$/.test(M.badgeBackCsv([legal])));
   const batch = M.badgeBackCsv([nate, legal]);
@@ -157,7 +160,7 @@ console.log('\nThe label builders (crew.js)');
   ok('…but still prints on the front', M.badgeFrontCsv([noPermit, nate]) === '﻿FRONT\r\nPAT\r\nNATHANIEL');
   ok('…and is reported as left out', M.badgeLeftOut([noPermit, nate]).map((r) => r.employee_id).join() === 'p');
   ok('nobody printable -> an empty string, not an empty file', M.badgeBackCsv([noPermit]) === '' && M.badgeFrontCsv([]) === '');
-  ok('a name with a comma is quoted', M.badgeFrontCsv([{ name: 'X', preferred_name: 'A,B' }]) === '﻿FRONT\r\n"A,B"');
+  ok('a name with a comma is quoted', M.badgeFrontCsv([{ name: 'X', preferred_name: 'A,B' }]) === '﻿FRONT\r\n"A,B"\r\n ');
   ok('dates: an unreadable one is missing, not guessed', M.badgeDay('3/25/22') === '' && M.badgeDay('2022-03-05') === '3/5/22');
   ok('pending list: active only, oldest first',
      M.pendingBadges([{ employee_id: 'b', badge_request: { on: '2026-11-02' } }, { employee_id: 'a', badge_request: { on: '2026-11-01' } },
