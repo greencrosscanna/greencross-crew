@@ -57,6 +57,9 @@
   document.head.appendChild(s);
 })();
 </script>
+<!-- gx-handoff.js FIRST: it takes a portal sign-in code (#gxcode=) out of the address bar before
+     anything reads it — including incReadHash, which would otherwise see it at boot. -->
+<script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-handoff.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-client.js" data-app="crew"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-topnav.js"></script>
 <script src="https://greencrosscanna.github.io/greencross-gx-theme/gx-changelog.js"></script>
@@ -1214,6 +1217,6 @@ tr:hover .crew-inc-payedit, .crew-inc-payedit:focus-visible { opacity: 1; }
       gxcore: 'https://script.google.com/macros/s/AKfycbx9mjeCBbDpxNYaqBv2hyZaO1hpbGG6PZM9AebFdwl0UwkdtRCGSWrH-8ohEtdF1K_6/exec'
     });
   </script>
-  <script src="crew.js?v=1.434"></script>
+  <script src="crew.js?v=1.435"></script>
 </body>
 </html>

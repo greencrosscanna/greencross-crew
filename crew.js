@@ -6364,6 +6364,15 @@
     }
   }
 
+  /* Opened from a staff-portal tile (#gxcode=, already wiped from the address bar by gx-handoff.js):
+     trade it once for this person's normal Crew session — stored by setSession, exactly as the sign-in
+     form stores it — and reload signed in. Any refusal leaves the sign-in form as it is. */
+  if (window.GXHandoff && GXHandoff.code) GXHandoff.run({
+    app: 'crew',
+    save: function (r) { setSession(r.token, r.displayName || r.user, r.avatarConfig); },
+    current: function () { return token() ? (sessionStorage.getItem(USER_KEY) || 'signed-in') : null; },
+  });
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { startChrome(); boot(); });
   } else { startChrome(); boot(); }
