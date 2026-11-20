@@ -6216,9 +6216,25 @@
     try { localStorage.removeItem(ROSTER_SAVE_KEY); } catch (e) {}
   }
 
+  /* The shared burning-joint loading screen (gx-jointloader.js, loaded by URL). Shown for the first
+     load after sign-in only, until the live roster has really landed; a refetch after a save
+     (`quiet`) never covers the screen. Every exit from boot() ends it: done() on success,
+     cancel() on anything else, so it can never be left over a failure message or the sign-in form. */
+  var jointLoader = null;
+  function jointShow() {
+    if (jointLoader || !window.GXJointLoader) return;
+    try { jointLoader = GXJointLoader.screen({ appName: 'Crew' }); } catch (e) { jointLoader = null; }
+  }
+  function jointEnd(finished) {
+    var l = jointLoader; jointLoader = null;
+    if (!l) return;
+    try { if (finished) l.done(); else l.cancel(); } catch (e) {}
+  }
+
   async function boot(quiet) {
     if (!window.GXClient) { renderStatus('⚠️ gx-client failed to load — cannot reach GX Core.'); return; }
-    if (!token()) { renderLogin(''); return; }
+    if (!token()) { jointEnd(false); renderLogin(''); return; }
+    if (!quiet && !ui) jointShow();
 
     if (!quiet) renderStatus('Loading roster… <span class="crew-hint">(first load reads GX Core, ~10s)</span>');
 
@@ -6231,6 +6247,7 @@
 
     {
       if (!Engine) {
+        jointEnd(false);
         renderStatus('⚠️ The GX Crew engine is not deployed yet. Deploy <code>apps-script/</code> with ' +
           '<code>clasp deploy</code>, then set <code>cfg.crewEngineUrl</code> in GX Core (or fill ' +
           '<code>ENGINE_URL_FALLBACK</code> in crew.js).');
@@ -6279,7 +6296,7 @@
         { timeoutMs: 45000, retries: 2 });
       if (!r || !r.ok) {
         // An expired/revoked session should drop to the login form, not a dead-end error.
-        if (r && /auth|session|access/i.test(String(r.error || ''))) { setSession('', ''); renderLogin(r.error); return; }
+        if (r && /auth|session|access/i.test(String(r.error || ''))) { jointEnd(false); setSession('', ''); renderLogin(r.error); return; }
         throw new Error((r && r.error) || 'Roster load failed');
       }
       state.rows       = r.rows || [];
@@ -6321,7 +6338,9 @@
          in when they arrive. The roster is usable without either. */
       if (!fold.gotReview && state.review === null) loadReview();
       if (!fold.gotEom && state.eom === undefined) loadEom();
+      jointEnd(true);
     } catch (e) {
+      jointEnd(false);
       renderFailure('⚠️ Could not load the roster: ' + esc((e && e.message) || 'unknown error'));
     }
   }
