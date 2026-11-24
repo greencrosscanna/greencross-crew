@@ -107,7 +107,32 @@
   }
 
   // ─── session ─────────────────────────────────────────────────────────────────
-  function token()      { try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } }
+  /* THE SESSION LIVES IN localStorage, SO A SIGN-IN SURVIVES CLOSING THE TAB (Sky, 2026-11-23: "my
+     computers are private, 30 days is okay"). It used to live in sessionStorage and die with the
+     tab, which meant signing in again every time Crew was reopened. How long a sign-in lasts is GX
+     Core's decision, not this file's: there is no client-side expiry here, and a token the server
+     refuses still drops to the sign-in form through setSession('', '') in boot().
+
+     MIGRATION: anyone signed in when this shipped holds their token in sessionStorage. On the first
+     read, if localStorage has no token but sessionStorage does, all three keys are copied over and
+     the sessionStorage copies removed, so nobody is signed out by the change. The removal runs only
+     after every copy succeeded. A token already in localStorage always wins. */
+  function sessionMigrate_() {
+    try {
+      if (localStorage.getItem(TOKEN_KEY)) return;
+      if (!sessionStorage.getItem(TOKEN_KEY)) return;
+      [TOKEN_KEY, USER_KEY, AVATAR_KEY].forEach(function (k) {
+        var v = sessionStorage.getItem(k);
+        if (v != null) localStorage.setItem(k, v);
+      });
+      [TOKEN_KEY, USER_KEY, AVATAR_KEY].forEach(function (k) { sessionStorage.removeItem(k); });
+    } catch (e) { /* a blocked store costs the carry-over, never the page */ }
+  }
+  function sessionRead_(k) {
+    sessionMigrate_();
+    try { return localStorage.getItem(k) || ''; } catch (e) { return ''; }
+  }
+  function token()      { return sessionRead_(TOKEN_KEY); }
 
   /* ONE ID PER PERSON-ACTION, NEVER PER ATTEMPT (2026-09-14). A pay write that stalls is not
      canceled when the browser gives up on it — it still runs, possibly minutes later, after
@@ -146,26 +171,26 @@
   function setSession(t, u, avatarCfg) {
     try {
       if (t) {
-        sessionStorage.setItem(TOKEN_KEY, t);
-        sessionStorage.setItem(USER_KEY, u || '');
-        sessionStorage.setItem(AVATAR_KEY, avatarCfg ? JSON.stringify(avatarCfg) : '');
+        localStorage.setItem(TOKEN_KEY, t);
+        localStorage.setItem(USER_KEY, u || '');
+        localStorage.setItem(AVATAR_KEY, avatarCfg ? JSON.stringify(avatarCfg) : '');
       } else {
-        sessionStorage.removeItem(TOKEN_KEY);
-        sessionStorage.removeItem(USER_KEY);
-        sessionStorage.removeItem(AVATAR_KEY);
-        /* SIGNING OUT TAKES THE SAVED ROSTER WITH IT. The token lives in sessionStorage and dies
-           with the tab; the saved copy is on DISK and would otherwise outlive the session that
-           fetched it — so the next person at this machine would open Crew to a full staff list
-           before being asked who they are. It carries no wages, but a roster of everyone's name,
-           store and role is not a login screen. Cleared here rather than in a sign-out handler
-           because every path that drops a session comes through this one call, including the
-           expired-token branch in boot(). */
+        /* BOTH stores, each in its own try: a leftover pre-migration copy in sessionStorage would
+           otherwise be carried back in by sessionMigrate_() on the next read. */
+        try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); localStorage.removeItem(AVATAR_KEY); } catch (e) {}
+        try { sessionStorage.removeItem(TOKEN_KEY); sessionStorage.removeItem(USER_KEY); sessionStorage.removeItem(AVATAR_KEY); } catch (e) {}
+        /* SIGNING OUT TAKES THE SAVED ROSTER WITH IT. The token now lives in localStorage on
+           purpose (Sky's call, 2026-11-23: his computers are private); signing out is what ends
+           it, and the saved roster copy must end with it, or the next person to open Crew here
+           would see the staff list before being asked who they are. Cleared here rather than in a
+           sign-out handler because every path that drops a session comes through this one call,
+           including the expired-token branch in boot(). */
         rosterForgetCopy_();
       }
     } catch (e) {}
   }
   function currentAvatar() {
-    try { var raw = sessionStorage.getItem(AVATAR_KEY); return raw ? JSON.parse(raw) : null; }
+    try { var raw = sessionRead_(AVATAR_KEY); return raw ? JSON.parse(raw) : null; }
     catch (e) { return null; }
   }
 
@@ -814,7 +839,7 @@
 
   /* User chip: avatar + name, matching Leaderboard. Settings / version / sign-out live in its menu
      rather than as separate header buttons. gx-topnav.js owns the open/close behavior. */
-  function currentUser() { try { return sessionStorage.getItem(USER_KEY) || ''; } catch (e) { return ''; } }
+  function currentUser() { return sessionRead_(USER_KEY); }
 
   function renderUserChip() {
     var slot = document.getElementById('userSlot');
@@ -6389,7 +6414,7 @@
   if (window.GXHandoff && GXHandoff.code) GXHandoff.run({
     app: 'crew',
     save: function (r) { setSession(r.token, r.displayName || r.user, r.avatarConfig); },
-    current: function () { return token() ? (sessionStorage.getItem(USER_KEY) || 'signed-in') : null; },
+    current: function () { return token() ? (sessionRead_(USER_KEY) || 'signed-in') : null; },
   });
 
   if (document.readyState === 'loading') {
