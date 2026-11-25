@@ -38,7 +38,7 @@ SECRET="$(cat .gx_deploy_secret)"
 #   GX_ALLOW_DIRTY=1                proceed even though HEAD and the working tree disagree about the
 #                                   version. Prints what it is doing. You almost never want this.
 _extract_version() {   # $1 = index.html contents on stdin-ish (passed as a single string)
-  local _src="$1" _v=""
+  local _src="$1" _v="" _own=""
   # 1. the ?v=NN cache-buster on a JS <script>   (crew, price-cards, spiff — apps with external JS)
   # MAJOR.MINOR is allowed, and extracting it needs BOTH halves right. The old second stage was
   # `grep -oE '[0-9]+'`, which stopped at the dot and filed spiff.js?v=1.28 as "v1" — silently, with
@@ -46,7 +46,18 @@ _extract_version() {   # $1 = index.html contents on stdin-ish (passed as a sing
   # in ".js" first and yields "." for EVERY app, including the integer ones that work today. So the
   # second stage is a sed that strips up to `?v=` rather than a grep hunting digits anywhere.
   # Verified both ways: 1.28 -> 1.28, 2.10 -> 2.10, 26 -> 26, 40 -> 40. No spoke regresses.
-  _v="$(printf '%s' "$_src" | grep -oE '[A-Za-z0-9_.-]+\.js\?v=[0-9]+(\.[0-9]+)?' 2>/dev/null | sed -E 's/.*\?v=//' | head -1 || true)"
+  #
+  # WHICH script, not just how to read it (2026-11-23). This used to take the FIRST versioned
+  # script on the page. SPIFF loads postmortem.js / marketing.js / site.js (each on its own, older
+  # ?v=) ahead of spiff.js, and the Portal loads gx-jointloader.js?v= ahead of portal.js — so both
+  # were filed under a stale number, and because GX Core keys a release on app + version, the
+  # mislabeled run OVERWROTE that older release's real row. So, in order:
+  #   1a. the app's OWN script, named for its key  (crew.js, spiff.js, portal.js)
+  #   1b. else the first versioned script that is not a shared gx-* file  (price-cards' generator.js)
+  # A shared gx-* file's ?v= is gx-theme's number, never the app's.
+  _own="$(printf '%s' "$_src" | grep -oE "(^|[^A-Za-z0-9_.-])${APP}\.js\?v=[0-9]+(\.[0-9]+)?" 2>/dev/null | sed -E 's/.*\?v=//' | head -1 || true)"
+  if [ -n "$_own" ]; then printf 'v%s' "$_own"; return; fi
+  _v="$(printf '%s' "$_src" | grep -oE '[A-Za-z0-9_.-]+\.js\?v=[0-9]+(\.[0-9]+)?' 2>/dev/null | grep -vE '^gx-' | sed -E 's/.*\?v=//' | head -1 || true)"
   if [ -n "$_v" ]; then printf 'v%s' "$_v"; return; fi
   # 2. an APP_VERSION / GC.VERSION constant      (inventory, sales — monoliths with inline JS)
   # A monolith has no external .js file to hang a cache-buster on, so #1 alone found nothing. Under
